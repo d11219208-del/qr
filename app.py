@@ -1,6 +1,7 @@
 import os
 import psycopg2
 import json
+import re
 from flask import Flask, request, redirect, url_for
 from datetime import datetime, date
 
@@ -10,7 +11,7 @@ def get_db_connection():
     db_uri = os.environ.get("DATABASE_URL")
     return psycopg2.connect(db_uri)
 
-# --- 1. 資料庫初始化 (修正：強制清空並重置編號) ---
+# --- 1. 資料庫初始化 (新增排序欄位) ---
 @app.route('/init_db')
 def init_db():
     conn = get_db_connection()
@@ -25,7 +26,8 @@ def init_db():
                 category VARCHAR(50),
                 image_url TEXT,
                 is_available BOOLEAN DEFAULT TRUE,
-                custom_options TEXT
+                custom_options TEXT,
+                sort_order INTEGER DEFAULT 100
             );
         ''')
         
@@ -41,38 +43,33 @@ def init_db():
         ''')
         conn.commit()
 
-        # --- 強制清空訂單並重置 ID ---
-        # 使用 TRUNCATE 比 DELETE 更乾淨，RESTART IDENTITY 會讓 ID 變回 1
-        cur.execute("TRUNCATE TABLE orders RESTART IDENTITY;")
-        conn.commit()
-        
-        # 補足欄位 (針對舊資料庫)
+        # 嘗試新增 sort_order 欄位 (針對舊資料庫升級)
         try:
-            cur.execute("ALTER TABLE products ADD COLUMN custom_options TEXT;")
+            cur.execute("ALTER TABLE products ADD COLUMN sort_order INTEGER DEFAULT 100;")
             conn.commit()
         except:
             conn.rollback()
 
-        # 預設菜單
+        # 預設菜單 (如果完全沒資料才加)
         cur.execute('SELECT count(*) FROM products;')
         if cur.fetchone()[0] == 0:
             default_menu = [
-                ('招牌牛肉麵', 180, '主食', 'https://i.ibb.co/vz1k3j1/beef-noodle.jpg', True, '不要蔥,加辣,麵軟,麵硬'),
-                ('古早味排骨飯', 120, '主食', 'https://i.ibb.co/MCTvVqL/pork-rice.jpg', True, '半飯,多汁'),
-                ('燙青菜', 40, '小菜', 'https://i.ibb.co/Xkz2zt3/vegetables.jpg', True, '不要蒜,醬油少,清燙'),
-                ('珍珠奶茶', 60, '飲料', 'https://i.ibb.co/JtdjvX3/bubble-tea.jpg', True, '半糖,微糖,無糖,去冰,少冰')
+                ('招牌牛肉麵', 180, '主食', 'https://i.ibb.co/vz1k3j1/beef-noodle.jpg', True, '不要蔥,加麵:+20,加湯', 1),
+                ('古早味排骨飯', 120, '主食', 'https://i.ibb.co/MCTvVqL/pork-rice.jpg', True, '半飯,加滷蛋:+15', 2),
+                ('燙青菜', 40, '小菜', 'https://i.ibb.co/Xkz2zt3/vegetables.jpg', True, '不要蒜,清燙', 3),
+                ('珍珠奶茶', 60, '飲料', 'https://i.ibb.co/JtdjvX3/bubble-tea.jpg', True, '半糖,微糖,加椰果:+10,加珍珠:+10', 4)
             ]
-            cur.executemany('INSERT INTO products (name, price, category, image_url, is_available, custom_options) VALUES (%s, %s, %s, %s, %s, %s)', default_menu)
+            cur.executemany('INSERT INTO products (name, price, category, image_url, is_available, custom_options, sort_order) VALUES (%s, %s, %s, %s, %s, %s, %s)', default_menu)
             conn.commit()
 
-        return "資料庫初始化完成！<br><b>訂單記錄已強制清空，編號已重置。</b><br><a href='/'>前往首頁</a>"
+        return "資料庫更新完成！(已加入排序與加價功能)<br><a href='/'>前往首頁</a>"
     except Exception as e:
         return f"初始化失敗：{e}"
     finally:
         cur.close()
         conn.close()
 
-# --- 2. 顧客端首頁 (含購物車預覽/刪除功能) ---
+# --- 2. 顧客端首頁 ---
 @app.route('/', methods=['GET', 'POST'])
 def index():
     conn = get_db_connection()
@@ -95,8 +92,9 @@ def index():
         items_display_list = []
 
         for item in cart_items:
+            # item 結構: {name, base_price, unit_price, qty, options:[]}
             p_name = item['name']
-            p_price = int(item['price'])
+            p_unit_price = int(item['unit_price']) # 這是包含加價後的單價
             p_qty = int(item['qty'])
             p_opts = item.get('options', [])
             
@@ -104,7 +102,7 @@ def index():
             display_str = f"{p_name} {opts_str} x{p_qty}"
             
             items_display_list.append(display_str)
-            total_price += (p_price * p_qty)
+            total_price += (p_unit_price * p_qty)
 
         items_final_str = " + ".join(items_display_list)
 
@@ -118,8 +116,9 @@ def index():
         conn.close()
         return redirect(url_for('order_success', order_id=new_order_id))
 
+    # 依照 sort_order 排序 (ASC: 小的在前)
     try:
-        cur.execute("SELECT * FROM products ORDER BY category, id")
+        cur.execute("SELECT * FROM products ORDER BY sort_order ASC, id ASC")
         products = cur.fetchall()
     except:
         return "請先執行 <a href='/init_db'>/init_db</a>"
@@ -129,6 +128,7 @@ def index():
     
     products_list = []
     for p in products:
+        # p[7] 是 sort_order
         products_list.append({
             'id': p[0], 'name': p[1], 'price': p[2], 'category': p[3],
             'image_url': p[4] if p[4] else "https://via.placeholder.com/150",
@@ -160,18 +160,19 @@ def render_frontend(table_number, products_data):
             .add-btn {{ background: #28a745; color: white; border: none; padding: 8px 15px; border-radius: 20px; font-weight: bold; cursor: pointer; align-self: flex-end; }}
             .sold-out {{ background: #ccc; cursor: not-allowed; }}
             
-            /* Modal 共用樣式 */
+            /* Modal */
             .modal-overlay {{ position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); display: none; z-index: 999; justify-content: center; align-items: flex-end; }}
             .modal-content {{ background: white; width: 100%; max-width: 600px; border-radius: 20px 20px 0 0; padding: 20px; box-sizing: border-box; animation: slideUp 0.3s; max-height: 80vh; overflow-y: auto; }}
             @keyframes slideUp {{ from {{ transform: translateY(100%); }} to {{ transform: translateY(0); }} }}
 
-            /* 購物車列表樣式 */
+            /* 購物車列表 */
             .cart-item-row {{ display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #eee; padding: 10px 0; }}
             .del-btn {{ color: white; background: #dc3545; border: none; padding: 5px 10px; border-radius: 5px; cursor: pointer; }}
             
             .option-tag {{ display: inline-block; border: 1px solid #ddd; padding: 8px 15px; border-radius: 20px; margin: 5px 5px 5px 0; color: #555; cursor: pointer; }}
             .option-tag.selected {{ background: #e3f2fd; border-color: #2196f3; color: #2196f3; font-weight: bold; }}
-            
+            .option-price {{ font-size: 0.8em; color: #e91e63; }}
+
             .cart-bar {{ position: fixed; bottom: 0; left: 0; width: 100%; background: white; padding: 15px; box-shadow: 0 -2px 10px rgba(0,0,0,0.1); display: flex; justify-content: space-between; align-items: center; box-sizing: border-box; z-index: 500; }}
             .cart-info-box {{ cursor: pointer; flex-grow: 1; }}
             .qty-control {{ display: flex; align-items: center; margin-top: 15px; }}
@@ -201,7 +202,10 @@ def render_frontend(table_number, products_data):
         <div class="modal-overlay" id="option-modal">
             <div class="modal-content">
                 <h3 id="modal-title"></h3>
-                <div style="color:#e91e63; font-weight:bold; margin-bottom:10px;">$<span id="modal-price">0</span></div>
+                <div style="color:#e91e63; font-weight:bold; margin-bottom:10px;">
+                    $<span id="modal-display-price">0</span> 
+                    <small style="color:#888; font-weight:normal;" id="modal-base-price-info"></small>
+                </div>
                 <div id="modal-options-area"></div>
                 <div class="qty-control">
                     <div class="qty-btn" onclick="changeQty(-1)">-</div>
@@ -226,10 +230,11 @@ def render_frontend(table_number, products_data):
             let cart = [];
             let currentItem = null;
             let currentQty = 1;
-            let currentOptions = [];
+            let currentOptions = []; // 存字串 array
+            let currentAddPrice = 0; // 當前選項加總金額
+            
             const container = document.getElementById('menu-container');
             
-            // 渲染菜單
             let currentCat = "";
             products.forEach(p => {{
                 if(p.category !== currentCat) {{
@@ -247,48 +252,95 @@ def render_frontend(table_number, products_data):
                 container.appendChild(el);
             }});
 
-            // --- 點餐選項 Modal ---
+            // 解析選項與價格 (格式: "加麵:+20" 或 "去冰")
+            function parseOption(optStr) {{
+                if(optStr.includes(':+')) {{
+                    const parts = optStr.split(':+');
+                    return {{ name: parts[0], price: parseInt(parts[1]) || 0, full: optStr }};
+                }}
+                return {{ name: optStr, price: 0, full: optStr }};
+            }}
+
             function openOptionModal(id) {{
                 currentItem = products.find(p => p.id === id);
                 currentQty = 1;
                 currentOptions = [];
+                currentAddPrice = 0;
+                
                 document.getElementById('modal-title').innerText = currentItem.name;
-                document.getElementById('modal-price').innerText = currentItem.price;
-                document.getElementById('modal-qty').innerText = 1;
+                document.getElementById('modal-base-price-info').innerText = '(單價 $' + currentItem.price + ')';
+                updateModalTotal();
+
                 const optArea = document.getElementById('modal-options-area');
                 optArea.innerHTML = '';
+                
                 if (currentItem.custom_options && currentItem.custom_options.length > 0) {{
                     optArea.innerHTML = '<p style="font-size:0.9em; color:#888;">客製化選項：</p>';
                     currentItem.custom_options.forEach(opt => {{
                         opt = opt.trim();
                         if(!opt) return;
+                        const parsed = parseOption(opt);
                         const tag = document.createElement('div');
                         tag.className = 'option-tag';
-                        tag.innerText = opt;
+                        
+                        // 顯示文字
+                        let displayHTML = parsed.name;
+                        if(parsed.price > 0) displayHTML += ` <span class="option-price">(+$${{parsed.price}})</span>`;
+                        tag.innerHTML = displayHTML;
+                        
                         tag.onclick = function() {{
-                            if(currentOptions.includes(opt)) {{ currentOptions = currentOptions.filter(o => o !== opt); tag.classList.remove('selected'); }} 
-                            else {{ currentOptions.push(opt); tag.classList.add('selected'); }}
+                            // 切換選取
+                            if(currentOptions.includes(opt)) {{
+                                currentOptions = currentOptions.filter(o => o !== opt);
+                                currentAddPrice -= parsed.price;
+                                tag.classList.remove('selected');
+                            }} else {{
+                                currentOptions.push(opt);
+                                currentAddPrice += parsed.price;
+                                tag.classList.add('selected');
+                            }}
+                            updateModalTotal();
                         }};
                         optArea.appendChild(tag);
                     }});
                 }}
                 document.getElementById('option-modal').style.display = 'flex';
             }}
+
+            function updateModalTotal() {{
+                const unitPrice = currentItem.price + currentAddPrice;
+                const total = unitPrice * currentQty;
+                document.getElementById('modal-display-price').innerText = total;
+                document.getElementById('modal-qty').innerText = currentQty;
+            }}
+
             function closeOptionModal() {{ document.getElementById('option-modal').style.display = 'none'; }}
-            function changeQty(n) {{ if(currentQty + n >= 1) {{ currentQty += n; document.getElementById('modal-qty').innerText = currentQty; }} }}
+            function changeQty(n) {{ 
+                if(currentQty + n >= 1) {{ 
+                    currentQty += n; 
+                    updateModalTotal();
+                }} 
+            }}
             
             function addToCartConfirm() {{
-                cart.push({{ id: currentItem.id, name: currentItem.name, price: currentItem.price, qty: currentQty, options: [...currentOptions] }});
+                const finalUnitPrice = currentItem.price + currentAddPrice;
+                cart.push({{ 
+                    id: currentItem.id, 
+                    name: currentItem.name, 
+                    base_price: currentItem.price,
+                    unit_price: finalUnitPrice, // 包含加價
+                    qty: currentQty, 
+                    options: [...currentOptions] 
+                }});
                 closeOptionModal();
                 updateCartBar();
             }}
 
-            // --- 購物車功能 ---
             function updateCartBar() {{
                 const bar = document.getElementById('cart-bar');
                 if(cart.length > 0) {{
                     bar.style.display = 'flex';
-                    const totalP = cart.reduce((acc, item) => acc + (item.price * item.qty), 0);
+                    const totalP = cart.reduce((acc, item) => acc + (item.unit_price * item.qty), 0);
                     const totalQ = cart.reduce((acc, item) => acc + item.qty, 0);
                     document.getElementById('total-price').innerText = totalP;
                     document.getElementById('total-qty').innerText = totalQ;
@@ -303,12 +355,21 @@ def render_frontend(table_number, products_data):
                 cart.forEach((item, index) => {{
                     const row = document.createElement('div');
                     row.className = 'cart-item-row';
-                    const opts = item.options.length ? `<br><small style='color:#888'>${{item.options.join(',')}}</small>` : '';
+                    
+                    // 美化選項顯示 (移除 :+20 這種後端格式，只顯示 UI 友善的)
+                    let displayOpts = [];
+                    item.options.forEach(opt => {{
+                        let parsed = parseOption(opt);
+                        displayOpts.push(parsed.name + (parsed.price>0 ? `(+$${{parsed.price}})` : ''));
+                    }});
+
+                    const optsHtml = displayOpts.length ? `<br><small style='color:#888'>${{displayOpts.join(', ')}}</small>` : '';
+                    
                     row.innerHTML = `
                         <div>
                             <b>${{item.name}}</b> x${{item.qty}}
-                            ${{opts}}
-                            <div style='color:#e91e63'>$${{item.price * item.qty}}</div>
+                            ${{optsHtml}}
+                            <div style='color:#e91e63'>$${{item.unit_price * item.qty}}</div>
                         </div>
                         <button class="del-btn" onclick="removeFromCart(${{index}})">🗑️</button>
                     `;
@@ -322,7 +383,7 @@ def render_frontend(table_number, products_data):
                     cart.splice(index, 1);
                     updateCartBar();
                     if(cart.length === 0) closeCartModal();
-                    else openCartModal(); // 重新渲染列表
+                    else openCartModal();
                 }}
             }}
             
@@ -332,7 +393,10 @@ def render_frontend(table_number, products_data):
                 const tableVal = document.getElementById('table_number').value;
                 if(!tableVal) {{ alert('請輸入桌號'); return; }}
                 if(cart.length === 0) return;
-                if(!confirm(`確定送出訂單？\\n共 ${{cart.length}} 項餐點`)) return;
+                
+                const totalP = cart.reduce((acc, item) => acc + (item.unit_price * item.qty), 0);
+                if(!confirm(`確定送出訂單？\\n總金額: $${{totalP}}`)) return;
+                
                 document.getElementById('cart_data_input').value = JSON.stringify(cart);
                 document.getElementById('order-form').submit();
             }}
@@ -375,7 +439,7 @@ def order_success():
     </html>
     """
 
-# --- 4. 廚房端 (訂單看板) ---
+# --- 4. 廚房端 ---
 @app.route('/kitchen')
 def kitchen():
     conn = get_db_connection()
@@ -428,7 +492,7 @@ def kitchen():
     </script></body></html>"""
     return html
 
-# --- 5. 菜單管理 (新增 "編輯" 功能) ---
+# --- 5. 菜單管理 (新增排序輸入框) ---
 @app.route('/kitchen/menu', methods=['GET', 'POST'])
 def kitchen_menu():
     conn = get_db_connection()
@@ -439,11 +503,15 @@ def kitchen_menu():
         category = request.form['category']
         image_url = request.form['image_url']
         custom_options = request.form['custom_options']
-        cur.execute("INSERT INTO products (name, price, category, image_url, is_available, custom_options) VALUES (%s, %s, %s, %s, TRUE, %s)", 
-                    (name, price, category, image_url, custom_options))
+        sort_order = request.form.get('sort_order', 100)
+        
+        cur.execute("INSERT INTO products (name, price, category, image_url, is_available, custom_options, sort_order) VALUES (%s, %s, %s, %s, TRUE, %s, %s)", 
+                    (name, price, category, image_url, custom_options, sort_order))
         conn.commit()
         return redirect(url_for('kitchen_menu'))
-    cur.execute("SELECT * FROM products ORDER BY category, id")
+    
+    # 依照排序顯示
+    cur.execute("SELECT * FROM products ORDER BY sort_order ASC, id ASC")
     products = cur.fetchall()
     cur.close()
     conn.close()
@@ -452,18 +520,27 @@ def kitchen_menu():
     <!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><style>body{font-family:sans-serif; padding:10px; background:#f4f4f9;} .btn{padding:5px 10px; text-decoration:none; color:white; border-radius:4px; font-size:0.9em; margin-left:5px; display:inline-block;}</style></head><body>
         <a href="/kitchen">⬅️ 回廚房</a><h2>🛠️ 菜單管理</h2>
         <div style="background:white; padding:15px; border-radius:8px;">
-            <h3>➕ 新增</h3><form method="POST"><input type="hidden" name="add_item" value="1">
-            <input type="text" name="name" placeholder="名稱" required style="width:100%; margin:5px 0; padding:8px;">
-            <input type="number" name="price" placeholder="價格" required style="width:100%; margin:5px 0; padding:8px;">
-            <input type="text" name="category" placeholder="分類 (主食/飲料)" required style="width:100%; margin:5px 0; padding:8px;">
-            <input type="text" name="image_url" placeholder="圖片網址" style="width:100%; margin:5px 0; padding:8px;">
-            <input type="text" name="custom_options" placeholder="選項 (如: 微糖,半糖)" style="width:100%; margin:5px 0; padding:8px;">
-            <button style="width:100%; background:#007bff; color:white; padding:10px; border:none; margin-top:5px;">新增</button></form></div><hr>
+            <h3>➕ 新增商品</h3>
+            <form method="POST">
+                <input type="hidden" name="add_item" value="1">
+                <input type="text" name="name" placeholder="名稱" required style="width:100%; margin:5px 0; padding:8px;">
+                <input type="number" name="price" placeholder="價格" required style="width:100%; margin:5px 0; padding:8px;">
+                <input type="text" name="category" placeholder="分類 (主食/飲料)" required style="width:100%; margin:5px 0; padding:8px;">
+                <input type="text" name="image_url" placeholder="圖片網址" style="width:100%; margin:5px 0; padding:8px;">
+                <input type="text" name="custom_options" placeholder="選項 (例: 加麵:+20,微糖)" style="width:100%; margin:5px 0; padding:8px;">
+                <input type="number" name="sort_order" placeholder="排序權重 (越小越前面)" value="100" style="width:100%; margin:5px 0; padding:8px;">
+                <button style="width:100%; background:#007bff; color:white; padding:10px; border:none; margin-top:5px;">新增</button>
+            </form>
+            <p style="font-size:0.8em; color:gray;">💡 小提示：選項若要加錢，請用 :+數字，例如 <b>加麵:+20</b></p>
+        </div>
+        <hr>
     """
     for p in products:
         status = "🟢" if p[5] else "🔴"
+        # p[7] 是 sort_order
         html += f"""
         <div style='background:white; padding:10px; margin-bottom:5px; border-left:5px solid #007bff;'>
+            <div style="float:right; color:#888; font-size:0.8em;">排序: {p[7]}</div>
             {status} <b>{p[1]}</b> (${p[2]})<br><small>{p[6]}</small><br>
             <div style="margin-top:5px;">
                 <a href='/menu/toggle/{p[0]}' class='btn' style='background:#6c757d'>上架/完售</a>
@@ -473,7 +550,7 @@ def kitchen_menu():
         </div>"""
     return html + "</body></html>"
 
-# --- 6. 編輯菜單頁面 (New!) ---
+# --- 6. 編輯菜單頁面 (修復 Bad Request 與新增排序) ---
 @app.route('/menu/edit/<int:pid>', methods=['GET', 'POST'])
 def menu_edit(pid):
     conn = get_db_connection()
@@ -481,16 +558,17 @@ def menu_edit(pid):
     
     if request.method == 'POST':
         name = request.form['name']
-        price = request.form['price']
+        price = request.form['price'] # 這裡之前有 HTML 錯誤，現在已修正
         category = request.form['category']
         image_url = request.form['image_url']
         custom_options = request.form['custom_options']
+        sort_order = request.form['sort_order']
         
         cur.execute("""
             UPDATE products 
-            SET name=%s, price=%s, category=%s, image_url=%s, custom_options=%s 
+            SET name=%s, price=%s, category=%s, image_url=%s, custom_options=%s, sort_order=%s
             WHERE id=%s
-        """, (name, price, category, image_url, custom_options, pid))
+        """, (name, price, category, image_url, custom_options, sort_order, pid))
         conn.commit()
         cur.close()
         conn.close()
@@ -503,8 +581,8 @@ def menu_edit(pid):
     
     if not product: return "查無此商品"
     
-    # product: id, name, price, category, image_url, available, options
     p_opts = product[6] if product[6] else ""
+    # product[7] 是 sort_order
     
     return f"""
     <!DOCTYPE html>
@@ -514,10 +592,11 @@ def menu_edit(pid):
         <h2>✏️ 編輯商品</h2>
         <form method="POST" style="background:white; padding:20px; border-radius:10px;">
             <p>名稱：<input type="text" name="name" value="{product[1]}" required style="width:100%; padding:8px;"></p>
-            <p>價格：<input type="number" name="name" value="{product[2]}" name="price" required style="width:100%; padding:8px;"></p>
+            <p>價格：<input type="number" name="price" value="{product[2]}" required style="width:100%; padding:8px;"></p>
             <p>分類：<input type="text" name="category" value="{product[3]}" required style="width:100%; padding:8px;"></p>
             <p>圖片：<input type="text" name="image_url" value="{product[4]}" style="width:100%; padding:8px;"></p>
-            <p>選項 (逗號隔開)：<input type="text" name="custom_options" value="{p_opts}" style="width:100%; padding:8px;"></p>
+            <p>選項 (加錢請用 :+20)：<input type="text" name="custom_options" value="{p_opts}" style="width:100%; padding:8px;"></p>
+            <p>排序 (越小越前面)：<input type="number" name="sort_order" value="{product[7]}" style="width:100%; padding:8px;"></p>
             <br>
             <button type="submit" style="background:#28a745; color:white; border:none; padding:10px 30px; border-radius:5px;">儲存修改</button>
             <a href="/kitchen/menu" style="margin-left:20px;">取消</a>
