@@ -29,7 +29,7 @@ def get_db_connection():
     db_uri = os.environ.get("DATABASE_URL")
     return psycopg2.connect(db_uri)
 
-# --- 2. 資料庫初始化 (修改：會清空訂單記錄) ---
+# --- 2. 資料庫初始化 (修改：會清空訂單記錄) --- 
 @app.route('/init_db')
 def init_db():
     conn = get_db_connection()
