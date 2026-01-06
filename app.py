@@ -1,40 +1,31 @@
 import os
 import psycopg2
-from psycopg2 import pool
 import json
-from flask import Flask, request, redirect, url_for
+from flask import Flask, request, redirect, url_for, render_template_string
 from datetime import datetime, date
 
 app = Flask(__name__)
 
-# --- 效能優化：設定資料庫連線池 ---
-# 這樣不用每次都重新連線，速度會快非常多
-db_pool = None
-
-def init_db_pool():
-    global db_pool
-    db_url = os.environ.get("DATABASE_URL")
-    # 建立一個擁有 1 到 10 個連線的池子
-    db_pool = psycopg2.pool.SimpleConnectionPool(1, 10, db_url)
-
 def get_db_connection():
-    global db_pool
-    if db_pool is None:
-        init_db_pool()
-    return db_pool.getconn()
+    db_uri = os.environ.get("DATABASE_URL")
+    return psycopg2.connect(db_uri)
 
-def close_db_connection(conn):
-    global db_pool
-    if db_pool and conn:
-        db_pool.putconn(conn) # 把連線放回池子，而不是真的關閉
+# 載入語言檔
+def load_translations():
+    try:
+        with open('translations.json', 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except:
+        # 萬一檔案讀取失敗的備用預設值
+        return {"zh": {"title": "線上點餐", "add": "加入"}}
 
-# --- 1. 資料庫初始化 ---
+# --- 1. 資料庫初始化 (新增多語言欄位) ---
 @app.route('/init_db')
 def init_db():
     conn = get_db_connection()
+    cur = conn.cursor()
     try:
-        cur = conn.cursor()
-        # 建立表格
+        # 基本表結構
         cur.execute('''
             CREATE TABLE IF NOT EXISTS products (
                 id SERIAL PRIMARY KEY,
@@ -55,123 +46,168 @@ def init_db():
                 items TEXT NOT NULL, 
                 total_price INTEGER NOT NULL,
                 status VARCHAR(20) DEFAULT 'Pending',
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                lang VARCHAR(10) DEFAULT 'zh'
             );
         ''')
         conn.commit()
-        cur.close()
 
-        # 嘗試新增 sort_order (避免舊資料庫報錯)
-        try:
-            cur = conn.cursor()
-            cur.execute("ALTER TABLE products ADD COLUMN sort_order INTEGER DEFAULT 100;")
-            conn.commit()
-            cur.close()
-        except:
-            conn.rollback()
+        # 升級資料庫：加入英日文欄位
+        alter_commands = [
+            "ALTER TABLE products ADD COLUMN IF NOT EXISTS name_en VARCHAR(100);",
+            "ALTER TABLE products ADD COLUMN IF NOT EXISTS name_jp VARCHAR(100);",
+            "ALTER TABLE products ADD COLUMN IF NOT EXISTS custom_options_en TEXT;",
+            "ALTER TABLE products ADD COLUMN IF NOT EXISTS custom_options_jp TEXT;",
+            "ALTER TABLE products ADD COLUMN IF NOT EXISTS sort_order INTEGER DEFAULT 100;"
+        ]
+        
+        for cmd in alter_commands:
+            try:
+                cur.execute(cmd)
+                conn.commit()
+            except Exception as e:
+                conn.rollback()
+                print(f"Schema update skipped or failed: {e}")
 
-        # 預設菜單
-        cur = conn.cursor()
-        cur.execute('SELECT count(*) FROM products;')
-        if cur.fetchone()[0] == 0:
-            default_menu = [
-                ('招牌牛肉麵', 180, '主食', 'https://i.ibb.co/vz1k3j1/beef-noodle.jpg', True, '不要蔥,加麵:+20,加湯', 1),
-                ('古早味排骨飯', 120, '主食', 'https://i.ibb.co/MCTvVqL/pork-rice.jpg', True, '半飯,加滷蛋:+15', 2),
-                ('燙青菜', 40, '小菜', 'https://i.ibb.co/Xkz2zt3/vegetables.jpg', True, '不要蒜,清燙', 3),
-                ('珍珠奶茶', 60, '飲料', 'https://i.ibb.co/JtdjvX3/bubble-tea.jpg', True, '半糖,微糖,加椰果:+10,加珍珠:+10', 4)
-            ]
-            cur.executemany('INSERT INTO products (name, price, category, image_url, is_available, custom_options, sort_order) VALUES (%s, %s, %s, %s, %s, %s, %s)', default_menu)
-            conn.commit()
-            cur.close()
-
-        return "資料庫初始化完成 (連線池模式)。<br><a href='/'>前往首頁</a>"
+        return "資料庫升級完成 (多語言支援)。<br><a href='/'>前往首頁</a>"
     except Exception as e:
         return f"初始化失敗：{e}"
     finally:
-        close_db_connection(conn)
-
-# --- 2. 顧客端首頁 ---
-@app.route('/', methods=['GET', 'POST'])
-def index():
-    conn = get_db_connection()
-    try:
-        table_from_url = request.args.get('table', '')
-
-        if request.method == 'POST':
-            table_number = request.form.get('table_number') 
-            cart_json = request.form.get('cart_data')
-            
-            if not cart_json or cart_json == '[]':
-                return "錯誤：購物車是空的 <a href='/'>返回</a>"
-
-            try:
-                cart_items = json.loads(cart_json)
-            except:
-                return "資料格式錯誤"
-            
-            total_price = 0
-            items_display_list = []
-
-            for item in cart_items:
-                p_name = item['name']
-                p_unit_price = int(item['unit_price'])
-                p_qty = int(item['qty'])
-                p_opts = item.get('options', [])
-                
-                # 計算該品項小計
-                subtotal = p_unit_price * p_qty
-                
-                # 組合成顯示字串 (新增：顯示金額)
-                opts_str = f"({','.join(p_opts)})" if p_opts else ""
-                # 格式範例： 牛肉麵 (加麵) x2 = $400
-                display_str = f"{p_name} {opts_str} x{p_qty} = ${subtotal}"
-                
-                items_display_list.append(display_str)
-                total_price += subtotal
-
-            # 用特殊符號分隔，方便顯示
-            items_final_str = " | ".join(items_display_list)
-
-            cur = conn.cursor()
-            cur.execute(
-                "INSERT INTO orders (table_number, items, total_price) VALUES (%s, %s, %s) RETURNING id",
-                (table_number, items_final_str, total_price)
-            )
-            new_order_id = cur.fetchone()[0]
-            conn.commit()
-            cur.close()
-            return redirect(url_for('order_success', order_id=new_order_id))
-
-        cur = conn.cursor()
-        try:
-            cur.execute("SELECT * FROM products ORDER BY sort_order ASC, id ASC")
-            products = cur.fetchall()
-        except:
-            return "請先執行 <a href='/init_db'>/init_db</a>"
         cur.close()
+        conn.close()
+
+# --- 2. 語言選擇頁 (首頁) ---
+@app.route('/')
+def language_select():
+    return """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Select Language</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <style>
+            body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; background: #f4f7f6; }
+            h2 { color: #333; margin-bottom: 30px; }
+            .lang-btn {
+                display: block; width: 200px; padding: 15px; margin: 10px;
+                text-align: center; text-decoration: none; font-size: 1.2em;
+                border-radius: 50px; color: white; transition: transform 0.1s;
+                box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            }
+            .lang-btn:active { transform: scale(0.95); }
+            .zh { background: #e91e63; }
+            .en { background: #007bff; }
+            .jp { background: #ff9800; }
+        </style>
+    </head>
+    <body>
+        <h2>請選擇語言 Language</h2>
+        <a href="/menu?lang=zh" class="lang-btn zh">中文</a>
+        <a href="/menu?lang=en" class="lang-btn en">English</a>
+        <a href="/menu?lang=jp" class="lang-btn jp">日本語</a>
+    </body>
+    </html>
+    """
+
+# --- 3. 點餐頁面 ---
+@app.route('/menu', methods=['GET', 'POST'])
+def menu():
+    lang = request.args.get('lang', 'zh')
+    translations = load_translations()
+    t = translations.get(lang, translations['zh']) # 取得對應語言字典
+    
+    conn = get_db_connection()
+    cur = conn.cursor()
+    table_from_url = request.args.get('table', '')
+
+    if request.method == 'POST':
+        table_number = request.form.get('table_number') 
+        cart_json = request.form.get('cart_data')
         
-        products_list = []
-        for p in products:
-            products_list.append({
-                'id': p[0], 'name': p[1], 'price': p[2], 'category': p[3],
-                'image_url': p[4] if p[4] else "https://via.placeholder.com/150",
-                'is_available': p[5],
-                'custom_options': p[6].split(',') if p[6] else []
-            })
+        if not cart_json or cart_json == '[]':
+            return f"Error <a href='/menu?lang={lang}'>Back</a>"
 
-        return render_frontend(table_from_url, products_list)
-    finally:
-        close_db_connection(conn)
+        try:
+            cart_items = json.loads(cart_json)
+        except:
+            return "Data Error"
+        
+        total_price = 0
+        items_display_list = []
 
-def render_frontend(table_number, products_data):
+        for item in cart_items:
+            p_name = item['name'] # 這是當下語言的名稱
+            p_unit_price = int(item['unit_price'])
+            p_qty = int(item['qty'])
+            p_opts = item.get('options', [])
+            
+            opts_str = f"({','.join(p_opts)})" if p_opts else ""
+            display_str = f"{p_name} {opts_str} x{p_qty}"
+            
+            items_display_list.append(display_str)
+            total_price += (p_unit_price * p_qty)
+
+        items_final_str = " + ".join(items_display_list)
+
+        cur.execute(
+            "INSERT INTO orders (table_number, items, total_price, lang) VALUES (%s, %s, %s, %s) RETURNING id",
+            (table_number, items_final_str, total_price, lang)
+        )
+        new_order_id = cur.fetchone()[0]
+        conn.commit()
+        cur.close()
+        conn.close()
+        return redirect(url_for('order_success', order_id=new_order_id, lang=lang))
+
+    # 撈取產品
+    cur.execute("SELECT * FROM products ORDER BY sort_order ASC, id ASC")
+    products = cur.fetchall()
+    cur.close()
+    conn.close()
+    
+    products_list = []
+    for p in products:
+        # p 結構: 0:id, 1:name, 2:price, 3:cat, 4:img, 5:avail, 6:opt_zh, 7:sort, 8:name_en, 9:name_jp, 10:opt_en, 11:opt_jp
+        
+        # 根據語言選擇顯示內容，如果該語言沒填，退回中文
+        display_name = p[1]
+        display_opts = p[6]
+        
+        if lang == 'en':
+            if p[8] and p[8].strip(): display_name = p[8]
+            if p[10] and p[10].strip(): display_opts = p[10]
+        elif lang == 'jp':
+            if p[9] and p[9].strip(): display_name = p[9]
+            if p[11] and p[11].strip(): display_opts = p[11]
+
+        # 翻譯分類 (簡易對應)
+        display_cat = p[3]
+        if p[3] == '主食': display_cat = t.get('category_main', 'Main')
+        elif p[3] == '小菜': display_cat = t.get('category_side', 'Side')
+        elif p[3] == '飲料': display_cat = t.get('category_drink', 'Drinks')
+
+        products_list.append({
+            'id': p[0], 
+            'name': display_name, 
+            'price': p[2], 
+            'category': display_cat,
+            'image_url': p[4] if p[4] else "https://via.placeholder.com/150",
+            'is_available': p[5],
+            'custom_options': display_opts.split(',') if display_opts else []
+        })
+
+    return render_frontend(table_from_url, products_list, t, lang)
+
+def render_frontend(table_number, products_data, t, lang):
     products_json = json.dumps(products_data)
-    table_input = f'<input type="text" id="visible_table_number" value="{table_number}" readonly>' if table_number else '<input type="text" id="visible_table_number" placeholder="請輸入桌號" required>'
+    t_json = json.dumps(t)
+    table_input = f'<input type="text" id="visible_table_number" value="{table_number}" readonly>' if table_number else f'<input type="text" id="visible_table_number" placeholder="{t["table_placeholder"]}" required>'
 
     return f"""
     <!DOCTYPE html>
     <html>
     <head>
-        <title>線上點餐</title>
+        <title>{t['title']}</title>
         <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=0">
         <style>
             body {{ font-family: 'Microsoft JhengHei', sans-serif; margin: 0; padding-bottom: 90px; background: #f4f7f6; }}
@@ -185,30 +221,23 @@ def render_frontend(table_number, products_data):
             .add-btn {{ background: #28a745; color: white; border: none; padding: 8px 15px; border-radius: 20px; font-weight: bold; cursor: pointer; align-self: flex-end; }}
             .sold-out {{ background: #ccc; cursor: not-allowed; }}
             
-            /* Modal */
             .modal-overlay {{ position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); display: none; z-index: 999; justify-content: center; align-items: flex-end; }}
             .modal-content {{ background: white; width: 100%; max-width: 600px; border-radius: 20px 20px 0 0; padding: 20px; box-sizing: border-box; animation: slideUp 0.3s; max-height: 80vh; overflow-y: auto; }}
             @keyframes slideUp {{ from {{ transform: translateY(100%); }} to {{ transform: translateY(0); }} }}
 
-            /* 購物車列表 */
             .cart-item-row {{ display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #eee; padding: 10px 0; }}
             .del-btn {{ color: white; background: #dc3545; border: none; padding: 5px 10px; border-radius: 5px; cursor: pointer; }}
-            
             .option-tag {{ display: inline-block; border: 1px solid #ddd; padding: 8px 15px; border-radius: 20px; margin: 5px 5px 5px 0; color: #555; cursor: pointer; }}
             .option-tag.selected {{ background: #e3f2fd; border-color: #2196f3; color: #2196f3; font-weight: bold; }}
-            .option-price {{ font-size: 0.8em; color: #e91e63; }}
-
             .cart-bar {{ position: fixed; bottom: 0; left: 0; width: 100%; background: white; padding: 15px; box-shadow: 0 -2px 10px rgba(0,0,0,0.1); display: flex; justify-content: space-between; align-items: center; box-sizing: border-box; z-index: 500; }}
-            .cart-info-box {{ cursor: pointer; flex-grow: 1; }}
-            .qty-control {{ display: flex; align-items: center; margin-top: 15px; }}
             .qty-btn {{ width: 35px; height: 35px; border-radius: 50%; border: 1px solid #ddd; background: white; font-size: 1.2em; display:flex; align-items:center; justify-content:center; cursor:pointer; }}
-            .qty-val {{ margin: 0 15px; font-size: 1.2em; font-weight: bold; }}
         </style>
     </head>
     <body>
         <div class="header">
-            <h3>🍴 歡迎點餐</h3>
-            <div style="background:#f1f1f1; padding:10px; border-radius:8px;">桌號：{table_input}</div>
+            <a href="/" style="float:left; text-decoration:none; font-size:1.5em;">🌐</a>
+            <h3>{t['welcome']}</h3>
+            <div style="background:#f1f1f1; padding:10px; border-radius:8px;">{t['table_label']}：{table_input}</div>
         </div>
         <div class="container" id="menu-container"></div>
         
@@ -217,12 +246,12 @@ def render_frontend(table_number, products_data):
             <input type="hidden" name="table_number" id="hidden_table_number">
             
             <div class="cart-bar" id="cart-bar" style="display:none;">
-                <div class="cart-info-box" onclick="openCartModal()">
-                    <span style="font-size:0.9em; color:#666;">▲ 查看明細</span><br>
+                <div style="flex-grow:1; cursor:pointer;" onclick="openCartModal()">
+                    <span style="font-size:0.9em; color:#666;">▲ {t['cart_detail']}</span><br>
                     <span id="total-qty" style="background:#e91e63; color:white; padding:2px 8px; border-radius:10px; font-size:0.8em;">0</span> 
-                    <b>合計: $<span id="total-price">0</span></b>
+                    <b>{t['total']}: $<span id="total-price">0</span></b>
                 </div>
-                <button type="button" onclick="submitOrder()" style="background:#28a745; color:white; border:none; padding:12px 30px; border-radius:50px; font-size:1.1em; font-weight:bold;">去結帳</button>
+                <button type="button" onclick="submitOrder()" style="background:#28a745; color:white; border:none; padding:12px 30px; border-radius:50px; font-size:1.1em; font-weight:bold;">{t['checkout']}</button>
             </div>
         </form>
 
@@ -234,26 +263,27 @@ def render_frontend(table_number, products_data):
                     <small style="color:#888; font-weight:normal;" id="modal-base-price-info"></small>
                 </div>
                 <div id="modal-options-area"></div>
-                <div class="qty-control">
+                <div style="display:flex; align-items:center; margin-top:15px;">
                     <div class="qty-btn" onclick="changeQty(-1)">-</div>
-                    <span class="qty-val" id="modal-qty">1</span>
+                    <span style="margin:0 15px; font-size:1.2em; font-weight:bold;" id="modal-qty">1</span>
                     <div class="qty-btn" onclick="changeQty(1)">+</div>
                 </div>
-                <button style="width:100%; background:#28a745; color:white; padding:15px; border:none; border-radius:10px; margin-top:20px; font-size:1.1em;" onclick="addToCartConfirm()">加入購物車</button>
-                <button style="width:100%; background:white; color:#666; padding:10px; border:none; margin-top:5px;" onclick="closeOptionModal()">取消</button>
+                <button style="width:100%; background:#28a745; color:white; padding:15px; border:none; border-radius:10px; margin-top:20px; font-size:1.1em;" onclick="addToCartConfirm()">{t['modal_add_cart']}</button>
+                <button style="width:100%; background:white; color:#666; padding:10px; border:none; margin-top:5px;" onclick="closeOptionModal()">{t['modal_cancel']}</button>
             </div>
         </div>
 
         <div class="modal-overlay" id="cart-modal">
             <div class="modal-content">
-                <h3>🛒 購物車明細</h3>
+                <h3>🛒 {t['cart_title']}</h3>
                 <div id="cart-list-area" style="margin-bottom:20px;"></div>
-                <button style="width:100%; background:#6c757d; color:white; padding:15px; border:none; border-radius:10px;" onclick="closeCartModal()">關閉</button>
+                <button style="width:100%; background:#6c757d; color:white; padding:15px; border:none; border-radius:10px;" onclick="closeCartModal()">{t['close']}</button>
             </div>
         </div>
 
         <script>
             const products = {products_json};
+            const t = {t_json};
             let cart = [];
             let currentItem = null;
             let currentQty = 1;
@@ -274,7 +304,7 @@ def render_frontend(table_number, products_data):
                 }}
                 const el = document.createElement('div');
                 el.className = 'menu-item';
-                let btnHtml = p.is_available ? `<button class="add-btn" onclick="openOptionModal(${{p.id}})">加入</button>` : `<button class="add-btn sold-out" disabled>已售完</button>`;
+                let btnHtml = p.is_available ? `<button class="add-btn" onclick="openOptionModal(${{p.id}})">${{t.add}}</button>` : `<button class="add-btn sold-out" disabled>${{t.sold_out}}</button>`;
                 el.innerHTML = `<img src="${{p.image_url}}" class="menu-img"><div class="menu-info"><div><div class="menu-name">${{p.name}}</div><div class="menu-price">$${{p.price}}</div></div>${{btnHtml}}</div>`;
                 container.appendChild(el);
             }});
@@ -284,9 +314,9 @@ def render_frontend(table_number, products_data):
                 if(cleanStr.includes(':+')) {{
                     const parts = cleanStr.split(':+');
                     const addP = parseInt(parts[1]) || 0;
-                    return {{ name: parts[0], price: addP, full: optStr }};
+                    return {{ name: parts[0], price: addP }};
                 }}
-                return {{ name: optStr, price: 0, full: optStr }};
+                return {{ name: optStr, price: 0 }};
             }}
 
             function openOptionModal(id) {{
@@ -296,14 +326,14 @@ def render_frontend(table_number, products_data):
                 currentAddPrice = 0;
                 
                 document.getElementById('modal-title').innerText = currentItem.name;
-                document.getElementById('modal-base-price-info').innerText = '(單價 $' + currentItem.price + ')';
+                document.getElementById('modal-base-price-info').innerText = '(' + t.modal_unit_price + ' $' + currentItem.price + ')';
                 updateModalTotal();
 
                 const optArea = document.getElementById('modal-options-area');
                 optArea.innerHTML = '';
                 
                 if (currentItem.custom_options && currentItem.custom_options.length > 0) {{
-                    optArea.innerHTML = '<p style="font-size:0.9em; color:#888;">客製化選項：</p>';
+                    optArea.innerHTML = '<p style="font-size:0.9em; color:#888;">' + t.custom_options + '：</p>';
                     currentItem.custom_options.forEach(opt => {{
                         opt = opt.trim();
                         if(!opt) return;
@@ -336,30 +366,24 @@ def render_frontend(table_number, products_data):
             function updateModalTotal() {{
                 const base = parseInt(currentItem.price);
                 const add = parseInt(currentAddPrice);
-                const unitPrice = base + add;
-                const total = unitPrice * currentQty;
+                const total = (base + add) * currentQty;
                 document.getElementById('modal-display-price').innerText = total;
                 document.getElementById('modal-qty').innerText = currentQty;
             }}
 
             function closeOptionModal() {{ document.getElementById('option-modal').style.display = 'none'; }}
             function changeQty(n) {{ 
-                if(currentQty + n >= 1) {{ 
-                    currentQty += n; 
-                    updateModalTotal();
-                }} 
+                if(currentQty + n >= 1) {{ currentQty += n; updateModalTotal(); }} 
             }}
             
             function addToCartConfirm() {{
                 const base = parseInt(currentItem.price);
                 const add = parseInt(currentAddPrice);
-                const finalUnitPrice = base + add;
-                
                 cart.push({{ 
                     id: currentItem.id, 
                     name: currentItem.name, 
                     base_price: base,
-                    unit_price: finalUnitPrice, 
+                    unit_price: base + add, 
                     qty: currentQty, 
                     options: [...currentOptions] 
                 }});
@@ -381,7 +405,7 @@ def render_frontend(table_number, products_data):
             function openCartModal() {{
                 const listArea = document.getElementById('cart-list-area');
                 listArea.innerHTML = '';
-                if(cart.length === 0) {{ listArea.innerHTML = '<p>購物車是空的</p>'; }}
+                if(cart.length === 0) {{ listArea.innerHTML = '<p>' + t.empty_cart + '</p>'; }}
                 
                 cart.forEach((item, index) => {{
                     const row = document.createElement('div');
@@ -392,7 +416,6 @@ def render_frontend(table_number, products_data):
                         let parsed = parseOption(opt);
                         displayOpts.push(parsed.name + (parsed.price>0 ? `(+$${{parsed.price}})` : ''));
                     }});
-
                     const optsHtml = displayOpts.length ? `<br><small style='color:#888'>${{displayOpts.join(', ')}}</small>` : '';
                     
                     row.innerHTML = `
@@ -409,11 +432,10 @@ def render_frontend(table_number, products_data):
             }}
             
             function removeFromCart(index) {{
-                if(confirm('確定刪除此項目？')) {{
+                if(confirm(t.confirm_delete)) {{
                     cart.splice(index, 1);
                     updateCartBar();
-                    if(cart.length === 0) closeCartModal();
-                    else openCartModal();
+                    if(cart.length === 0) closeCartModal(); else openCartModal();
                 }}
             }}
             
@@ -424,7 +446,7 @@ def render_frontend(table_number, products_data):
                 const tableVal = visibleTableInput.value.trim();
                 
                 if(!tableVal) {{ 
-                    alert('請輸入桌號'); 
+                    alert(t.table_placeholder); 
                     visibleTableInput.focus();
                     return; 
                 }}
@@ -432,7 +454,7 @@ def render_frontend(table_number, products_data):
                 if(cart.length === 0) return;
                 
                 const totalP = cart.reduce((acc, item) => acc + (item.unit_price * item.qty), 0);
-                if(!confirm(`確定送出訂單？\\n桌號: ${{tableVal}}\\n總金額: $${{totalP}}`)) return;
+                if(!confirm(t.confirm_order + `\\n` + t.total + `: $${{totalP}}`)) return;
                 
                 document.getElementById('hidden_table_number').value = tableVal;
                 document.getElementById('cart_data_input').value = JSON.stringify(cart);
@@ -443,260 +465,298 @@ def render_frontend(table_number, products_data):
     </html>
     """
 
-# --- 3. 下單成功頁面 (顯示各項金額) ---
+# --- 4. 下單成功頁面 ---
 @app.route('/order_success')
 def order_success():
+    order_id = request.args.get('order_id')
+    lang = request.args.get('lang', 'zh')
+    translations = load_translations()
+    t = translations.get(lang, translations['zh'])
+
     conn = get_db_connection()
-    try:
-        order_id = request.args.get('order_id')
-        cur = conn.cursor()
-        cur.execute("SELECT * FROM orders WHERE id = %s", (order_id,))
-        order = cur.fetchone()
-        cur.close()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM orders WHERE id = %s", (order_id,))
+    order = cur.fetchone()
+    cur.close()
+    conn.close()
 
-        if not order: return "查無訂單"
-        
-        # 這裡會把資料庫裡的 " | " 換成換行與分隔線
-        items_html = order[2].replace(" | ", "<br><hr style='border:0; border-top:1px dashed #eee; margin:5px 0;'>")
+    if not order: return "Error"
+    items_html = order[2].replace(" + ", "<br><hr style='border:0; border-top:1px dashed #eee; margin:5px 0;'>")
 
-        return f"""
-        <!DOCTYPE html>
-        <html>
-        <head> <meta name="viewport" content="width=device-width, initial-scale=1"> </head>
-        <body style="font-family: sans-serif; text-align: center; padding: 20px; background: #f4f7f6;">
-            <div style="background: white; padding: 30px; border-radius: 15px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); max-width: 400px; margin: 0 auto;">
-                <div style="font-size:50px; color:#28a745;">✅</div>
-                <h2>下單成功！</h2>
-                <h3 style="color:#ff9800;">桌號：{order[1]}</h3>
-                <div style="text-align:left; background:#fafafa; padding:15px; border-radius:8px; margin:15px 0; font-size:1.1em;">
-                    {items_html}
-                </div>
-                <h3 style="text-align:right; color:#e91e63;">總計：${order[3]}</h3>
-                <p>廚房備餐中</p>
-                <a href="/" style="display:inline-block; padding:10px 30px; background:#007bff; color:white; text-decoration:none; border-radius:20px;">繼續點餐</a>
+    return f"""
+    <!DOCTYPE html>
+    <html>
+    <head> <meta name="viewport" content="width=device-width, initial-scale=1"> </head>
+    <body style="font-family: sans-serif; text-align: center; padding: 20px; background: #f4f7f6;">
+        <div style="background: white; padding: 30px; border-radius: 15px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); max-width: 400px; margin: 0 auto;">
+            <div style="font-size:50px; color:#28a745;">✅</div>
+            <h2>{t['order_success']}</h2>
+            <h3 style="color:#ff9800;">{t['table_label']}：{order[1]}</h3>
+            <div style="text-align:left; background:#fafafa; padding:15px; border-radius:8px; margin:15px 0; font-size:1.1em;">
+                {items_html}
             </div>
-        </body>
-        </html>
-        """
-    finally:
-        close_db_connection(conn)
+            <h3 style="text-align:right; color:#e91e63;">{t['total']}：${order[3]}</h3>
+            <p>{t['kitchen_prep']}</p>
+            <a href="/?lang={lang}" style="display:inline-block; padding:10px 30px; background:#007bff; color:white; text-decoration:none; border-radius:20px;">{t['continue_order']}</a>
+        </div>
+    </body>
+    </html>
+    """
 
-# --- 4. 廚房端 ---
+# --- 5. 廚房端 (維持不變，僅微調顯示) ---
 @app.route('/kitchen')
 def kitchen():
     conn = get_db_connection()
-    try:
-        cur = conn.cursor()
-        cur.execute("SELECT * FROM orders WHERE created_at >= current_date ORDER BY created_at DESC")
-        orders = cur.fetchall()
-        cur.close()
+    cur = conn.cursor()
+    # 這裡有改：多撈 lang 欄位
+    cur.execute("SELECT * FROM orders WHERE created_at >= current_date ORDER BY created_at DESC")
+    orders = cur.fetchall()
+    cur.close()
+    conn.close()
 
-        html = """
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>廚房端</title>
-            <meta name="viewport" content="width=device-width, initial-scale=1">
-            <style>
-                body { font-family: sans-serif; background: #222; color: white; margin: 0; padding: 10px; }
-                .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
-                .order-card { background: #333; border-left: 8px solid #ff9800; margin-bottom: 15px; padding: 15px; border-radius: 5px; }
-                .completed { border-left: 8px solid #28a745; opacity: 0.5; }
-                .btn-done { background: #28a745; color: white; border: none; padding: 10px; border-radius: 5px; float: right; cursor: pointer; }
-                .order-items { font-size: 1.2em; line-height: 1.6; margin-top: 10px; }
-                a { color: white; background: #444; padding: 5px 10px; text-decoration: none; border-radius: 5px; }
-            </style>
-        </head>
-        <body>
-            <div class="header">
-                <h3>👨‍🍳 訂單看板</h3>
-                <div>
-                    <a href="/kitchen/menu">菜單管理</a>
-                    <a href="/daily_report" target="_blank">結帳單</a>
-                </div>
+    html = """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Kitchen</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <style>
+            body { font-family: sans-serif; background: #222; color: white; margin: 0; padding: 10px; }
+            .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
+            .order-card { background: #333; border-left: 8px solid #ff9800; margin-bottom: 15px; padding: 15px; border-radius: 5px; }
+            .completed { border-left: 8px solid #28a745; opacity: 0.5; }
+            .btn-done { background: #28a745; color: white; border: none; padding: 10px; border-radius: 5px; float: right; cursor: pointer; }
+            .order-items { font-size: 1.2em; line-height: 1.6; margin-top: 10px; }
+            a { color: white; background: #444; padding: 5px 10px; text-decoration: none; border-radius: 5px; }
+        </style>
+    </head>
+    <body>
+        <div class="header">
+            <h3>👨‍🍳 訂單看板</h3>
+            <div>
+                <a href="/kitchen/menu">菜單管理</a>
+                <a href="/daily_report" target="_blank">結帳單</a>
             </div>
-            <div id="container">
+        </div>
+        <div id="container">
+    """
+    for order in orders:
+        status_class = "completed" if order[4] == 'Completed' else ""
+        btn = f"<button class='btn-done' onclick=\"completeOrder({order[0]})\">完成</button>" if order[4] != 'Completed' else ""
+        items_display = order[2].replace(" + ", "<br>")
+        # order[6] 是語言，這裡可以選擇是否顯示，目前廚房端主要還是看中文(如果系統是中文的話)，
+        # 但訂單內容會是顧客選的語言。這對於廚房可能是個問題，如果廚師看不懂英文。
+        # 不過目前先維持原樣顯示顧客下單的內容。
+        
+        html += f"""
+        <div class="order-card {status_class}">
+            {btn}
+            <div style="font-size:1.4em; color:#ff9800; font-weight:bold;">
+                桌號：{order[1]} 
+                <span style='font-size:0.6em; color:#ccc; border:1px solid #555; padding:2px 5px; border-radius:4px;'>{order[6].upper() if len(order)>6 and order[6] else 'ZH'}</span>
+                <small style="color:#aaa; font-size:0.5em;">{order[5].strftime('%H:%M')}</small>
+            </div>
+            <div class="order-items">{items_display}</div>
+        </div>
         """
-        for order in orders:
-            status_class = "completed" if order[4] == 'Completed' else ""
-            btn = f"<button class='btn-done' onclick=\"completeOrder({order[0]})\">完成</button>" if order[4] != 'Completed' else ""
-            # 把 | 換成換行
-            items_display = order[2].replace(" | ", "<br>")
-            html += f"""
-            <div class="order-card {status_class}">
-                {btn}
-                <div style="font-size:1.4em; color:#ff9800; font-weight:bold;">桌號：{order[1]} <small style="color:#aaa; font-size:0.5em;">{order[5].strftime('%H:%M')}</small></div>
-                <div class="order-items">{items_display}</div>
-            </div>
-            """
-        html += """</div><script>
-            function completeOrder(id) { if(confirm('完成？')) fetch('/complete/'+id).then(()=>location.reload()); }
-            setInterval(() => location.reload(), 10000);
-        </script></body></html>"""
-        return html
-    finally:
-        close_db_connection(conn)
+    html += """</div><script>
+        function completeOrder(id) { if(confirm('完成？')) fetch('/complete/'+id).then(()=>location.reload()); }
+        setInterval(() => location.reload(), 10000);
+    </script></body></html>"""
+    return html
 
-# --- 5. 菜單管理 ---
+# --- 6. 菜單管理 (後台升級：多語言輸入) ---
 @app.route('/kitchen/menu', methods=['GET', 'POST'])
 def kitchen_menu():
     conn = get_db_connection()
-    try:
-        cur = conn.cursor()
-        if request.method == 'POST' and 'add_item' in request.form:
-            name = request.form['name']
-            price = request.form['price']
-            category = request.form['category']
-            image_url = request.form['image_url']
-            custom_options = request.form['custom_options']
-            sort_order = request.form.get('sort_order', 100)
-            
-            cur.execute("INSERT INTO products (name, price, category, image_url, is_available, custom_options, sort_order) VALUES (%s, %s, %s, %s, TRUE, %s, %s)", 
-                        (name, price, category, image_url, custom_options, sort_order))
-            conn.commit()
-            return redirect(url_for('kitchen_menu'))
+    cur = conn.cursor()
+    if request.method == 'POST' and 'add_item' in request.form:
+        name = request.form['name']
+        price = request.form['price']
+        category = request.form['category']
+        image_url = request.form['image_url']
+        custom_options = request.form['custom_options']
+        sort_order = request.form.get('sort_order', 100)
         
-        cur.execute("SELECT * FROM products ORDER BY sort_order ASC, id ASC")
-        products = cur.fetchall()
-        cur.close()
+        # 新增多語言欄位
+        name_en = request.form.get('name_en', '')
+        name_jp = request.form.get('name_jp', '')
+        opts_en = request.form.get('custom_options_en', '')
+        opts_jp = request.form.get('custom_options_jp', '')
         
-        html = """
-        <!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><style>body{font-family:sans-serif; padding:10px; background:#f4f4f9;} .btn{padding:5px 10px; text-decoration:none; color:white; border-radius:4px; font-size:0.9em; margin-left:5px; display:inline-block;}</style></head><body>
-            <a href="/kitchen">⬅️ 回廚房</a><h2>🛠️ 菜單管理</h2>
-            <div style="background:white; padding:15px; border-radius:8px;">
-                <h3>➕ 新增商品</h3>
-                <form method="POST">
-                    <input type="hidden" name="add_item" value="1">
-                    <input type="text" name="name" placeholder="名稱" required style="width:100%; margin:5px 0; padding:8px;">
-                    <input type="number" name="price" placeholder="價格" required style="width:100%; margin:5px 0; padding:8px;">
-                    <input type="text" name="category" placeholder="分類 (主食/飲料)" required style="width:100%; margin:5px 0; padding:8px;">
-                    <input type="text" name="image_url" placeholder="圖片網址" style="width:100%; margin:5px 0; padding:8px;">
-                    <input type="text" name="custom_options" placeholder="選項 (例: 加麵:+20,微糖)" style="width:100%; margin:5px 0; padding:8px;">
-                    <input type="number" name="sort_order" placeholder="排序權重 (越小越前面)" value="100" style="width:100%; margin:5px 0; padding:8px;">
-                    <button style="width:100%; background:#007bff; color:white; padding:10px; border:none; margin-top:5px;">新增</button>
-                </form>
-                <p style="font-size:0.8em; color:gray;">💡 提示：加錢請用 <b>:+</b> ，例如 <b>加麵:+20</b></p>
-            </div>
-            <hr>
-        """
-        for p in products:
-            status = "🟢" if p[5] else "🔴"
-            html += f"""
-            <div style='background:white; padding:10px; margin-bottom:5px; border-left:5px solid #007bff;'>
-                <div style="float:right; color:#888; font-size:0.8em;">排序: {p[7]}</div>
-                {status} <b>{p[1]}</b> (${p[2]})<br><small>{p[6]}</small><br>
-                <div style="margin-top:5px;">
-                    <a href='/menu/toggle/{p[0]}' class='btn' style='background:#6c757d'>上架/完售</a>
-                    <a href='/menu/edit/{p[0]}' class='btn' style='background:#ffc107; color:black;'>編輯</a>
-                    <a href='/menu/delete/{p[0]}' class='btn' style='background:#dc3545' onclick="return confirm('確定刪除？')">刪除</a>
+        cur.execute("""
+            INSERT INTO products 
+            (name, price, category, image_url, is_available, custom_options, sort_order, name_en, name_jp, custom_options_en, custom_options_jp) 
+            VALUES (%s, %s, %s, %s, TRUE, %s, %s, %s, %s, %s, %s)
+        """, (name, price, category, image_url, custom_options, sort_order, name_en, name_jp, opts_en, opts_jp))
+        conn.commit()
+        return redirect(url_for('kitchen_menu'))
+    
+    cur.execute("SELECT * FROM products ORDER BY sort_order ASC, id ASC")
+    products = cur.fetchall()
+    cur.close()
+    conn.close()
+    
+    html = """
+    <!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><style>body{font-family:sans-serif; padding:10px; background:#f4f4f9;} .btn{padding:5px 10px; text-decoration:none; color:white; border-radius:4px; font-size:0.9em; margin-left:5px; display:inline-block;} input{width:100%; margin:2px 0; padding:8px; box-sizing:border-box;} .lang-group{border:1px solid #ddd; padding:10px; margin-bottom:10px; background:#f9f9f9; border-radius:5px;}</style></head><body>
+        <a href="/kitchen">⬅️ 回廚房</a><h2>🛠️ 菜單管理 (多語言版)</h2>
+        <div style="background:white; padding:15px; border-radius:8px;">
+            <h3>➕ 新增商品</h3>
+            <form method="POST">
+                <input type="hidden" name="add_item" value="1">
+                
+                <div class="lang-group">
+                    <label>🇹🇼 中文 (必填)</label>
+                    <input type="text" name="name" placeholder="商品名稱 (牛肉麵)" required>
+                    <input type="text" name="custom_options" placeholder="選項 (加麵:+20)">
                 </div>
-            </div>"""
-        return html + "</body></html>"
-    finally:
-        close_db_connection(conn)
+                
+                <div class="lang-group">
+                    <label>🇺🇸 English</label>
+                    <input type="text" name="name_en" placeholder="Product Name (Beef Noodle)">
+                    <input type="text" name="custom_options_en" placeholder="Options (Extra Noodle:+20)">
+                </div>
 
-# --- 6. 編輯菜單 ---
+                <div class="lang-group">
+                    <label>🇯🇵 日本語</label>
+                    <input type="text" name="name_jp" placeholder="商品名 (牛肉麺)">
+                    <input type="text" name="custom_options_jp" placeholder="オプション (麺追加:+20)">
+                </div>
+
+                <div class="lang-group">
+                    <label>⚙️ 基本設定</label>
+                    <input type="number" name="price" placeholder="價格 Price" required>
+                    <input type="text" name="category" placeholder="分類 (主食/飲料)" required>
+                    <input type="text" name="image_url" placeholder="圖片網址 Image URL">
+                    <input type="number" name="sort_order" placeholder="排序 (1排最前)" value="100">
+                </div>
+                
+                <button style="width:100%; background:#007bff; color:white; padding:10px; border:none; margin-top:5px;">新增</button>
+            </form>
+        </div>
+        <hr>
+    """
+    for p in products:
+        status = "🟢" if p[5] else "🔴"
+        html += f"""
+        <div style='background:white; padding:10px; margin-bottom:5px; border-left:5px solid #007bff;'>
+            <div style="float:right; color:#888; font-size:0.8em;">排序: {p[7]}</div>
+            {status} <b>{p[1]}</b> (${p[2]})<br>
+            <small style="color:#666">🇺🇸 {p[8] or '-'}</small><br>
+            <div style="margin-top:5px;">
+                <a href='/menu/toggle/{p[0]}' class='btn' style='background:#6c757d'>上架/完售</a>
+                <a href='/menu/edit/{p[0]}' class='btn' style='background:#ffc107; color:black;'>編輯詳情</a>
+                <a href='/menu/delete/{p[0]}' class='btn' style='background:#dc3545' onclick="return confirm('確定刪除？')">刪除</a>
+            </div>
+        </div>"""
+    return html + "</body></html>"
+
+# --- 7. 編輯商品頁面 ---
 @app.route('/menu/edit/<int:pid>', methods=['GET', 'POST'])
 def menu_edit(pid):
     conn = get_db_connection()
-    try:
-        cur = conn.cursor()
-        
-        if request.method == 'POST':
-            name = request.form['name']
-            price = request.form['price']
-            category = request.form['category']
-            image_url = request.form['image_url']
-            custom_options = request.form['custom_options']
-            sort_order = request.form['sort_order']
-            
-            cur.execute("""
-                UPDATE products 
-                SET name=%s, price=%s, category=%s, image_url=%s, custom_options=%s, sort_order=%s
-                WHERE id=%s
-            """, (name, price, category, image_url, custom_options, sort_order, pid))
-            conn.commit()
-            cur.close()
-            return redirect(url_for('kitchen_menu'))
-
-        cur.execute("SELECT * FROM products WHERE id = %s", (pid,))
-        product = cur.fetchone()
+    cur = conn.cursor()
+    
+    if request.method == 'POST':
+        # 更新所有欄位
+        cur.execute("""
+            UPDATE products 
+            SET name=%s, price=%s, category=%s, image_url=%s, custom_options=%s, sort_order=%s,
+                name_en=%s, name_jp=%s, custom_options_en=%s, custom_options_jp=%s
+            WHERE id=%s
+        """, (
+            request.form['name'], request.form['price'], request.form['category'], request.form['image_url'], request.form['custom_options'], request.form['sort_order'],
+            request.form['name_en'], request.form['name_jp'], request.form['custom_options_en'], request.form['custom_options_jp'],
+            pid
+        ))
+        conn.commit()
         cur.close()
-        
-        if not product: return "查無此商品"
-        p_opts = product[6] if product[6] else ""
-        
-        return f"""
-        <!DOCTYPE html>
-        <html>
-        <head><meta name="viewport" content="width=device-width, initial-scale=1"></head>
-        <body style="font-family: sans-serif; padding: 20px; max-width: 600px; margin: 0 auto; background:#f4f4f9;">
-            <h2>✏️ 編輯商品</h2>
-            <form method="POST" style="background:white; padding:20px; border-radius:10px;">
-                <p>名稱：<input type="text" name="name" value="{product[1]}" required style="width:100%; padding:8px;"></p>
-                <p>價格：<input type="number" name="price" value="{product[2]}" required style="width:100%; padding:8px;"></p>
-                <p>分類：<input type="text" name="category" value="{product[3]}" required style="width:100%; padding:8px;"></p>
-                <p>圖片：<input type="text" name="image_url" value="{product[4]}" style="width:100%; padding:8px;"></p>
-                <p>選項 (例: 加麵:+20)：<input type="text" name="custom_options" value="{p_opts}" style="width:100%; padding:8px;"></p>
-                <p>排序：<input type="number" name="sort_order" value="{product[7]}" style="width:100%; padding:8px;"></p>
-                <br>
-                <button type="submit" style="background:#28a745; color:white; border:none; padding:10px 30px; border-radius:5px;">儲存修改</button>
-                <a href="/kitchen/menu" style="margin-left:20px;">取消</a>
-            </form>
-        </body>
-        </html>
-        """
-    finally:
-        close_db_connection(conn)
+        conn.close()
+        return redirect(url_for('kitchen_menu'))
 
-# --- 7. 輔助功能 ---
+    cur.execute("SELECT * FROM products WHERE id = %s", (pid,))
+    p = cur.fetchone()
+    cur.close()
+    conn.close()
+    
+    if not p: return "查無此商品"
+    
+    # 處理 None 值轉換為空字串，避免 HTML value 顯示 None
+    def v(val): return val if val else ""
+
+    return f"""
+    <!DOCTYPE html>
+    <html>
+    <head><meta name="viewport" content="width=device-width, initial-scale=1"><style>input{{width:100%; padding:8px; margin:5px 0; box-sizing:border-box;}} .grp{{background:#fff; padding:15px; margin-bottom:10px; border-radius:5px;}}</style></head>
+    <body style="font-family: sans-serif; padding: 20px; max-width: 600px; margin: 0 auto; background:#f4f4f9;">
+        <h2>✏️ 編輯商品</h2>
+        <form method="POST">
+            <div class="grp">
+                <label>🇹🇼 中文</label>
+                <input type="text" name="name" value="{v(p[1])}" required>
+                <input type="text" name="custom_options" value="{v(p[6])}">
+            </div>
+            <div class="grp">
+                <label>🇺🇸 English</label>
+                <input type="text" name="name_en" value="{v(p[8])}">
+                <input type="text" name="custom_options_en" value="{v(p[10])}">
+            </div>
+            <div class="grp">
+                <label>🇯🇵 日本語</label>
+                <input type="text" name="name_jp" value="{v(p[9])}">
+                <input type="text" name="custom_options_jp" value="{v(p[11])}">
+            </div>
+            <div class="grp">
+                <label>設定</label>
+                價格：<input type="number" name="price" value="{p[2]}" required>
+                分類：<input type="text" name="category" value="{p[3]}" required>
+                排序：<input type="number" name="sort_order" value="{p[7]}">
+                圖片：<input type="text" name="image_url" value="{v(p[4])}">
+            </div>
+            <button type="submit" style="background:#28a745; color:white; border:none; padding:10px 30px; border-radius:5px; width:100%;">儲存修改</button>
+            <br><br>
+            <a href="/kitchen/menu">取消</a>
+        </form>
+    </body>
+    </html>
+    """
+
+# --- 8. 其他輔助功能 (維持不變) ---
 @app.route('/menu/toggle/<int:pid>')
 def menu_toggle(pid):
     conn = get_db_connection()
-    try:
-        cur = conn.cursor()
-        cur.execute("UPDATE products SET is_available = NOT is_available WHERE id = %s", (pid,))
-        conn.commit()
-        return redirect(url_for('kitchen_menu'))
-    finally:
-        close_db_connection(conn)
+    cur = conn.cursor()
+    cur.execute("UPDATE products SET is_available = NOT is_available WHERE id = %s", (pid,))
+    conn.commit()
+    return redirect(url_for('kitchen_menu'))
 
 @app.route('/menu/delete/<int:pid>')
 def menu_delete(pid):
     conn = get_db_connection()
-    try:
-        cur = conn.cursor()
-        cur.execute("DELETE FROM products WHERE id = %s", (pid,))
-        conn.commit()
-        return redirect(url_for('kitchen_menu'))
-    finally:
-        close_db_connection(conn)
+    cur = conn.cursor()
+    cur.execute("DELETE FROM products WHERE id = %s", (pid,))
+    conn.commit()
+    return redirect(url_for('kitchen_menu'))
 
 @app.route('/complete/<int:order_id>')
 def complete_order(order_id):
     conn = get_db_connection()
-    try:
-        cur = conn.cursor()
-        cur.execute("UPDATE orders SET status = 'Completed' WHERE id = %s", (order_id,))
-        conn.commit()
-        return "OK"
-    finally:
-        close_db_connection(conn)
+    cur = conn.cursor()
+    cur.execute("UPDATE orders SET status = 'Completed' WHERE id = %s", (order_id,))
+    conn.commit()
+    return "OK"
 
 @app.route('/daily_report')
 def daily_report():
     conn = get_db_connection()
-    try:
-        cur = conn.cursor()
-        cur.execute("SELECT * FROM orders WHERE created_at >= current_date")
-        orders = cur.fetchall()
-        total = sum(o[3] for o in orders)
-        html = f"<h2>日結單 {date.today()}</h2><table style='width:100%'>"
-        for o in orders: html += f"<tr><td>#{o[0]} 桌{o[1]}</td><td align='right'>${o[3]}</td></tr>"
-        html += f"</table><h3 align='right'>總計: ${total}</h3><button onclick='window.print()'>列印</button>"
-        return html
-    finally:
-        close_db_connection(conn)
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM orders WHERE created_at >= current_date")
+    orders = cur.fetchall()
+    total = sum(o[3] for o in orders)
+    html = f"<h2>日結單 {date.today()}</h2><table style='width:100%'>"
+    for o in orders: html += f"<tr><td>#{o[0]} 桌{o[1]}</td><td align='right'>${o[3]}</td></tr>"
+    html += f"</table><h3 align='right'>總計: ${total}</h3><button onclick='window.print()'>列印</button>"
+    return html
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=10000)
