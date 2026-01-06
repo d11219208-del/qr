@@ -1,7 +1,7 @@
 import os
 import psycopg2
 import json
-from flask import Flask, request, redirect, url_for, render_template_string
+from flask import Flask, request, redirect, url_for
 from datetime import datetime, date
 
 app = Flask(__name__)
@@ -10,16 +10,51 @@ def get_db_connection():
     db_uri = os.environ.get("DATABASE_URL")
     return psycopg2.connect(db_uri)
 
-# 載入語言檔
+# --- 核心修改：防呆翻譯載入 ---
 def load_translations():
+    # 這是備用字典，萬一讀不到檔案，系統會用這份，防止 500 錯誤
+    fallback = {
+        "zh": {
+            "title": "線上點餐", "welcome": "歡迎點餐", "table_placeholder": "請輸入桌號", 
+            "table_label": "桌號", "add": "加入", "sold_out": "已售完", "cart_detail": "查看明細", 
+            "total": "合計", "checkout": "去結帳", "cart_title": "購物車明細", "empty_cart": "購物車是空的", 
+            "close": "關閉", "confirm_delete": "確定刪除此項目？", "confirm_order": "確定送出訂單？", 
+            "modal_unit_price": "單價", "modal_add_cart": "加入購物車", "modal_cancel": "取消", 
+            "custom_options": "客製化選項", "order_success": "下單成功！", "kitchen_prep": "廚房備餐中", 
+            "continue_order": "繼續點餐", "category_main": "主食", "category_side": "小菜", "category_drink": "飲料"
+        },
+        "en": {
+            "title": "Online Ordering", "welcome": "Welcome", "table_placeholder": "Enter Table No.",
+            "table_label": "Table", "add": "Add", "sold_out": "Sold Out", "cart_detail": "View Cart",
+            "total": "Total", "checkout": "Checkout", "cart_title": "Cart Details", "empty_cart": "Cart is empty",
+            "close": "Close", "confirm_delete": "Remove item?", "confirm_order": "Submit Order?",
+            "modal_unit_price": "Price", "modal_add_cart": "Add to Cart", "modal_cancel": "Cancel",
+            "custom_options": "Options", "order_success": "Order Placed!", "kitchen_prep": "Preparing...",
+            "continue_order": "Order More", "category_main": "Main Dish", "category_side": "Side Dish", "category_drink": "Drinks"
+        },
+        "jp": {
+            "title": "オンライン注文", "welcome": "いらっしゃいませ", "table_placeholder": "卓番を入力",
+            "table_label": "卓番", "add": "追加", "sold_out": "完売", "cart_detail": "カートを見る",
+            "total": "合計", "checkout": "会計する", "cart_title": "カート詳細", "empty_cart": "カートは空です",
+            "close": "閉じる", "confirm_delete": "削除しますか？", "confirm_order": "注文を確定しますか？",
+            "modal_unit_price": "単価", "modal_add_cart": "カートに入れる", "modal_cancel": "キャンセル",
+            "custom_options": "オプション", "order_success": "注文完了！", "kitchen_prep": "調理中...",
+            "continue_order": "続けて注文", "category_main": "メイン", "category_side": "サイド", "category_drink": "ドリンク"
+        }
+    }
+    
     try:
-        with open('translations.json', 'r', encoding='utf-8') as f:
+        # 嘗試讀取檔案，使用絕對路徑避免找不到
+        base_path = os.path.dirname(os.path.abspath(__file__))
+        file_path = os.path.join(base_path, 'translations.json')
+        
+        with open(file_path, 'r', encoding='utf-8') as f:
             return json.load(f)
-    except:
-        # 萬一檔案讀取失敗的備用預設值
-        return {"zh": {"title": "線上點餐", "add": "加入"}}
+    except Exception as e:
+        print(f"⚠️ 讀取翻譯檔失敗，使用內建備份。原因: {e}")
+        return fallback
 
-# --- 1. 資料庫初始化 (新增多語言欄位) ---
+# --- 1. 資料庫初始化 (支援多語言) ---
 @app.route('/init_db')
 def init_db():
     conn = get_db_connection()
@@ -52,13 +87,14 @@ def init_db():
         ''')
         conn.commit()
 
-        # 升級資料庫：加入英日文欄位
+        # 升級資料庫：加入英日文欄位 (使用迴圈個別執行，避免失敗)
         alter_commands = [
             "ALTER TABLE products ADD COLUMN IF NOT EXISTS name_en VARCHAR(100);",
             "ALTER TABLE products ADD COLUMN IF NOT EXISTS name_jp VARCHAR(100);",
             "ALTER TABLE products ADD COLUMN IF NOT EXISTS custom_options_en TEXT;",
             "ALTER TABLE products ADD COLUMN IF NOT EXISTS custom_options_jp TEXT;",
-            "ALTER TABLE products ADD COLUMN IF NOT EXISTS sort_order INTEGER DEFAULT 100;"
+            "ALTER TABLE products ADD COLUMN IF NOT EXISTS sort_order INTEGER DEFAULT 100;",
+            "ALTER TABLE orders ADD COLUMN IF NOT EXISTS lang VARCHAR(10) DEFAULT 'zh';"
         ]
         
         for cmd in alter_commands:
@@ -67,9 +103,9 @@ def init_db():
                 conn.commit()
             except Exception as e:
                 conn.rollback()
-                print(f"Schema update skipped or failed: {e}")
+                print(f"Schema update skipped: {e}")
 
-        return "資料庫升級完成 (多語言支援)。<br><a href='/'>前往首頁</a>"
+        return "資料庫初始化/升級完成！<br><a href='/'>前往首頁</a>"
     except Exception as e:
         return f"初始化失敗：{e}"
     finally:
@@ -136,7 +172,8 @@ def menu():
         items_display_list = []
 
         for item in cart_items:
-            p_name = item['name'] # 這是當下語言的名稱
+            # 這裡的 item['name'] 已經是前端根據語言顯示的名稱了
+            p_name = item['name'] 
             p_unit_price = int(item['unit_price'])
             p_qty = int(item['qty'])
             p_opts = item.get('options', [])
@@ -160,8 +197,12 @@ def menu():
         return redirect(url_for('order_success', order_id=new_order_id, lang=lang))
 
     # 撈取產品
-    cur.execute("SELECT * FROM products ORDER BY sort_order ASC, id ASC")
-    products = cur.fetchall()
+    try:
+        cur.execute("SELECT * FROM products ORDER BY sort_order ASC, id ASC")
+        products = cur.fetchall()
+    except:
+        return "資料庫讀取錯誤，請先執行 <a href='/init_db'>/init_db</a>"
+    
     cur.close()
     conn.close()
     
@@ -173,10 +214,13 @@ def menu():
         display_name = p[1]
         display_opts = p[6]
         
-        if lang == 'en':
+        # 檢查索引是否超出範圍 (防止舊資料庫結構報錯)
+        has_multi_lang = len(p) >= 12
+        
+        if lang == 'en' and has_multi_lang:
             if p[8] and p[8].strip(): display_name = p[8]
             if p[10] and p[10].strip(): display_opts = p[10]
-        elif lang == 'jp':
+        elif lang == 'jp' and has_multi_lang:
             if p[9] and p[9].strip(): display_name = p[9]
             if p[11] and p[11].strip(): display_opts = p[11]
 
@@ -229,6 +273,8 @@ def render_frontend(table_number, products_data, t, lang):
             .del-btn {{ color: white; background: #dc3545; border: none; padding: 5px 10px; border-radius: 5px; cursor: pointer; }}
             .option-tag {{ display: inline-block; border: 1px solid #ddd; padding: 8px 15px; border-radius: 20px; margin: 5px 5px 5px 0; color: #555; cursor: pointer; }}
             .option-tag.selected {{ background: #e3f2fd; border-color: #2196f3; color: #2196f3; font-weight: bold; }}
+            .option-price {{ font-size: 0.8em; color: #e91e63; }}
+
             .cart-bar {{ position: fixed; bottom: 0; left: 0; width: 100%; background: white; padding: 15px; box-shadow: 0 -2px 10px rgba(0,0,0,0.1); display: flex; justify-content: space-between; align-items: center; box-sizing: border-box; z-index: 500; }}
             .qty-btn {{ width: 35px; height: 35px; border-radius: 50%; border: 1px solid #ddd; background: white; font-size: 1.2em; display:flex; align-items:center; justify-content:center; cursor:pointer; }}
         </style>
@@ -503,12 +549,11 @@ def order_success():
     </html>
     """
 
-# --- 5. 廚房端 (維持不變，僅微調顯示) ---
+# --- 5. 廚房端 ---
 @app.route('/kitchen')
 def kitchen():
     conn = get_db_connection()
     cur = conn.cursor()
-    # 這裡有改：多撈 lang 欄位
     cur.execute("SELECT * FROM orders WHERE created_at >= current_date ORDER BY created_at DESC")
     orders = cur.fetchall()
     cur.close()
@@ -544,16 +589,18 @@ def kitchen():
         status_class = "completed" if order[4] == 'Completed' else ""
         btn = f"<button class='btn-done' onclick=\"completeOrder({order[0]})\">完成</button>" if order[4] != 'Completed' else ""
         items_display = order[2].replace(" + ", "<br>")
-        # order[6] 是語言，這裡可以選擇是否顯示，目前廚房端主要還是看中文(如果系統是中文的話)，
-        # 但訂單內容會是顧客選的語言。這對於廚房可能是個問題，如果廚師看不懂英文。
-        # 不過目前先維持原樣顯示顧客下單的內容。
         
+        # 檢查是否有語言欄位，沒有則預設 ZH
+        lang_label = 'ZH'
+        if len(order) > 6 and order[6]:
+            lang_label = order[6].upper()
+
         html += f"""
         <div class="order-card {status_class}">
             {btn}
             <div style="font-size:1.4em; color:#ff9800; font-weight:bold;">
                 桌號：{order[1]} 
-                <span style='font-size:0.6em; color:#ccc; border:1px solid #555; padding:2px 5px; border-radius:4px;'>{order[6].upper() if len(order)>6 and order[6] else 'ZH'}</span>
+                <span style='font-size:0.6em; color:#ccc; border:1px solid #555; padding:2px 5px; border-radius:4px;'>{lang_label}</span>
                 <small style="color:#aaa; font-size:0.5em;">{order[5].strftime('%H:%M')}</small>
             </div>
             <div class="order-items">{items_display}</div>
@@ -565,7 +612,7 @@ def kitchen():
     </script></body></html>"""
     return html
 
-# --- 6. 菜單管理 (後台升級：多語言輸入) ---
+# --- 6. 菜單管理 ---
 @app.route('/kitchen/menu', methods=['GET', 'POST'])
 def kitchen_menu():
     conn = get_db_connection()
@@ -578,7 +625,6 @@ def kitchen_menu():
         custom_options = request.form['custom_options']
         sort_order = request.form.get('sort_order', 100)
         
-        # 新增多語言欄位
         name_en = request.form.get('name_en', '')
         name_jp = request.form.get('name_jp', '')
         opts_en = request.form.get('custom_options_en', '')
@@ -592,8 +638,13 @@ def kitchen_menu():
         conn.commit()
         return redirect(url_for('kitchen_menu'))
     
-    cur.execute("SELECT * FROM products ORDER BY sort_order ASC, id ASC")
-    products = cur.fetchall()
+    # 防呆：確保撈取不會因為欄位不存在報錯
+    try:
+        cur.execute("SELECT * FROM products ORDER BY sort_order ASC, id ASC")
+        products = cur.fetchall()
+    except:
+        products = []
+        
     cur.close()
     conn.close()
     
@@ -638,11 +689,14 @@ def kitchen_menu():
     """
     for p in products:
         status = "🟢" if p[5] else "🔴"
+        # 簡易防呆，避免索引超出
+        en_name = p[8] if len(p) > 8 else '-'
+        
         html += f"""
         <div style='background:white; padding:10px; margin-bottom:5px; border-left:5px solid #007bff;'>
             <div style="float:right; color:#888; font-size:0.8em;">排序: {p[7]}</div>
             {status} <b>{p[1]}</b> (${p[2]})<br>
-            <small style="color:#666">🇺🇸 {p[8] or '-'}</small><br>
+            <small style="color:#666">🇺🇸 {en_name or '-'}</small><br>
             <div style="margin-top:5px;">
                 <a href='/menu/toggle/{p[0]}' class='btn' style='background:#6c757d'>上架/完售</a>
                 <a href='/menu/edit/{p[0]}' class='btn' style='background:#ffc107; color:black;'>編輯詳情</a>
@@ -651,14 +705,13 @@ def kitchen_menu():
         </div>"""
     return html + "</body></html>"
 
-# --- 7. 編輯商品頁面 ---
+# --- 7. 編輯菜單 ---
 @app.route('/menu/edit/<int:pid>', methods=['GET', 'POST'])
 def menu_edit(pid):
     conn = get_db_connection()
     cur = conn.cursor()
     
     if request.method == 'POST':
-        # 更新所有欄位
         cur.execute("""
             UPDATE products 
             SET name=%s, price=%s, category=%s, image_url=%s, custom_options=%s, sort_order=%s,
@@ -681,8 +734,13 @@ def menu_edit(pid):
     
     if not p: return "查無此商品"
     
-    # 處理 None 值轉換為空字串，避免 HTML value 顯示 None
-    def v(val): return val if val else ""
+    def v(val): return val if val is not None else ""
+
+    # 防止索引錯誤
+    name_en = v(p[8]) if len(p) > 8 else ""
+    name_jp = v(p[9]) if len(p) > 9 else ""
+    opt_en = v(p[10]) if len(p) > 10 else ""
+    opt_jp = v(p[11]) if len(p) > 11 else ""
 
     return f"""
     <!DOCTYPE html>
@@ -698,13 +756,13 @@ def menu_edit(pid):
             </div>
             <div class="grp">
                 <label>🇺🇸 English</label>
-                <input type="text" name="name_en" value="{v(p[8])}">
-                <input type="text" name="custom_options_en" value="{v(p[10])}">
+                <input type="text" name="name_en" value="{name_en}">
+                <input type="text" name="custom_options_en" value="{opt_en}">
             </div>
             <div class="grp">
                 <label>🇯🇵 日本語</label>
-                <input type="text" name="name_jp" value="{v(p[9])}">
-                <input type="text" name="custom_options_jp" value="{v(p[11])}">
+                <input type="text" name="name_jp" value="{name_jp}">
+                <input type="text" name="custom_options_jp" value="{opt_jp}">
             </div>
             <div class="grp">
                 <label>設定</label>
@@ -721,7 +779,7 @@ def menu_edit(pid):
     </html>
     """
 
-# --- 8. 其他輔助功能 (維持不變) ---
+# --- 8. 其他功能 ---
 @app.route('/menu/toggle/<int:pid>')
 def menu_toggle(pid):
     conn = get_db_connection()
