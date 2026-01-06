@@ -27,7 +27,6 @@ def init_db():
         ''')
         
         # 建立訂單表 (Orders)
-        # items 欄位我們暫時用 TEXT 存成 JSON 字串，簡化結構
         cur.execute('''
             CREATE TABLE IF NOT EXISTS orders (
                 id SERIAL PRIMARY KEY,
@@ -82,7 +81,7 @@ def index():
         total_price = 0
         ordered_items_names = []
         
-        # 為了安全，我們重新查詢資料庫獲取價格，不信任前端傳來的價格
+        # 為了安全，我們重新查詢資料庫獲取價格
         for pid in selected_item_ids:
             cur.execute("SELECT name, price FROM products WHERE id = %s", (pid,))
             product = cur.fetchone()
@@ -217,6 +216,7 @@ def kitchen():
 
     for order in orders:
         # order = (id, name, table, items, total, status, time)
+        # 注意：這裡就是剛剛報錯的地方，請確保下方的 f""" 和 """ 是完整的
         html += f"""
         <div class="order-card">
             <div class="order-header">
@@ -227,4 +227,12 @@ def kitchen():
                 {order[3]}
             </div>
             <div class="total">總計：${order[4]}</div>
-            <div class="time">
+            <div class="time">下單時間：{order[6]}</div>
+        </div>
+        """
+
+    html += "</body></html>"
+    return html
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=10000)
