@@ -1,7 +1,6 @@
 import os
 import psycopg2
 import json
-import re
 from flask import Flask, request, redirect, url_for
 from datetime import datetime, date
 
@@ -11,13 +10,13 @@ def get_db_connection():
     db_uri = os.environ.get("DATABASE_URL")
     return psycopg2.connect(db_uri)
 
-# --- 1. 資料庫初始化 (新增排序欄位) ---
+# --- 1. 資料庫初始化 ---
 @app.route('/init_db')
 def init_db():
     conn = get_db_connection()
     cur = conn.cursor()
     try:
-        # 建立表格結構
+        # 建立表格
         cur.execute('''
             CREATE TABLE IF NOT EXISTS products (
                 id SERIAL PRIMARY KEY,
@@ -43,14 +42,14 @@ def init_db():
         ''')
         conn.commit()
 
-        # 嘗試新增 sort_order 欄位 (針對舊資料庫升級)
+        # 嘗試新增 sort_order
         try:
             cur.execute("ALTER TABLE products ADD COLUMN sort_order INTEGER DEFAULT 100;")
             conn.commit()
         except:
             conn.rollback()
 
-        # 預設菜單 (如果完全沒資料才加)
+        # 預設菜單
         cur.execute('SELECT count(*) FROM products;')
         if cur.fetchone()[0] == 0:
             default_menu = [
@@ -62,7 +61,7 @@ def init_db():
             cur.executemany('INSERT INTO products (name, price, category, image_url, is_available, custom_options, sort_order) VALUES (%s, %s, %s, %s, %s, %s, %s)', default_menu)
             conn.commit()
 
-        return "資料庫更新完成！(已加入排序與加價功能)<br><a href='/'>前往首頁</a>"
+        return "資料庫初始化完成。<br><a href='/'>前往首頁</a>"
     except Exception as e:
         return f"初始化失敗：{e}"
     finally:
@@ -77,7 +76,8 @@ def index():
     table_from_url = request.args.get('table', '')
 
     if request.method == 'POST':
-        table_number = request.form.get('table_number')
+        # 這裡會從 hidden input 抓取桌號
+        table_number = request.form.get('table_number') 
         cart_json = request.form.get('cart_data')
         
         if not cart_json or cart_json == '[]':
@@ -92,12 +92,13 @@ def index():
         items_display_list = []
 
         for item in cart_items:
-            # item 結構: {name, base_price, unit_price, qty, options:[]}
+            # 解析前端傳來的資料
             p_name = item['name']
-            p_unit_price = int(item['unit_price']) # 這是包含加價後的單價
+            p_unit_price = int(item['unit_price']) # 這已經包含加價的單價
             p_qty = int(item['qty'])
             p_opts = item.get('options', [])
             
+            # 組合成顯示字串
             opts_str = f"({','.join(p_opts)})" if p_opts else ""
             display_str = f"{p_name} {opts_str} x{p_qty}"
             
@@ -116,7 +117,6 @@ def index():
         conn.close()
         return redirect(url_for('order_success', order_id=new_order_id))
 
-    # 依照 sort_order 排序 (ASC: 小的在前)
     try:
         cur.execute("SELECT * FROM products ORDER BY sort_order ASC, id ASC")
         products = cur.fetchall()
@@ -128,7 +128,6 @@ def index():
     
     products_list = []
     for p in products:
-        # p[7] 是 sort_order
         products_list.append({
             'id': p[0], 'name': p[1], 'price': p[2], 'category': p[3],
             'image_url': p[4] if p[4] else "https://via.placeholder.com/150",
@@ -140,7 +139,8 @@ def index():
 
 def render_frontend(table_number, products_data):
     products_json = json.dumps(products_data)
-    table_input = f'<input type="text" id="table_number" name="table_number" value="{table_number}" readonly>' if table_number else '<input type="text" id="table_number" name="table_number" placeholder="請輸入桌號" required>'
+    # 這裡的 input id="visible_table_number" 是給用戶看的
+    table_input = f'<input type="text" id="visible_table_number" value="{table_number}" readonly>' if table_number else '<input type="text" id="visible_table_number" placeholder="請輸入桌號" required>'
 
     return f"""
     <!DOCTYPE html>
@@ -189,6 +189,8 @@ def render_frontend(table_number, products_data):
         
         <form method="POST" id="order-form">
             <input type="hidden" name="cart_data" id="cart_data_input">
+            <input type="hidden" name="table_number" id="hidden_table_number">
+            
             <div class="cart-bar" id="cart-bar" style="display:none;">
                 <div class="cart-info-box" onclick="openCartModal()">
                     <span style="font-size:0.9em; color:#666;">▲ 查看明細</span><br>
@@ -230,8 +232,8 @@ def render_frontend(table_number, products_data):
             let cart = [];
             let currentItem = null;
             let currentQty = 1;
-            let currentOptions = []; // 存字串 array
-            let currentAddPrice = 0; // 當前選項加總金額
+            let currentOptions = []; 
+            let currentAddPrice = 0; 
             
             const container = document.getElementById('menu-container');
             
@@ -252,11 +254,16 @@ def render_frontend(table_number, products_data):
                 container.appendChild(el);
             }});
 
-            // 解析選項與價格 (格式: "加麵:+20" 或 "去冰")
+            // --- 修正: 解析選項與價格 (支援半形:與全形：) ---
             function parseOption(optStr) {{
-                if(optStr.includes(':+')) {{
-                    const parts = optStr.split(':+');
-                    return {{ name: parts[0], price: parseInt(parts[1]) || 0, full: optStr }};
+                // 先把全形冒號換成半形，避免格式錯誤
+                let cleanStr = optStr.replace('：', ':');
+                
+                if(cleanStr.includes(':+')) {{
+                    const parts = cleanStr.split(':+');
+                    // 確保價格是數字 (Integer)
+                    const addP = parseInt(parts[1]) || 0;
+                    return {{ name: parts[0], price: addP, full: optStr }};
                 }}
                 return {{ name: optStr, price: 0, full: optStr }};
             }}
@@ -283,13 +290,11 @@ def render_frontend(table_number, products_data):
                         const tag = document.createElement('div');
                         tag.className = 'option-tag';
                         
-                        // 顯示文字
                         let displayHTML = parsed.name;
                         if(parsed.price > 0) displayHTML += ` <span class="option-price">(+$${{parsed.price}})</span>`;
                         tag.innerHTML = displayHTML;
                         
                         tag.onclick = function() {{
-                            // 切換選取
                             if(currentOptions.includes(opt)) {{
                                 currentOptions = currentOptions.filter(o => o !== opt);
                                 currentAddPrice -= parsed.price;
@@ -308,7 +313,10 @@ def render_frontend(table_number, products_data):
             }}
 
             function updateModalTotal() {{
-                const unitPrice = currentItem.price + currentAddPrice;
+                // 確保都是數字運算
+                const base = parseInt(currentItem.price);
+                const add = parseInt(currentAddPrice);
+                const unitPrice = base + add;
                 const total = unitPrice * currentQty;
                 document.getElementById('modal-display-price').innerText = total;
                 document.getElementById('modal-qty').innerText = currentQty;
@@ -323,12 +331,15 @@ def render_frontend(table_number, products_data):
             }}
             
             function addToCartConfirm() {{
-                const finalUnitPrice = currentItem.price + currentAddPrice;
+                const base = parseInt(currentItem.price);
+                const add = parseInt(currentAddPrice);
+                const finalUnitPrice = base + add;
+                
                 cart.push({{ 
                     id: currentItem.id, 
                     name: currentItem.name, 
-                    base_price: currentItem.price,
-                    unit_price: finalUnitPrice, // 包含加價
+                    base_price: base,
+                    unit_price: finalUnitPrice, 
                     qty: currentQty, 
                     options: [...currentOptions] 
                 }});
@@ -356,7 +367,6 @@ def render_frontend(table_number, products_data):
                     const row = document.createElement('div');
                     row.className = 'cart-item-row';
                     
-                    // 美化選項顯示 (移除 :+20 這種後端格式，只顯示 UI 友善的)
                     let displayOpts = [];
                     item.options.forEach(opt => {{
                         let parsed = parseOption(opt);
@@ -390,12 +400,23 @@ def render_frontend(table_number, products_data):
             function closeCartModal() {{ document.getElementById('cart-modal').style.display = 'none'; }}
 
             function submitOrder() {{
-                const tableVal = document.getElementById('table_number').value;
-                if(!tableVal) {{ alert('請輸入桌號'); return; }}
+                // 1. 抓取上方可見輸入框的桌號
+                const visibleTableInput = document.getElementById('visible_table_number');
+                const tableVal = visibleTableInput.value.trim();
+                
+                if(!tableVal) {{ 
+                    alert('請輸入桌號'); 
+                    visibleTableInput.focus();
+                    return; 
+                }}
+                
                 if(cart.length === 0) return;
                 
                 const totalP = cart.reduce((acc, item) => acc + (item.unit_price * item.qty), 0);
-                if(!confirm(`確定送出訂單？\\n總金額: $${{totalP}}`)) return;
+                if(!confirm(`確定送出訂單？\\n桌號: ${{tableVal}}\\n總金額: $${{totalP}}`)) return;
+                
+                // 2. 將桌號填入 Form 內的隱藏欄位
+                document.getElementById('hidden_table_number').value = tableVal;
                 
                 document.getElementById('cart_data_input').value = JSON.stringify(cart);
                 document.getElementById('order-form').submit();
@@ -492,7 +513,7 @@ def kitchen():
     </script></body></html>"""
     return html
 
-# --- 5. 菜單管理 (新增排序輸入框) ---
+# --- 5. 菜單管理 ---
 @app.route('/kitchen/menu', methods=['GET', 'POST'])
 def kitchen_menu():
     conn = get_db_connection()
@@ -510,7 +531,6 @@ def kitchen_menu():
         conn.commit()
         return redirect(url_for('kitchen_menu'))
     
-    # 依照排序顯示
     cur.execute("SELECT * FROM products ORDER BY sort_order ASC, id ASC")
     products = cur.fetchall()
     cur.close()
@@ -531,13 +551,12 @@ def kitchen_menu():
                 <input type="number" name="sort_order" placeholder="排序權重 (越小越前面)" value="100" style="width:100%; margin:5px 0; padding:8px;">
                 <button style="width:100%; background:#007bff; color:white; padding:10px; border:none; margin-top:5px;">新增</button>
             </form>
-            <p style="font-size:0.8em; color:gray;">💡 小提示：選項若要加錢，請用 :+數字，例如 <b>加麵:+20</b></p>
+            <p style="font-size:0.8em; color:gray;">💡 提示：加錢請用 <b>:+</b> ，例如 <b>加麵:+20</b></p>
         </div>
         <hr>
     """
     for p in products:
         status = "🟢" if p[5] else "🔴"
-        # p[7] 是 sort_order
         html += f"""
         <div style='background:white; padding:10px; margin-bottom:5px; border-left:5px solid #007bff;'>
             <div style="float:right; color:#888; font-size:0.8em;">排序: {p[7]}</div>
@@ -550,7 +569,7 @@ def kitchen_menu():
         </div>"""
     return html + "</body></html>"
 
-# --- 6. 編輯菜單頁面 (修復 Bad Request 與新增排序) ---
+# --- 6. 編輯菜單 ---
 @app.route('/menu/edit/<int:pid>', methods=['GET', 'POST'])
 def menu_edit(pid):
     conn = get_db_connection()
@@ -558,7 +577,7 @@ def menu_edit(pid):
     
     if request.method == 'POST':
         name = request.form['name']
-        price = request.form['price'] # 這裡之前有 HTML 錯誤，現在已修正
+        price = request.form['price']
         category = request.form['category']
         image_url = request.form['image_url']
         custom_options = request.form['custom_options']
@@ -580,9 +599,7 @@ def menu_edit(pid):
     conn.close()
     
     if not product: return "查無此商品"
-    
     p_opts = product[6] if product[6] else ""
-    # product[7] 是 sort_order
     
     return f"""
     <!DOCTYPE html>
@@ -595,8 +612,8 @@ def menu_edit(pid):
             <p>價格：<input type="number" name="price" value="{product[2]}" required style="width:100%; padding:8px;"></p>
             <p>分類：<input type="text" name="category" value="{product[3]}" required style="width:100%; padding:8px;"></p>
             <p>圖片：<input type="text" name="image_url" value="{product[4]}" style="width:100%; padding:8px;"></p>
-            <p>選項 (加錢請用 :+20)：<input type="text" name="custom_options" value="{p_opts}" style="width:100%; padding:8px;"></p>
-            <p>排序 (越小越前面)：<input type="number" name="sort_order" value="{product[7]}" style="width:100%; padding:8px;"></p>
+            <p>選項 (例: 加麵:+20)：<input type="text" name="custom_options" value="{p_opts}" style="width:100%; padding:8px;"></p>
+            <p>排序：<input type="number" name="sort_order" value="{product[7]}" style="width:100%; padding:8px;"></p>
             <br>
             <button type="submit" style="background:#28a745; color:white; border:none; padding:10px 30px; border-radius:5px;">儲存修改</button>
             <a href="/kitchen/menu" style="margin-left:20px;">取消</a>
@@ -605,7 +622,7 @@ def menu_edit(pid):
     </html>
     """
 
-# --- 輔助功能 ---
+# --- 7. 輔助功能 ---
 @app.route('/menu/toggle/<int:pid>')
 def menu_toggle(pid):
     conn = get_db_connection()
