@@ -1,21 +1,39 @@
 import os
 import psycopg2
+from psycopg2 import pool
 import json
 from flask import Flask, request, redirect, url_for
 from datetime import datetime, date
 
 app = Flask(__name__)
 
+# --- 效能優化：設定資料庫連線池 ---
+# 這樣不用每次都重新連線，速度會快非常多
+db_pool = None
+
+def init_db_pool():
+    global db_pool
+    db_url = os.environ.get("DATABASE_URL")
+    # 建立一個擁有 1 到 10 個連線的池子
+    db_pool = psycopg2.pool.SimpleConnectionPool(1, 10, db_url)
+
 def get_db_connection():
-    db_uri = os.environ.get("DATABASE_URL")
-    return psycopg2.connect(db_uri)
+    global db_pool
+    if db_pool is None:
+        init_db_pool()
+    return db_pool.getconn()
+
+def close_db_connection(conn):
+    global db_pool
+    if db_pool and conn:
+        db_pool.putconn(conn) # 把連線放回池子，而不是真的關閉
 
 # --- 1. 資料庫初始化 ---
 @app.route('/init_db')
 def init_db():
     conn = get_db_connection()
-    cur = conn.cursor()
     try:
+        cur = conn.cursor()
         # 建立表格
         cur.execute('''
             CREATE TABLE IF NOT EXISTS products (
@@ -41,15 +59,19 @@ def init_db():
             );
         ''')
         conn.commit()
+        cur.close()
 
-        # 嘗試新增 sort_order
+        # 嘗試新增 sort_order (避免舊資料庫報錯)
         try:
+            cur = conn.cursor()
             cur.execute("ALTER TABLE products ADD COLUMN sort_order INTEGER DEFAULT 100;")
             conn.commit()
+            cur.close()
         except:
             conn.rollback()
 
         # 預設菜單
+        cur = conn.cursor()
         cur.execute('SELECT count(*) FROM products;')
         if cur.fetchone()[0] == 0:
             default_menu = [
@@ -60,86 +82,89 @@ def init_db():
             ]
             cur.executemany('INSERT INTO products (name, price, category, image_url, is_available, custom_options, sort_order) VALUES (%s, %s, %s, %s, %s, %s, %s)', default_menu)
             conn.commit()
+            cur.close()
 
-        return "資料庫初始化完成。<br><a href='/'>前往首頁</a>"
+        return "資料庫初始化完成 (連線池模式)。<br><a href='/'>前往首頁</a>"
     except Exception as e:
         return f"初始化失敗：{e}"
     finally:
-        cur.close()
-        conn.close()
+        close_db_connection(conn)
 
 # --- 2. 顧客端首頁 ---
 @app.route('/', methods=['GET', 'POST'])
 def index():
     conn = get_db_connection()
-    cur = conn.cursor()
-    table_from_url = request.args.get('table', '')
-
-    if request.method == 'POST':
-        # 這裡會從 hidden input 抓取桌號
-        table_number = request.form.get('table_number') 
-        cart_json = request.form.get('cart_data')
-        
-        if not cart_json or cart_json == '[]':
-            return "錯誤：購物車是空的 <a href='/'>返回</a>"
-
-        try:
-            cart_items = json.loads(cart_json)
-        except:
-            return "資料格式錯誤"
-        
-        total_price = 0
-        items_display_list = []
-
-        for item in cart_items:
-            # 解析前端傳來的資料
-            p_name = item['name']
-            p_unit_price = int(item['unit_price']) # 這已經包含加價的單價
-            p_qty = int(item['qty'])
-            p_opts = item.get('options', [])
-            
-            # 組合成顯示字串
-            opts_str = f"({','.join(p_opts)})" if p_opts else ""
-            display_str = f"{p_name} {opts_str} x{p_qty}"
-            
-            items_display_list.append(display_str)
-            total_price += (p_unit_price * p_qty)
-
-        items_final_str = " + ".join(items_display_list)
-
-        cur.execute(
-            "INSERT INTO orders (table_number, items, total_price) VALUES (%s, %s, %s) RETURNING id",
-            (table_number, items_final_str, total_price)
-        )
-        new_order_id = cur.fetchone()[0]
-        conn.commit()
-        cur.close()
-        conn.close()
-        return redirect(url_for('order_success', order_id=new_order_id))
-
     try:
-        cur.execute("SELECT * FROM products ORDER BY sort_order ASC, id ASC")
-        products = cur.fetchall()
-    except:
-        return "請先執行 <a href='/init_db'>/init_db</a>"
-    
-    cur.close()
-    conn.close()
-    
-    products_list = []
-    for p in products:
-        products_list.append({
-            'id': p[0], 'name': p[1], 'price': p[2], 'category': p[3],
-            'image_url': p[4] if p[4] else "https://via.placeholder.com/150",
-            'is_available': p[5],
-            'custom_options': p[6].split(',') if p[6] else []
-        })
+        table_from_url = request.args.get('table', '')
 
-    return render_frontend(table_from_url, products_list)
+        if request.method == 'POST':
+            table_number = request.form.get('table_number') 
+            cart_json = request.form.get('cart_data')
+            
+            if not cart_json or cart_json == '[]':
+                return "錯誤：購物車是空的 <a href='/'>返回</a>"
+
+            try:
+                cart_items = json.loads(cart_json)
+            except:
+                return "資料格式錯誤"
+            
+            total_price = 0
+            items_display_list = []
+
+            for item in cart_items:
+                p_name = item['name']
+                p_unit_price = int(item['unit_price'])
+                p_qty = int(item['qty'])
+                p_opts = item.get('options', [])
+                
+                # 計算該品項小計
+                subtotal = p_unit_price * p_qty
+                
+                # 組合成顯示字串 (新增：顯示金額)
+                opts_str = f"({','.join(p_opts)})" if p_opts else ""
+                # 格式範例： 牛肉麵 (加麵) x2 = $400
+                display_str = f"{p_name} {opts_str} x{p_qty} = ${subtotal}"
+                
+                items_display_list.append(display_str)
+                total_price += subtotal
+
+            # 用特殊符號分隔，方便顯示
+            items_final_str = " | ".join(items_display_list)
+
+            cur = conn.cursor()
+            cur.execute(
+                "INSERT INTO orders (table_number, items, total_price) VALUES (%s, %s, %s) RETURNING id",
+                (table_number, items_final_str, total_price)
+            )
+            new_order_id = cur.fetchone()[0]
+            conn.commit()
+            cur.close()
+            return redirect(url_for('order_success', order_id=new_order_id))
+
+        cur = conn.cursor()
+        try:
+            cur.execute("SELECT * FROM products ORDER BY sort_order ASC, id ASC")
+            products = cur.fetchall()
+        except:
+            return "請先執行 <a href='/init_db'>/init_db</a>"
+        cur.close()
+        
+        products_list = []
+        for p in products:
+            products_list.append({
+                'id': p[0], 'name': p[1], 'price': p[2], 'category': p[3],
+                'image_url': p[4] if p[4] else "https://via.placeholder.com/150",
+                'is_available': p[5],
+                'custom_options': p[6].split(',') if p[6] else []
+            })
+
+        return render_frontend(table_from_url, products_list)
+    finally:
+        close_db_connection(conn)
 
 def render_frontend(table_number, products_data):
     products_json = json.dumps(products_data)
-    # 這裡的 input id="visible_table_number" 是給用戶看的
     table_input = f'<input type="text" id="visible_table_number" value="{table_number}" readonly>' if table_number else '<input type="text" id="visible_table_number" placeholder="請輸入桌號" required>'
 
     return f"""
@@ -254,14 +279,10 @@ def render_frontend(table_number, products_data):
                 container.appendChild(el);
             }});
 
-            // --- 修正: 解析選項與價格 (支援半形:與全形：) ---
             function parseOption(optStr) {{
-                // 先把全形冒號換成半形，避免格式錯誤
                 let cleanStr = optStr.replace('：', ':');
-                
                 if(cleanStr.includes(':+')) {{
                     const parts = cleanStr.split(':+');
-                    // 確保價格是數字 (Integer)
                     const addP = parseInt(parts[1]) || 0;
                     return {{ name: parts[0], price: addP, full: optStr }};
                 }}
@@ -313,7 +334,6 @@ def render_frontend(table_number, products_data):
             }}
 
             function updateModalTotal() {{
-                // 確保都是數字運算
                 const base = parseInt(currentItem.price);
                 const add = parseInt(currentAddPrice);
                 const unitPrice = base + add;
@@ -400,7 +420,6 @@ def render_frontend(table_number, products_data):
             function closeCartModal() {{ document.getElementById('cart-modal').style.display = 'none'; }}
 
             function submitOrder() {{
-                // 1. 抓取上方可見輸入框的桌號
                 const visibleTableInput = document.getElementById('visible_table_number');
                 const tableVal = visibleTableInput.value.trim();
                 
@@ -415,9 +434,7 @@ def render_frontend(table_number, products_data):
                 const totalP = cart.reduce((acc, item) => acc + (item.unit_price * item.qty), 0);
                 if(!confirm(`確定送出訂單？\\n桌號: ${{tableVal}}\\n總金額: $${{totalP}}`)) return;
                 
-                // 2. 將桌號填入 Form 內的隱藏欄位
                 document.getElementById('hidden_table_number').value = tableVal;
-                
                 document.getElementById('cart_data_input').value = JSON.stringify(cart);
                 document.getElementById('order-form').submit();
             }}
@@ -426,238 +443,260 @@ def render_frontend(table_number, products_data):
     </html>
     """
 
-# --- 3. 下單成功頁面 ---
+# --- 3. 下單成功頁面 (顯示各項金額) ---
 @app.route('/order_success')
 def order_success():
-    order_id = request.args.get('order_id')
     conn = get_db_connection()
-    cur = conn.cursor()
-    cur.execute("SELECT * FROM orders WHERE id = %s", (order_id,))
-    order = cur.fetchone()
-    cur.close()
-    conn.close()
+    try:
+        order_id = request.args.get('order_id')
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM orders WHERE id = %s", (order_id,))
+        order = cur.fetchone()
+        cur.close()
 
-    if not order: return "查無訂單"
-    items_html = order[2].replace(" + ", "<br><hr style='border:0; border-top:1px dashed #eee; margin:5px 0;'>")
+        if not order: return "查無訂單"
+        
+        # 這裡會把資料庫裡的 " | " 換成換行與分隔線
+        items_html = order[2].replace(" | ", "<br><hr style='border:0; border-top:1px dashed #eee; margin:5px 0;'>")
 
-    return f"""
-    <!DOCTYPE html>
-    <html>
-    <head> <meta name="viewport" content="width=device-width, initial-scale=1"> </head>
-    <body style="font-family: sans-serif; text-align: center; padding: 20px; background: #f4f7f6;">
-        <div style="background: white; padding: 30px; border-radius: 15px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); max-width: 400px; margin: 0 auto;">
-            <div style="font-size:50px; color:#28a745;">✅</div>
-            <h2>下單成功！</h2>
-            <h3 style="color:#ff9800;">桌號：{order[1]}</h3>
-            <div style="text-align:left; background:#fafafa; padding:15px; border-radius:8px; margin:15px 0; font-size:1.1em;">
-                {items_html}
+        return f"""
+        <!DOCTYPE html>
+        <html>
+        <head> <meta name="viewport" content="width=device-width, initial-scale=1"> </head>
+        <body style="font-family: sans-serif; text-align: center; padding: 20px; background: #f4f7f6;">
+            <div style="background: white; padding: 30px; border-radius: 15px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); max-width: 400px; margin: 0 auto;">
+                <div style="font-size:50px; color:#28a745;">✅</div>
+                <h2>下單成功！</h2>
+                <h3 style="color:#ff9800;">桌號：{order[1]}</h3>
+                <div style="text-align:left; background:#fafafa; padding:15px; border-radius:8px; margin:15px 0; font-size:1.1em;">
+                    {items_html}
+                </div>
+                <h3 style="text-align:right; color:#e91e63;">總計：${order[3]}</h3>
+                <p>廚房備餐中</p>
+                <a href="/" style="display:inline-block; padding:10px 30px; background:#007bff; color:white; text-decoration:none; border-radius:20px;">繼續點餐</a>
             </div>
-            <h3 style="text-align:right; color:#e91e63;">總計：${order[3]}</h3>
-            <p>廚房備餐中</p>
-            <a href="/" style="display:inline-block; padding:10px 30px; background:#007bff; color:white; text-decoration:none; border-radius:20px;">繼續點餐</a>
-        </div>
-    </body>
-    </html>
-    """
+        </body>
+        </html>
+        """
+    finally:
+        close_db_connection(conn)
 
 # --- 4. 廚房端 ---
 @app.route('/kitchen')
 def kitchen():
     conn = get_db_connection()
-    cur = conn.cursor()
-    cur.execute("SELECT * FROM orders WHERE created_at >= current_date ORDER BY created_at DESC")
-    orders = cur.fetchall()
-    cur.close()
-    conn.close()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM orders WHERE created_at >= current_date ORDER BY created_at DESC")
+        orders = cur.fetchall()
+        cur.close()
 
-    html = """
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>廚房端</title>
-        <meta name="viewport" content="width=device-width, initial-scale=1">
-        <style>
-            body { font-family: sans-serif; background: #222; color: white; margin: 0; padding: 10px; }
-            .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
-            .order-card { background: #333; border-left: 8px solid #ff9800; margin-bottom: 15px; padding: 15px; border-radius: 5px; }
-            .completed { border-left: 8px solid #28a745; opacity: 0.5; }
-            .btn-done { background: #28a745; color: white; border: none; padding: 10px; border-radius: 5px; float: right; cursor: pointer; }
-            .order-items { font-size: 1.2em; line-height: 1.6; margin-top: 10px; }
-            a { color: white; background: #444; padding: 5px 10px; text-decoration: none; border-radius: 5px; }
-        </style>
-    </head>
-    <body>
-        <div class="header">
-            <h3>👨‍🍳 訂單看板</h3>
-            <div>
-                <a href="/kitchen/menu">菜單管理</a>
-                <a href="/daily_report" target="_blank">結帳單</a>
+        html = """
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>廚房端</title>
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <style>
+                body { font-family: sans-serif; background: #222; color: white; margin: 0; padding: 10px; }
+                .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
+                .order-card { background: #333; border-left: 8px solid #ff9800; margin-bottom: 15px; padding: 15px; border-radius: 5px; }
+                .completed { border-left: 8px solid #28a745; opacity: 0.5; }
+                .btn-done { background: #28a745; color: white; border: none; padding: 10px; border-radius: 5px; float: right; cursor: pointer; }
+                .order-items { font-size: 1.2em; line-height: 1.6; margin-top: 10px; }
+                a { color: white; background: #444; padding: 5px 10px; text-decoration: none; border-radius: 5px; }
+            </style>
+        </head>
+        <body>
+            <div class="header">
+                <h3>👨‍🍳 訂單看板</h3>
+                <div>
+                    <a href="/kitchen/menu">菜單管理</a>
+                    <a href="/daily_report" target="_blank">結帳單</a>
+                </div>
             </div>
-        </div>
-        <div id="container">
-    """
-    for order in orders:
-        status_class = "completed" if order[4] == 'Completed' else ""
-        btn = f"<button class='btn-done' onclick=\"completeOrder({order[0]})\">完成</button>" if order[4] != 'Completed' else ""
-        items_display = order[2].replace(" + ", "<br>")
-        html += f"""
-        <div class="order-card {status_class}">
-            {btn}
-            <div style="font-size:1.4em; color:#ff9800; font-weight:bold;">桌號：{order[1]} <small style="color:#aaa; font-size:0.5em;">{order[5].strftime('%H:%M')}</small></div>
-            <div class="order-items">{items_display}</div>
-        </div>
+            <div id="container">
         """
-    html += """</div><script>
-        function completeOrder(id) { if(confirm('完成？')) fetch('/complete/'+id).then(()=>location.reload()); }
-        setInterval(() => location.reload(), 10000);
-    </script></body></html>"""
-    return html
+        for order in orders:
+            status_class = "completed" if order[4] == 'Completed' else ""
+            btn = f"<button class='btn-done' onclick=\"completeOrder({order[0]})\">完成</button>" if order[4] != 'Completed' else ""
+            # 把 | 換成換行
+            items_display = order[2].replace(" | ", "<br>")
+            html += f"""
+            <div class="order-card {status_class}">
+                {btn}
+                <div style="font-size:1.4em; color:#ff9800; font-weight:bold;">桌號：{order[1]} <small style="color:#aaa; font-size:0.5em;">{order[5].strftime('%H:%M')}</small></div>
+                <div class="order-items">{items_display}</div>
+            </div>
+            """
+        html += """</div><script>
+            function completeOrder(id) { if(confirm('完成？')) fetch('/complete/'+id).then(()=>location.reload()); }
+            setInterval(() => location.reload(), 10000);
+        </script></body></html>"""
+        return html
+    finally:
+        close_db_connection(conn)
 
 # --- 5. 菜單管理 ---
 @app.route('/kitchen/menu', methods=['GET', 'POST'])
 def kitchen_menu():
     conn = get_db_connection()
-    cur = conn.cursor()
-    if request.method == 'POST' and 'add_item' in request.form:
-        name = request.form['name']
-        price = request.form['price']
-        category = request.form['category']
-        image_url = request.form['image_url']
-        custom_options = request.form['custom_options']
-        sort_order = request.form.get('sort_order', 100)
+    try:
+        cur = conn.cursor()
+        if request.method == 'POST' and 'add_item' in request.form:
+            name = request.form['name']
+            price = request.form['price']
+            category = request.form['category']
+            image_url = request.form['image_url']
+            custom_options = request.form['custom_options']
+            sort_order = request.form.get('sort_order', 100)
+            
+            cur.execute("INSERT INTO products (name, price, category, image_url, is_available, custom_options, sort_order) VALUES (%s, %s, %s, %s, TRUE, %s, %s)", 
+                        (name, price, category, image_url, custom_options, sort_order))
+            conn.commit()
+            return redirect(url_for('kitchen_menu'))
         
-        cur.execute("INSERT INTO products (name, price, category, image_url, is_available, custom_options, sort_order) VALUES (%s, %s, %s, %s, TRUE, %s, %s)", 
-                    (name, price, category, image_url, custom_options, sort_order))
-        conn.commit()
-        return redirect(url_for('kitchen_menu'))
-    
-    cur.execute("SELECT * FROM products ORDER BY sort_order ASC, id ASC")
-    products = cur.fetchall()
-    cur.close()
-    conn.close()
-    
-    html = """
-    <!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><style>body{font-family:sans-serif; padding:10px; background:#f4f4f9;} .btn{padding:5px 10px; text-decoration:none; color:white; border-radius:4px; font-size:0.9em; margin-left:5px; display:inline-block;}</style></head><body>
-        <a href="/kitchen">⬅️ 回廚房</a><h2>🛠️ 菜單管理</h2>
-        <div style="background:white; padding:15px; border-radius:8px;">
-            <h3>➕ 新增商品</h3>
-            <form method="POST">
-                <input type="hidden" name="add_item" value="1">
-                <input type="text" name="name" placeholder="名稱" required style="width:100%; margin:5px 0; padding:8px;">
-                <input type="number" name="price" placeholder="價格" required style="width:100%; margin:5px 0; padding:8px;">
-                <input type="text" name="category" placeholder="分類 (主食/飲料)" required style="width:100%; margin:5px 0; padding:8px;">
-                <input type="text" name="image_url" placeholder="圖片網址" style="width:100%; margin:5px 0; padding:8px;">
-                <input type="text" name="custom_options" placeholder="選項 (例: 加麵:+20,微糖)" style="width:100%; margin:5px 0; padding:8px;">
-                <input type="number" name="sort_order" placeholder="排序權重 (越小越前面)" value="100" style="width:100%; margin:5px 0; padding:8px;">
-                <button style="width:100%; background:#007bff; color:white; padding:10px; border:none; margin-top:5px;">新增</button>
-            </form>
-            <p style="font-size:0.8em; color:gray;">💡 提示：加錢請用 <b>:+</b> ，例如 <b>加麵:+20</b></p>
-        </div>
-        <hr>
-    """
-    for p in products:
-        status = "🟢" if p[5] else "🔴"
-        html += f"""
-        <div style='background:white; padding:10px; margin-bottom:5px; border-left:5px solid #007bff;'>
-            <div style="float:right; color:#888; font-size:0.8em;">排序: {p[7]}</div>
-            {status} <b>{p[1]}</b> (${p[2]})<br><small>{p[6]}</small><br>
-            <div style="margin-top:5px;">
-                <a href='/menu/toggle/{p[0]}' class='btn' style='background:#6c757d'>上架/完售</a>
-                <a href='/menu/edit/{p[0]}' class='btn' style='background:#ffc107; color:black;'>編輯</a>
-                <a href='/menu/delete/{p[0]}' class='btn' style='background:#dc3545' onclick="return confirm('確定刪除？')">刪除</a>
+        cur.execute("SELECT * FROM products ORDER BY sort_order ASC, id ASC")
+        products = cur.fetchall()
+        cur.close()
+        
+        html = """
+        <!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><style>body{font-family:sans-serif; padding:10px; background:#f4f4f9;} .btn{padding:5px 10px; text-decoration:none; color:white; border-radius:4px; font-size:0.9em; margin-left:5px; display:inline-block;}</style></head><body>
+            <a href="/kitchen">⬅️ 回廚房</a><h2>🛠️ 菜單管理</h2>
+            <div style="background:white; padding:15px; border-radius:8px;">
+                <h3>➕ 新增商品</h3>
+                <form method="POST">
+                    <input type="hidden" name="add_item" value="1">
+                    <input type="text" name="name" placeholder="名稱" required style="width:100%; margin:5px 0; padding:8px;">
+                    <input type="number" name="price" placeholder="價格" required style="width:100%; margin:5px 0; padding:8px;">
+                    <input type="text" name="category" placeholder="分類 (主食/飲料)" required style="width:100%; margin:5px 0; padding:8px;">
+                    <input type="text" name="image_url" placeholder="圖片網址" style="width:100%; margin:5px 0; padding:8px;">
+                    <input type="text" name="custom_options" placeholder="選項 (例: 加麵:+20,微糖)" style="width:100%; margin:5px 0; padding:8px;">
+                    <input type="number" name="sort_order" placeholder="排序權重 (越小越前面)" value="100" style="width:100%; margin:5px 0; padding:8px;">
+                    <button style="width:100%; background:#007bff; color:white; padding:10px; border:none; margin-top:5px;">新增</button>
+                </form>
+                <p style="font-size:0.8em; color:gray;">💡 提示：加錢請用 <b>:+</b> ，例如 <b>加麵:+20</b></p>
             </div>
-        </div>"""
-    return html + "</body></html>"
+            <hr>
+        """
+        for p in products:
+            status = "🟢" if p[5] else "🔴"
+            html += f"""
+            <div style='background:white; padding:10px; margin-bottom:5px; border-left:5px solid #007bff;'>
+                <div style="float:right; color:#888; font-size:0.8em;">排序: {p[7]}</div>
+                {status} <b>{p[1]}</b> (${p[2]})<br><small>{p[6]}</small><br>
+                <div style="margin-top:5px;">
+                    <a href='/menu/toggle/{p[0]}' class='btn' style='background:#6c757d'>上架/完售</a>
+                    <a href='/menu/edit/{p[0]}' class='btn' style='background:#ffc107; color:black;'>編輯</a>
+                    <a href='/menu/delete/{p[0]}' class='btn' style='background:#dc3545' onclick="return confirm('確定刪除？')">刪除</a>
+                </div>
+            </div>"""
+        return html + "</body></html>"
+    finally:
+        close_db_connection(conn)
 
 # --- 6. 編輯菜單 ---
 @app.route('/menu/edit/<int:pid>', methods=['GET', 'POST'])
 def menu_edit(pid):
     conn = get_db_connection()
-    cur = conn.cursor()
-    
-    if request.method == 'POST':
-        name = request.form['name']
-        price = request.form['price']
-        category = request.form['category']
-        image_url = request.form['image_url']
-        custom_options = request.form['custom_options']
-        sort_order = request.form['sort_order']
+    try:
+        cur = conn.cursor()
         
-        cur.execute("""
-            UPDATE products 
-            SET name=%s, price=%s, category=%s, image_url=%s, custom_options=%s, sort_order=%s
-            WHERE id=%s
-        """, (name, price, category, image_url, custom_options, sort_order, pid))
-        conn.commit()
-        cur.close()
-        conn.close()
-        return redirect(url_for('kitchen_menu'))
+        if request.method == 'POST':
+            name = request.form['name']
+            price = request.form['price']
+            category = request.form['category']
+            image_url = request.form['image_url']
+            custom_options = request.form['custom_options']
+            sort_order = request.form['sort_order']
+            
+            cur.execute("""
+                UPDATE products 
+                SET name=%s, price=%s, category=%s, image_url=%s, custom_options=%s, sort_order=%s
+                WHERE id=%s
+            """, (name, price, category, image_url, custom_options, sort_order, pid))
+            conn.commit()
+            cur.close()
+            return redirect(url_for('kitchen_menu'))
 
-    cur.execute("SELECT * FROM products WHERE id = %s", (pid,))
-    product = cur.fetchone()
-    cur.close()
-    conn.close()
-    
-    if not product: return "查無此商品"
-    p_opts = product[6] if product[6] else ""
-    
-    return f"""
-    <!DOCTYPE html>
-    <html>
-    <head><meta name="viewport" content="width=device-width, initial-scale=1"></head>
-    <body style="font-family: sans-serif; padding: 20px; max-width: 600px; margin: 0 auto; background:#f4f4f9;">
-        <h2>✏️ 編輯商品</h2>
-        <form method="POST" style="background:white; padding:20px; border-radius:10px;">
-            <p>名稱：<input type="text" name="name" value="{product[1]}" required style="width:100%; padding:8px;"></p>
-            <p>價格：<input type="number" name="price" value="{product[2]}" required style="width:100%; padding:8px;"></p>
-            <p>分類：<input type="text" name="category" value="{product[3]}" required style="width:100%; padding:8px;"></p>
-            <p>圖片：<input type="text" name="image_url" value="{product[4]}" style="width:100%; padding:8px;"></p>
-            <p>選項 (例: 加麵:+20)：<input type="text" name="custom_options" value="{p_opts}" style="width:100%; padding:8px;"></p>
-            <p>排序：<input type="number" name="sort_order" value="{product[7]}" style="width:100%; padding:8px;"></p>
-            <br>
-            <button type="submit" style="background:#28a745; color:white; border:none; padding:10px 30px; border-radius:5px;">儲存修改</button>
-            <a href="/kitchen/menu" style="margin-left:20px;">取消</a>
-        </form>
-    </body>
-    </html>
-    """
+        cur.execute("SELECT * FROM products WHERE id = %s", (pid,))
+        product = cur.fetchone()
+        cur.close()
+        
+        if not product: return "查無此商品"
+        p_opts = product[6] if product[6] else ""
+        
+        return f"""
+        <!DOCTYPE html>
+        <html>
+        <head><meta name="viewport" content="width=device-width, initial-scale=1"></head>
+        <body style="font-family: sans-serif; padding: 20px; max-width: 600px; margin: 0 auto; background:#f4f4f9;">
+            <h2>✏️ 編輯商品</h2>
+            <form method="POST" style="background:white; padding:20px; border-radius:10px;">
+                <p>名稱：<input type="text" name="name" value="{product[1]}" required style="width:100%; padding:8px;"></p>
+                <p>價格：<input type="number" name="price" value="{product[2]}" required style="width:100%; padding:8px;"></p>
+                <p>分類：<input type="text" name="category" value="{product[3]}" required style="width:100%; padding:8px;"></p>
+                <p>圖片：<input type="text" name="image_url" value="{product[4]}" style="width:100%; padding:8px;"></p>
+                <p>選項 (例: 加麵:+20)：<input type="text" name="custom_options" value="{p_opts}" style="width:100%; padding:8px;"></p>
+                <p>排序：<input type="number" name="sort_order" value="{product[7]}" style="width:100%; padding:8px;"></p>
+                <br>
+                <button type="submit" style="background:#28a745; color:white; border:none; padding:10px 30px; border-radius:5px;">儲存修改</button>
+                <a href="/kitchen/menu" style="margin-left:20px;">取消</a>
+            </form>
+        </body>
+        </html>
+        """
+    finally:
+        close_db_connection(conn)
 
 # --- 7. 輔助功能 ---
 @app.route('/menu/toggle/<int:pid>')
 def menu_toggle(pid):
     conn = get_db_connection()
-    cur = conn.cursor()
-    cur.execute("UPDATE products SET is_available = NOT is_available WHERE id = %s", (pid,))
-    conn.commit()
-    return redirect(url_for('kitchen_menu'))
+    try:
+        cur = conn.cursor()
+        cur.execute("UPDATE products SET is_available = NOT is_available WHERE id = %s", (pid,))
+        conn.commit()
+        return redirect(url_for('kitchen_menu'))
+    finally:
+        close_db_connection(conn)
 
 @app.route('/menu/delete/<int:pid>')
 def menu_delete(pid):
     conn = get_db_connection()
-    cur = conn.cursor()
-    cur.execute("DELETE FROM products WHERE id = %s", (pid,))
-    conn.commit()
-    return redirect(url_for('kitchen_menu'))
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM products WHERE id = %s", (pid,))
+        conn.commit()
+        return redirect(url_for('kitchen_menu'))
+    finally:
+        close_db_connection(conn)
 
 @app.route('/complete/<int:order_id>')
 def complete_order(order_id):
     conn = get_db_connection()
-    cur = conn.cursor()
-    cur.execute("UPDATE orders SET status = 'Completed' WHERE id = %s", (order_id,))
-    conn.commit()
-    return "OK"
+    try:
+        cur = conn.cursor()
+        cur.execute("UPDATE orders SET status = 'Completed' WHERE id = %s", (order_id,))
+        conn.commit()
+        return "OK"
+    finally:
+        close_db_connection(conn)
 
 @app.route('/daily_report')
 def daily_report():
     conn = get_db_connection()
-    cur = conn.cursor()
-    cur.execute("SELECT * FROM orders WHERE created_at >= current_date")
-    orders = cur.fetchall()
-    total = sum(o[3] for o in orders)
-    html = f"<h2>日結單 {date.today()}</h2><table style='width:100%'>"
-    for o in orders: html += f"<tr><td>#{o[0]} 桌{o[1]}</td><td align='right'>${o[3]}</td></tr>"
-    html += f"</table><h3 align='right'>總計: ${total}</h3><button onclick='window.print()'>列印</button>"
-    return html
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM orders WHERE created_at >= current_date")
+        orders = cur.fetchall()
+        total = sum(o[3] for o in orders)
+        html = f"<h2>日結單 {date.today()}</h2><table style='width:100%'>"
+        for o in orders: html += f"<tr><td>#{o[0]} 桌{o[1]}</td><td align='right'>${o[3]}</td></tr>"
+        html += f"</table><h3 align='right'>總計: ${total}</h3><button onclick='window.print()'>列印</button>"
+        return html
+    finally:
+        close_db_connection(conn)
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=10000)
