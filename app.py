@@ -1,8 +1,6 @@
 import os
 import psycopg2
-import json
 from flask import Flask, request, redirect, url_for
-from datetime import datetime
 
 app = Flask(__name__)
 
@@ -10,7 +8,7 @@ def get_db_connection():
     db_uri = os.environ.get("DATABASE_URL")
     return psycopg2.connect(db_uri)
 
-# --- 1. 資料庫初始化 (只在第一次或需要重置時執行) ---
+# --- 1. 資料庫初始化 (這是您現在最需要的功能) ---
 @app.route('/init_db')
 def init_db():
     conn = get_db_connection()
@@ -103,12 +101,18 @@ def index():
         return redirect(url_for('kitchen'))
 
     # 如果是 GET (顯示菜單)
-    cur.execute("SELECT * FROM products ORDER BY category, id")
-    products = cur.fetchall()
+    # 這裡容易出錯：如果資料表還沒建立，這裡會直接報 500 錯誤
+    try:
+        cur.execute("SELECT * FROM products ORDER BY category, id")
+        products = cur.fetchall()
+    except psycopg2.errors.UndefinedTable:
+        conn.rollback()
+        return "錯誤：資料庫尚未初始化。<br>請務必先執行 <a href='/init_db'>/init_db</a> 來建立表格！"
+        
     cur.close()
     conn.close()
 
-    # 簡單的 CSS 美化
+    # HTML 介面
     html = """
     <!DOCTYPE html>
     <html>
@@ -152,7 +156,6 @@ def index():
     
     current_category = ""
     for p in products:
-        # p = (id, name, price, category)
         if p[3] != current_category:
             html += f"<h4 style='background:#eee; padding:5px;'>{p[3]}</h4>"
             current_category = p[3]
@@ -181,9 +184,14 @@ def index():
 def kitchen():
     conn = get_db_connection()
     cur = conn.cursor()
-    # 撈出所有訂單，最新的在上面
-    cur.execute("SELECT * FROM orders ORDER BY created_at DESC")
-    orders = cur.fetchall()
+    # 撈出所有訂單
+    try:
+        cur.execute("SELECT * FROM orders ORDER BY created_at DESC")
+        orders = cur.fetchall()
+    except psycopg2.errors.UndefinedTable:
+        conn.rollback()
+        return "錯誤：資料庫尚未初始化。<a href='/init_db'>點此初始化</a>"
+        
     cur.close()
     conn.close()
 
@@ -192,7 +200,8 @@ def kitchen():
     <html>
     <head>
         <title>廚房看板</title>
-        <meta http-equiv="refresh" content="10"> <style>
+        <meta http-equiv="refresh" content="10">
+        <style>
             body { font-family: '微軟正黑體', sans-serif; background-color: #222; color: white; padding: 20px; }
             .nav { text-align: center; margin-bottom: 20px; }
             .nav a { color: #4CAF50; text-decoration: none; font-size: 1.2em; }
@@ -215,8 +224,6 @@ def kitchen():
         html += "<h3 style='text-align:center; color:#777;'>目前沒有訂單...</h3>"
 
     for order in orders:
-        # order = (id, name, table, items, total, status, time)
-        # 注意：這裡就是剛剛報錯的地方，請確保下方的 f""" 和 """ 是完整的
         html += f"""
         <div class="order-card">
             <div class="order-header">
