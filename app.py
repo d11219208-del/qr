@@ -44,7 +44,7 @@ def init_db():
 
         # 預設菜單 (包含 ImgBB 或網路示意圖連結)
         default_menu = [
-            ('招牌牛肉麵', 180, '主食', 'https://i.ibb.co/vz1k3j1/beef-noodle.jpg'),
+            ('炒米粉', 50, '主食', 'https://ibb.co/Q7DRP3cY'),
             ('古早味排骨飯', 120, '主食', 'https://i.ibb.co/MCTvVqL/pork-rice.jpg'),
             ('燙青菜', 40, '小菜', 'https://i.ibb.co/Xkz2zt3/vegetables.jpg'),
             ('滷蛋', 15, '小菜', 'https://i.ibb.co/hWz6qg8/egg.jpg'),
