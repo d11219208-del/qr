@@ -1,0 +1,12 @@
+綁定中文及桌號
+https://qr-mbdv.onrender.com/menu?lang=zh&table=1
+綁定英文及桌號
+https://qr-mbdv.onrender.com/menu?lang=en&table=2
+綁定日文及桌號
+https://qr-mbdv.onrender.com/menu?lang=jp&table=外帶
+廚房端
+https://qr-mbdv.onrender.com/kitchen
+後臺管理
+https://qr-mbdv.onrender.com/admin
+資料更新
+https://qr-mbdv.onrender.com/init_db
