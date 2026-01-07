@@ -14,7 +14,7 @@ def get_db_connection():
     db_uri = os.environ.get("DATABASE_URL")
     return psycopg2.connect(db_uri)
 
-# --- 翻譯字典 (新增韓文) ---
+# --- 翻譯字典 ---
 def load_translations():
     return {
         "zh": {
@@ -59,7 +59,7 @@ def load_translations():
         }
     }
 
-# --- 1. 資料庫初始化 (新增韓文欄位) ---
+# --- 1. 資料庫初始化 ---
 @app.route('/init_db')
 def init_db():
     conn = get_db_connection()
@@ -95,7 +95,7 @@ def init_db():
                 lang VARCHAR(10) DEFAULT 'zh'
             );
         ''')
-        # 補欄位
+        # 補欄位 (確保所有欄位存在)
         alters = [
             "ALTER TABLE products ADD COLUMN IF NOT EXISTS is_available BOOLEAN DEFAULT TRUE;",
             "ALTER TABLE products ADD COLUMN IF NOT EXISTS image_url TEXT;",
@@ -115,13 +115,13 @@ def init_db():
             try: cur.execute(cmd)
             except: pass
             
-        return "資料庫結構更新完成 (含韓文支援)。<a href='/'>回首頁</a> | <a href='/admin'>回後台</a>"
+        return "資料庫結構檢查完成。<a href='/'>回首頁</a> | <a href='/admin'>回後台</a>"
     except Exception as e:
         return f"DB Error: {e}"
     finally:
         cur.close(); conn.close()
 
-# --- 2. 首頁與語言選擇 (新增韓文按鈕) ---
+# --- 2. 首頁與語言選擇 ---
 @app.route('/')
 def language_select():
     tbl = request.args.get('table', '')
@@ -187,8 +187,8 @@ def menu():
             if old_order_id:
                 cur.execute("UPDATE orders SET status='Cancelled' WHERE id=%s", (old_order_id,))
                 conn.commit()
-                # 【修改3】如果是廚房編輯，直接跳回廚房，不跳去顧客成功頁
-                return redirect('/kitchen')
+                # 編輯後關閉分頁 (透過JS)，因為這是新分頁開啟的
+                return "<script>window.close();</script>"
             
             conn.commit()
             return redirect(url_for('order_success', order_id=oid, lang=lang_post))
@@ -211,36 +211,25 @@ def menu():
             if not url_table: url_table = old_data[0]
             preload_cart = old_data[1]
 
-    # 排序：分類優先
+    # 排序
     cur.execute("SELECT * FROM products WHERE is_available=TRUE ORDER BY category DESC, sort_order ASC, id ASC")
     products = cur.fetchall()
     cur.close(); conn.close()
     
     p_list = []
     for p in products:
-        # 原始中文
         name_zh = p[1]
         opts_zh = p[6].split(',') if p[6] else []
-
-        # 顯示語言
         d_name = p[1]
         d_opts_str = p[6]
 
         if lang == 'en':
             if p[8]: d_name = p[8]
-            if len(p)>10 and p[10]: d_opts_str = p[10]
+            if len(p)>11 and p[11]: d_opts_str = p[11]
         elif lang == 'jp':
             if p[9]: d_name = p[9]
-            if len(p)>11 and p[11]: d_opts_str = p[11]
+            if len(p)>12 and p[12]: d_opts_str = p[12]
         elif lang == 'kr':
-            # p[13] is name_kr, p[14] is opts_kr roughly (depends on schema order)
-            # Schema: id,name,price,cat,img,avail,opt,sort, en,jp,kr...
-            # 我們需要準確索引，建議用 DictCursor，這裡用簡單的len判斷
-            if len(p)>10 and p[10]: d_name = p[10] # 修正：kr index is 10 if schema is correct? Wait.
-            # 讓我們重新對應 SQL 結構:
-            # 0:id, 1:name, 2:price, 3:cat, 4:img, 5:avail, 6:opt, 7:sort, 
-            # 8:name_en, 9:name_jp, 10:name_kr, 
-            # 11:opt_en, 12:opt_jp, 13:opt_kr, 14:print_cat
             if len(p)>10 and p[10]: d_name = p[10]
             if len(p)>13 and p[13]: d_opts_str = p[13]
 
@@ -249,13 +238,10 @@ def menu():
 
         p_list.append({
             'id': p[0], 
-            'name': d_name,           
-            'name_zh': name_zh,       
-            'price': p[2], 
-            'category': p[3],
+            'name': d_name, 'name_zh': name_zh,       
+            'price': p[2], 'category': p[3],
             'image_url': p[4] if p[4] else '', 
-            'custom_options': d_opts, 
-            'custom_options_zh': opts_zh,
+            'custom_options': d_opts, 'custom_options_zh': opts_zh,
             'print_category': print_cat
         })
 
@@ -266,8 +252,6 @@ def render_frontend(products, t, default_table, lang, preload_cart, edit_oid):
     t_json = json.dumps(t)
     old_oid_input = f'<input type="hidden" name="old_order_id" value="{edit_oid}">' if edit_oid else ''
     edit_notice = f'<div style="background:#fff3cd;padding:10px;color:#856404;text-align:center;">⚠️ 正在編輯 #{edit_oid}</div>' if edit_oid else ''
-    
-    # 【修改4】AI 翻譯標註
     ai_badge = f"<div style='text-align:center;color:#999;font-size:0.8em;padding:10px;'>🤖 {t.get('ai_note', 'Translated by AI')}</div>"
 
     return f"""
@@ -389,14 +373,11 @@ def render_frontend(products, t, default_table, lang, preload_cart, edit_oid):
 
         C.push({{
             id: cur.id, 
-            name: cur.name,           
-            name_zh: cur.name_zh,     
+            name: cur.name, name_zh: cur.name_zh,     
             unit_price: cur.price + addP, 
             qty: q, 
-            options: finalOpts,       
-            options_zh: finalOptsZH,  
-            category: cur.category, 
-            print_category: cur.print_category
+            options: finalOpts, options_zh: finalOptsZH,  
+            category: cur.category, print_category: cur.print_category
         }});
         document.getElementById('opt-m').style.display='none'; upd();
     }}
@@ -438,14 +419,17 @@ def order_success():
     t = load_translations().get(lang, load_translations()['zh'])
     
     conn = get_db_connection(); cur = conn.cursor()
-    cur.execute("SELECT daily_seq, content_json, total_price FROM orders WHERE id=%s", (oid,))
+    cur.execute("SELECT daily_seq, content_json, total_price, created_at FROM orders WHERE id=%s", (oid,))
     row = cur.fetchone()
     conn.close()
 
     if not row: return "Order Not Found"
-    seq, json_str, total = row
+    seq, json_str, total, created_at = row
     items = json.loads(json_str) if json_str else []
     
+    # 格式化時間 (客戶端顯示)
+    time_str = created_at.strftime('%Y-%m-%d %H:%M:%S')
+
     items_html = ""
     for i in items:
         opt = f" <small>({','.join(i['options'])})</small>" if i['options'] else ""
@@ -455,6 +439,7 @@ def order_success():
     <div style="max-width:400px;margin:20px auto;text-align:center;font-family:sans-serif;padding:20px;border:1px solid #ddd;border-radius:10px;">
         <h1 style="color:#28a745;">✅ {t['order_success']}</h1>
         <div style="font-size:3em;font-weight:bold;color:#e91e63;margin:10px;">#{seq:03d}</div>
+        <p style="color:#666;">{time_str}</p>
         <p>{t['kitchen_prep']}</p>
         <h2 style="background:#eee;padding:10px;">{t['pay_at_counter']}</h2>
         
@@ -468,26 +453,36 @@ def order_success():
     </div>
     """
 
-# --- 5. 廚房看板 (AJAX 版 - 解決音效自動關閉問題) ---
+# --- 5. 廚房看板 (AJAX + Auto Print + Timestamp) ---
 @app.route('/check_new_orders')
 def check_new_orders():
-    # 這裡直接回傳新的 HTML 片段，前端直接替換，不刷新頁面
+    # 這裡回傳新的 HTML 片段 與 新訂單ID列表 (用於列印)
+    current_max = request.args.get('current_seq', 0, type=int)
     conn = get_db_connection(); cur = conn.cursor()
-    # 取得訂單列表
+    
     cur.execute("SELECT * FROM orders WHERE created_at >= CURRENT_DATE ORDER BY daily_seq DESC")
     orders = cur.fetchall()
-    # 取得最大流水號
+    
     cur.execute("SELECT MAX(daily_seq) FROM orders WHERE created_at >= CURRENT_DATE")
     max_seq = cur.fetchone()[0]
     max_seq = max_seq if max_seq else 0
+    
+    # 找出比 current_max 更新的訂單 ID
+    new_order_ids = []
+    if current_max > 0:
+        cur.execute("SELECT id FROM orders WHERE created_at >= CURRENT_DATE AND daily_seq > %s", (current_max,))
+        new_rows = cur.fetchall()
+        new_order_ids = [r[0] for r in new_rows]
+
     conn.close()
 
-    # 產生訂單列表的 HTML
     html_content = ""
     for o in orders:
         status = o[4]
         cls = status.lower()
         seq = f"{o[7]:03d}"
+        # 時間戳記 (廚房卡片顯示)
+        time_str = o[5].strftime('%Y-%m-%d %H:%M:%S')
         
         items_str_zh = ""
         try:
@@ -511,8 +506,9 @@ def check_new_orders():
             btns += f"<a href='/kitchen/complete/{o[0]}' class='btn' style='background:#28a745'>完成</a>"
         
         if status != 'Cancelled':
+            # **關鍵修改**: 編輯按鈕增加 target="_blank"，避免主頁重整導致音效關閉
             btns += f"""
-            <a href='/menu?edit_oid={o[0]}' class='btn' style='background:#ffc107;color:black;'>✏️ 編輯重開</a>
+            <a href='/menu?edit_oid={o[0]}' target='_blank' class='btn' style='background:#ffc107;color:black;'>✏️ 編輯重開</a>
             <a href='/order/cancel/{o[0]}' class='btn' style='background:#dc3545' onclick=\"return confirm('確定作廢？')\">🗑️ 作廢</a>
             """
         
@@ -521,13 +517,14 @@ def check_new_orders():
         html_content += f"""
         <div class="card {cls}">
             <div class="tag">{tag}</div>
-            <span style="font-size:1.5em;color:#ff9800;">#{seq}</span> 桌號: {o[1]} <small>({o[5].strftime('%H:%M')})</small>
+            <div style="font-size:0.8em;color:#aaa;margin-bottom:5px;">{time_str}</div>
+            <span style="font-size:1.5em;color:#ff9800;">#{seq}</span> 桌號: {o[1]}
             <div class="items" style="margin:10px 0;font-size:1.2em;">{items_str_zh}</div>
             <div style="border-top:1px solid #555;padding-top:10px;">{btns}</div>
         </div>
         """
     
-    return jsonify({'html': html_content, 'max_seq': max_seq})
+    return jsonify({'html': html_content, 'max_seq': max_seq, 'new_ids': new_order_ids})
 
 @app.route('/kitchen')
 def kitchen():
@@ -555,19 +552,21 @@ def kitchen():
     </div>
     
     <audio id="alertSound" src="{beep_src}" preload="auto"></audio>
+    <iframe id="print_frame" style="width:0;height:0;border:none;"></iframe>
     <div id="order-list">載入中...</div>
     
     <script>
         let currentMaxSeq = 0;
         let audio = document.getElementById('alertSound');
         let soundEnabled = false;
+        let printFrame = document.getElementById('print_frame');
 
         function enableAudio() {{
             soundEnabled = true;
             audio.play().then(() => {{
                 audio.pause();
                 audio.currentTime = 0;
-                document.getElementById('soundBtn').innerText = "🔊 音效已開啟 (請勿重整)";
+                document.getElementById('soundBtn').innerText = "🔊 音效已開啟";
                 document.getElementById('soundBtn').style.background = "green";
             }}).catch(e => console.log(e));
         }}
@@ -575,11 +574,13 @@ def kitchen():
         // 初始載入
         fetchOrders();
 
-        // 輪詢 (AJAX不刷新頁面，保證音效權限)
+        // 輪詢
         setInterval(fetchOrders, 3000);
 
         function fetchOrders() {{
-            fetch('/check_new_orders')
+            // 帶上 current_max 以便後端判斷新單
+            let url = '/check_new_orders?current_seq=' + currentMaxSeq;
+            fetch(url)
             .then(r => r.json())
             .then(data => {{
                 // 更新列表
@@ -588,6 +589,14 @@ def kitchen():
                 // 判斷是否有新單
                 if (currentMaxSeq > 0 && data.max_seq > currentMaxSeq) {{
                     if (soundEnabled) audio.play();
+                    
+                    // 自動列印新單 (如果有 ID 回傳)
+                    if(data.new_ids && data.new_ids.length > 0){{
+                        // 為了避免同時開啟太多列印視窗，這裡只自動列印最新的一張
+                        // 實務上瀏覽器可能會阻擋連續彈出，隱藏 iframe 是最穩定的解法
+                        console.log("Auto printing order:", data.new_ids[0]);
+                        printFrame.src = '/print_order/' + data.new_ids[0];
+                    }}
                 }}
                 currentMaxSeq = data.max_seq;
             }});
@@ -596,48 +605,63 @@ def kitchen():
     </body></html>
     """
 
-# --- 6. 日結報表 ---
+# --- 6. 日結報表 (升級: 作廢明細) ---
 @app.route('/kitchen/report')
 def daily_report():
     conn = get_db_connection(); cur = conn.cursor()
+    # 統計金額
     cur.execute("SELECT COUNT(*), SUM(total_price) FROM orders WHERE created_at >= CURRENT_DATE AND status != 'Cancelled'")
     valid_count, valid_total = cur.fetchone()
     cur.execute("SELECT COUNT(*), SUM(total_price) FROM orders WHERE created_at >= CURRENT_DATE AND status = 'Cancelled'")
     void_count, void_total = cur.fetchone()
     
+    # 統計有效商品
     cur.execute("SELECT content_json FROM orders WHERE created_at >= CURRENT_DATE AND status != 'Cancelled'")
-    rows = cur.fetchall()
+    valid_rows = cur.fetchall()
     
-    item_stats = {}
-    for r in rows:
-        if not r[0]: continue
-        try:
-            items = json.loads(r[0])
-            for i in items:
-                name = i.get('name_zh', i['name'])
-                qty = int(i['qty'])
-                item_stats[name] = item_stats.get(name, 0) + qty
-        except: pass
-    
+    # 統計作廢商品
+    cur.execute("SELECT content_json FROM orders WHERE created_at >= CURRENT_DATE AND status = 'Cancelled'")
+    void_rows = cur.fetchall()
     conn.close()
-    
-    stats_html = "<table style='width:100%;border-collapse:collapse;margin-top:10px;'>"
-    stats_html += "<tr style='background:#eee;'><th style='text-align:left;padding:5px;'>品項</th><th style='text-align:right;padding:5px;'>數量</th></tr>"
-    for name, qty in sorted(item_stats.items(), key=lambda x: x[1], reverse=True):
-        stats_html += f"<tr><td style='border-bottom:1px solid #ddd;padding:5px;'>{name}</td><td style='text-align:right;border-bottom:1px solid #ddd;padding:5px;'>{qty}</td></tr>"
-    stats_html += "</table>"
+
+    def agg_items(rows):
+        stats = {}
+        for r in rows:
+            if not r[0]: continue
+            try:
+                items = json.loads(r[0])
+                for i in items:
+                    name = i.get('name_zh', i['name'])
+                    qty = int(i['qty'])
+                    stats[name] = stats.get(name, 0) + qty
+            except: pass
+        return stats
+
+    valid_stats = agg_items(valid_rows)
+    void_stats = agg_items(void_rows)
+
+    def render_table(stats_dict):
+        h = "<table style='width:100%;border-collapse:collapse;margin-top:5px;'>"
+        h += "<tr style='background:#eee;'><th style='text-align:left;padding:5px;'>品項</th><th style='text-align:right;padding:5px;'>數量</th></tr>"
+        for name, qty in sorted(stats_dict.items(), key=lambda x: x[1], reverse=True):
+            h += f"<tr><td style='border-bottom:1px solid #ddd;padding:5px;'>{name}</td><td style='text-align:right;border-bottom:1px solid #ddd;padding:5px;'>{qty}</td></tr>"
+        h += "</table>"
+        return h
 
     return f"""
     <!DOCTYPE html><body style="font-family:sans-serif;padding:20px;background:#f4f4f4;">
         <div style="background:white;padding:30px;max-width:500px;margin:0 auto;border-radius:10px;">
             <h2 style="text-align:center;">📅 本日結帳單</h2>
             <p style="text-align:center;color:#666;">{date.today()}</p><hr>
+            
             <h3>✅ 有效營收</h3>
             <p>單量: {valid_count or 0} | 金額: <span style="font-size:1.5em;color:green;font-weight:bold">${valid_total or 0}</span></p>
-            <h4>📦 銷售明細 (Item Sales)</h4>
-            {stats_html}
-            <hr><h3 style="color:red;">❌ 作廢/刪除</h3>
+            {render_table(valid_stats)}
+            
+            <hr><h3 style="color:red;">❌ 作廢單據 (Void)</h3>
             <p>單量: {void_count or 0} | 金額: ${void_total or 0}</p>
+            {render_table(void_stats)}
+            
             <hr><button onclick="window.print()" style="width:100%;padding:10px;">列印</button>
             <br><br><a href="/kitchen" style="display:block;text-align:center;">回廚房</a>
         </div>
@@ -655,7 +679,7 @@ def cancel_order(oid):
     c=get_db_connection(); c.cursor().execute("UPDATE orders SET status='Cancelled' WHERE id=%s",(oid,)); c.commit(); c.close()
     return redirect('/kitchen')
 
-# --- 8. 列印 (修正：雙語對照) ---
+# --- 8. 列印 (增加時間戳記) ---
 @app.route('/print_order/<int:oid>')
 def print_order(oid):
     conn = get_db_connection(); cur = conn.cursor()
@@ -667,27 +691,27 @@ def print_order(oid):
     seq = f"{o[7]:03d}"
     items = json.loads(o[8]) if o[8] else []
     status = o[4]
-    lang = o[9] # 訂單語言
+    lang = o[9]
     is_void = (status == 'Cancelled')
+    time_str = o[5].strftime('%Y-%m-%d %H:%M:%S')
     
     title = "❌ 作廢單 (VOID)" if is_void else "結帳單 (Receipt)"
     style = "text-decoration: line-through; color:red;" if is_void else ""
     
-    # 【修改2】顯示邏輯：如果是中文，只印中文；外文則印 "外文 (中文)"
     def get_display_name(item):
         n_zh = item.get('name_zh', item['name'])
-        n_foreign = item['name'] # 這是當下客戶端顯示的名稱
+        n_foreign = item['name']
         if lang == 'zh': return n_zh
         return f"{n_foreign}<br><small>({n_zh})</small>"
 
     def mk_ticket(t_name, item_list, show_total=False, is_kitchen=False):
         if not item_list and not show_total: return ""
-        h = f"<div class='ticket' style='{style}'><div class='head'><h2>{t_name}</h2><h1>#{seq}</h1><p>Table: {o[1]}</p></div><hr>"
+        # 增加時間戳記在標題下方
+        h = f"<div class='ticket' style='{style}'><div class='head'><h2>{t_name}</h2><h1>#{seq}</h1><p>Table: {o[1]}</p><small>{time_str}</small></div><hr>"
         t_price = 0
         for i in item_list:
             t_price += i['unit_price']*i['qty']
             
-            # 廚房單永遠只印中文 (清楚)，結帳單印雙語
             if is_kitchen:
                 d_name = i.get('name_zh', i['name'])
                 ops = i.get('options_zh', i.get('options', []))
@@ -715,7 +739,7 @@ def print_order(oid):
 
     return f"<html><head><style>body{{font-family:'Courier New', 'Microsoft JhengHei', sans-serif;font-size:14px;background:#eee;}} .ticket{{width:58mm;background:white;margin:10px auto;padding:10px;}} .head{{text-align:center;}} .row{{display:flex;justify-content:space-between;margin-top:5px;font-weight:bold;}} .opt{{font-size:12px;color:#555;margin-left:20px;}} .break{{page-break-after:always;}} small{{color:#666;font-size:0.8em;}} @media print{{.ticket{{width:100%;box-shadow:none;}}}}</style></head><body onload='window.print()'>{body}</body></html>"
 
-# --- 9. 後台管理 (新增韓文輸入) ---
+# --- 9. 後台管理 ---
 @app.route('/admin', methods=['GET', 'POST'])
 def admin_panel():
     conn = get_db_connection(); cur = conn.cursor()
