@@ -187,7 +187,7 @@ def menu():
             if old_order_id:
                 cur.execute("UPDATE orders SET status='Cancelled' WHERE id=%s", (old_order_id,))
                 conn.commit()
-                # 編輯後關閉分頁 (透過JS)，因為這是新分頁開啟的
+                # 編輯後關閉分頁
                 return "<script>window.close();</script>"
             
             conn.commit()
@@ -199,7 +199,7 @@ def menu():
         finally:
             cur.close(); conn.close()
 
-    # GET Menu
+    # GET Menu - 明確指定欄位讀取
     url_table = request.args.get('table', '')
     edit_oid = request.args.get('edit_oid')
     preload_cart = "[]"
@@ -211,13 +211,18 @@ def menu():
             if not url_table: url_table = old_data[0]
             preload_cart = old_data[1]
 
-    # 排序
-    cur.execute("SELECT * FROM products WHERE is_available=TRUE ORDER BY category DESC, sort_order ASC, id ASC")
+    # 明確欄位順序: id, name, price, category, image_url, is_available, custom_options, sort_order, name_en, name_jp, name_kr, opt_en, opt_jp, opt_kr, print_cat
+    cur.execute("""
+        SELECT id, name, price, category, image_url, is_available, custom_options, sort_order,
+               name_en, name_jp, name_kr, custom_options_en, custom_options_jp, custom_options_kr, print_category
+        FROM products WHERE is_available=TRUE ORDER BY category DESC, sort_order ASC, id ASC
+    """)
     products = cur.fetchall()
     cur.close(); conn.close()
     
     p_list = []
     for p in products:
+        # p[0]=id, p[1]=name, p[2]=price, p[3]=cat, p[4]=img, p[6]=opt, p[8]=en, p[9]=jp, p[10]=kr, p[11]=opt_en, p[12]=opt_jp, p[13]=opt_kr, p[14]=print
         name_zh = p[1]
         opts_zh = p[6].split(',') if p[6] else []
         d_name = p[1]
@@ -225,16 +230,16 @@ def menu():
 
         if lang == 'en':
             if p[8]: d_name = p[8]
-            if len(p)>11 and p[11]: d_opts_str = p[11]
+            if p[11]: d_opts_str = p[11]
         elif lang == 'jp':
             if p[9]: d_name = p[9]
-            if len(p)>12 and p[12]: d_opts_str = p[12]
+            if p[12]: d_opts_str = p[12]
         elif lang == 'kr':
-            if len(p)>10 and p[10]: d_name = p[10]
-            if len(p)>13 and p[13]: d_opts_str = p[13]
+            if p[10]: d_name = p[10]
+            if p[13]: d_opts_str = p[13]
 
         d_opts = d_opts_str.split(',') if d_opts_str else []
-        print_cat = p[14] if len(p) > 14 and p[14] else 'Noodle'
+        print_cat = p[14] if p[14] else 'Noodle'
 
         p_list.append({
             'id': p[0], 
@@ -427,7 +432,7 @@ def order_success():
     seq, json_str, total, created_at = row
     items = json.loads(json_str) if json_str else []
     
-    # 格式化時間 (客戶端顯示)
+    # 格式化時間
     time_str = created_at.strftime('%Y-%m-%d %H:%M:%S')
 
     items_html = ""
@@ -453,10 +458,9 @@ def order_success():
     </div>
     """
 
-# --- 5. 廚房看板 (AJAX + Auto Print + Timestamp) ---
+# --- 5. 廚房看板 ---
 @app.route('/check_new_orders')
 def check_new_orders():
-    # 這裡回傳新的 HTML 片段 與 新訂單ID列表 (用於列印)
     current_max = request.args.get('current_seq', 0, type=int)
     conn = get_db_connection(); cur = conn.cursor()
     
@@ -467,7 +471,6 @@ def check_new_orders():
     max_seq = cur.fetchone()[0]
     max_seq = max_seq if max_seq else 0
     
-    # 找出比 current_max 更新的訂單 ID
     new_order_ids = []
     if current_max > 0:
         cur.execute("SELECT id FROM orders WHERE created_at >= CURRENT_DATE AND daily_seq > %s", (current_max,))
@@ -481,7 +484,6 @@ def check_new_orders():
         status = o[4]
         cls = status.lower()
         seq = f"{o[7]:03d}"
-        # 時間戳記 (廚房卡片顯示)
         time_str = o[5].strftime('%Y-%m-%d %H:%M:%S')
         
         items_str_zh = ""
@@ -506,9 +508,9 @@ def check_new_orders():
             btns += f"<a href='/kitchen/complete/{o[0]}' class='btn' style='background:#28a745'>完成</a>"
         
         if status != 'Cancelled':
-            # **關鍵修改**: 編輯按鈕增加 target="_blank"，避免主頁重整導致音效關閉
+            # target="_blank" 確保主頁面不刷新，維持音效運作
             btns += f"""
-            <a href='/menu?edit_oid={o[0]}' target='_blank' class='btn' style='background:#ffc107;color:black;'>✏️ 編輯重開</a>
+            <a href='/menu?edit_oid={o[0]}' target='_blank' class='btn' style='background:#ffc107;color:black;'>✏️ 編輯</a>
             <a href='/order/cancel/{o[0]}' class='btn' style='background:#dc3545' onclick=\"return confirm('確定作廢？')\">🗑️ 作廢</a>
             """
         
@@ -547,6 +549,7 @@ def kitchen():
         <div>
             <h2>👨‍🍳 廚房接單</h2>
             <button onclick="enableAudio()" id="soundBtn" style="background:#555;color:white;border:1px solid #777;padding:5px;">🔇 點此預設開啟音效</button>
+            <div style="font-size:0.8em;color:#aaa;margin-top:5px;">ℹ️ 若要靜音自動列印，請將瀏覽器設為 Kiosk Printing 模式</div>
         </div>
         <a href="/kitchen/report" class="btn" style="background:#6f42c1;font-size:1.1em;">📊 查看日結</a>
     </div>
@@ -571,29 +574,19 @@ def kitchen():
             }}).catch(e => console.log(e));
         }}
         
-        // 初始載入
         fetchOrders();
-
-        // 輪詢
         setInterval(fetchOrders, 3000);
 
         function fetchOrders() {{
-            // 帶上 current_max 以便後端判斷新單
             let url = '/check_new_orders?current_seq=' + currentMaxSeq;
             fetch(url)
             .then(r => r.json())
             .then(data => {{
-                // 更新列表
                 document.getElementById('order-list').innerHTML = data.html;
-                
-                // 判斷是否有新單
                 if (currentMaxSeq > 0 && data.max_seq > currentMaxSeq) {{
                     if (soundEnabled) audio.play();
-                    
-                    // 自動列印新單 (如果有 ID 回傳)
+                    // 自動列印新單
                     if(data.new_ids && data.new_ids.length > 0){{
-                        // 為了避免同時開啟太多列印視窗，這裡只自動列印最新的一張
-                        // 實務上瀏覽器可能會阻擋連續彈出，隱藏 iframe 是最穩定的解法
                         console.log("Auto printing order:", data.new_ids[0]);
                         printFrame.src = '/print_order/' + data.new_ids[0];
                     }}
@@ -605,7 +598,7 @@ def kitchen():
     </body></html>
     """
 
-# --- 6. 日結報表 (升級: 作廢明細) ---
+# --- 6. 日結報表 ---
 @app.route('/kitchen/report')
 def daily_report():
     conn = get_db_connection(); cur = conn.cursor()
@@ -615,11 +608,9 @@ def daily_report():
     cur.execute("SELECT COUNT(*), SUM(total_price) FROM orders WHERE created_at >= CURRENT_DATE AND status = 'Cancelled'")
     void_count, void_total = cur.fetchone()
     
-    # 統計有效商品
+    # 統計商品
     cur.execute("SELECT content_json FROM orders WHERE created_at >= CURRENT_DATE AND status != 'Cancelled'")
     valid_rows = cur.fetchall()
-    
-    # 統計作廢商品
     cur.execute("SELECT content_json FROM orders WHERE created_at >= CURRENT_DATE AND status = 'Cancelled'")
     void_rows = cur.fetchall()
     conn.close()
@@ -706,12 +697,10 @@ def print_order(oid):
 
     def mk_ticket(t_name, item_list, show_total=False, is_kitchen=False):
         if not item_list and not show_total: return ""
-        # 增加時間戳記在標題下方
         h = f"<div class='ticket' style='{style}'><div class='head'><h2>{t_name}</h2><h1>#{seq}</h1><p>Table: {o[1]}</p><small>{time_str}</small></div><hr>"
         t_price = 0
         for i in item_list:
             t_price += i['unit_price']*i['qty']
-            
             if is_kitchen:
                 d_name = i.get('name_zh', i['name'])
                 ops = i.get('options_zh', i.get('options', []))
@@ -727,47 +716,53 @@ def print_order(oid):
         return h
 
     body = ""
-    # 顧客聯 (雙語)
+    # 顧客聯
     body += mk_ticket(title, items, show_total=True, is_kitchen=False)
     
     if not is_void:
         noodles = [i for i in items if i.get('print_category', 'Noodle') == 'Noodle']
         soups = [i for i in items if i.get('print_category') == 'Soup']
-        # 廚房工單 (純中文)
+        # 廚房工單
         body += mk_ticket("🍜 麵區工單", noodles, is_kitchen=True)
         body += mk_ticket("🍲 湯區工單", soups, is_kitchen=True)
 
-    return f"<html><head><style>body{{font-family:'Courier New', 'Microsoft JhengHei', sans-serif;font-size:14px;background:#eee;}} .ticket{{width:58mm;background:white;margin:10px auto;padding:10px;}} .head{{text-align:center;}} .row{{display:flex;justify-content:space-between;margin-top:5px;font-weight:bold;}} .opt{{font-size:12px;color:#555;margin-left:20px;}} .break{{page-break-after:always;}} small{{color:#666;font-size:0.8em;}} @media print{{.ticket{{width:100%;box-shadow:none;}}}}</style></head><body onload='window.print()'>{body}</body></html>"
+    return f"<html><head><style>body{{font-family:'Courier New', 'Microsoft JhengHei', sans-serif;font-size:14px;background:#eee;}} .ticket{{width:58mm;background:white;margin:10px auto;padding:10px;}} .head{{text-align:center;}} .row{{display:flex;justify-content:space-between;margin-top:5px;font-weight:bold;}} .opt{{font-size:12px;color:#555;margin-left:20px;}} .break{{page-break-after:always;}} small{{color:#666;font-size:0.8em;}} @media print{{.ticket{{width:100%;box-shadow:none;}} body{{background:white;}}}}</style></head><body onload='setTimeout(function(){{window.print();}}, 500);'>{body}</body></html>"
 
 # --- 9. 後台管理 ---
 @app.route('/admin', methods=['GET', 'POST'])
 def admin_panel():
     conn = get_db_connection(); cur = conn.cursor()
     if request.method == 'POST':
-        cur.execute("""
-            INSERT INTO products (name, price, category, image_url, custom_options, 
-            name_en, name_jp, name_kr,
-            custom_options_en, custom_options_jp, custom_options_kr,
-            print_category)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        """, (
-            request.form['name'], request.form['price'], request.form['category'], request.form['image_url'], request.form['custom_options'],
-            request.form.get('name_en'), request.form.get('name_jp'), request.form.get('name_kr'),
-            request.form.get('custom_options_en'), request.form.get('custom_options_jp'), request.form.get('custom_options_kr'),
-            request.form.get('print_category', 'Noodle')
-        ))
-        conn.commit()
-        return redirect('/admin')
+        try:
+            cur.execute("""
+                INSERT INTO products (name, price, category, image_url, custom_options, 
+                name_en, name_jp, name_kr,
+                custom_options_en, custom_options_jp, custom_options_kr,
+                print_category)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """, (
+                request.form.get('name'), request.form.get('price'), request.form.get('category'), request.form.get('image_url'), request.form.get('custom_options'),
+                request.form.get('name_en'), request.form.get('name_jp'), request.form.get('name_kr'),
+                request.form.get('custom_options_en'), request.form.get('custom_options_jp'), request.form.get('custom_options_kr'),
+                request.form.get('print_category', 'Noodle')
+            ))
+            conn.commit()
+            return redirect('/admin')
+        except Exception as e:
+            return f"Error: {e}"
+        finally:
+            cur.close(); conn.close()
     
-    cur.execute("SELECT * FROM products ORDER BY id DESC")
+    cur.execute("SELECT id, name, price, category, image_url, is_available, custom_options, sort_order, name_en, name_jp, name_kr, custom_options_en, custom_options_jp, custom_options_kr, print_category FROM products ORDER BY id DESC")
     prods = cur.fetchall()
     conn.close()
     
     rows = ""
     for p in prods:
+        # p[0]=id, p[1]=name, p[2]=price, p[3]=cat, p[5]=avail, p[14]=print
         status_text = "<span style='color:green'>上架</span>" if p[5] else "<span style='color:red'>下架</span>"
         toggle = f"<a href='/admin/toggle_product/{p[0]}'>切換</a>"
-        p_cat = p[14] if len(p)>14 else 'Noodle'
+        p_cat = p[14] if len(p)>14 and p[14] else 'Noodle'
         
         rows += f"""
         <tr>
@@ -828,36 +823,48 @@ def reset_orders():
 def edit_product(pid):
     conn = get_db_connection(); cur = conn.cursor()
     if request.method=='POST':
-        cur.execute("""
-            UPDATE products SET name=%s, price=%s, category=%s, image_url=%s, custom_options=%s,
-            name_en=%s, name_jp=%s, name_kr=%s,
-            custom_options_en=%s, custom_options_jp=%s, custom_options_kr=%s,
-            print_category=%s
-            WHERE id=%s
-        """, (
-            request.form['name'], request.form['price'], request.form['category'], request.form['image_url'], request.form['custom_options'],
-            request.form['name_en'], request.form['name_jp'], request.form['name_kr'],
-            request.form['custom_options_en'], request.form['custom_options_jp'], request.form['custom_options_kr'],
-            request.form['print_category'], pid
-        ))
-        conn.commit(); conn.close()
-        return redirect('/admin')
+        try:
+            # 嚴格使用 get 以避免 Key Error，並轉型 Price
+            cur.execute("""
+                UPDATE products SET name=%s, price=%s, category=%s, image_url=%s, custom_options=%s,
+                name_en=%s, name_jp=%s, name_kr=%s,
+                custom_options_en=%s, custom_options_jp=%s, custom_options_kr=%s,
+                print_category=%s
+                WHERE id=%s
+            """, (
+                request.form.get('name'), int(request.form.get('price', 0)), request.form.get('category'), request.form.get('image_url'), request.form.get('custom_options'),
+                request.form.get('name_en'), request.form.get('name_jp'), request.form.get('name_kr'),
+                request.form.get('custom_options_en'), request.form.get('custom_options_jp'), request.form.get('custom_options_kr'),
+                request.form.get('print_category'), pid
+            ))
+            conn.commit()
+            return redirect('/admin')
+        except Exception as e:
+            return f"Update Error: {e}"
+        finally:
+            conn.close()
     
-    cur.execute("SELECT * FROM products WHERE id=%s", (pid,))
+    # 明確指定欄位順序以避免索引錯誤
+    cur.execute("""
+        SELECT id, name, price, category, image_url, is_available, custom_options, sort_order, 
+               name_en, name_jp, name_kr, custom_options_en, custom_options_jp, custom_options_kr, print_category
+        FROM products WHERE id=%s
+    """, (pid,))
     p = cur.fetchone()
     conn.close()
     
     def v(val): return val if val else ""
-    sel_n = 'selected' if (len(p)>14 and p[14] == 'Noodle') else ''
-    sel_s = 'selected' if (len(p)>14 and p[14] == 'Soup') else ''
+    # p[14] is print_category
+    sel_n = 'selected' if (p[14] == 'Noodle') else ''
+    sel_s = 'selected' if (p[14] == 'Soup') else ''
 
     return f"""
     <!DOCTYPE html><head><meta name="viewport" content="width=device-width"><link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/milligram/1.4.1/milligram.min.css"></head>
     <body style="padding:20px;"><h3>編輯 #{p[0]}</h3>
     <form method="POST">
-        <label>名稱</label><input type="text" name="name" value="{p[1]}">
+        <label>名稱</label><input type="text" name="name" value="{v(p[1])}">
         <label>價格</label><input type="number" name="price" value="{p[2]}">
-        <label>分類</label><input type="text" name="category" value="{p[3]}">
+        <label>分類</label><input type="text" name="category" value="{v(p[3])}">
         <label>出單區域</label>
         <select name="print_category">
             <option value="Noodle" {sel_n}>麵區</option>
