@@ -14,7 +14,7 @@ def get_db_connection():
     db_uri = os.environ.get("DATABASE_URL")
     return psycopg2.connect(db_uri)
 
-# --- 翻譯字典 (完整保留) ---
+# --- 翻譯字典 ---
 def load_translations():
     return {
         "zh": {
@@ -49,7 +49,7 @@ def load_translations():
         }
     }
 
-# --- 1. 資料庫初始化 ---
+# --- 1. 資料庫初始化 (結構更新) ---
 @app.route('/init_db')
 def init_db():
     conn = get_db_connection()
@@ -84,34 +84,36 @@ def init_db():
                 lang VARCHAR(10) DEFAULT 'zh'
             );
         ''')
-        # 補齊所有欄位
+        # 確保所有欄位存在
         alters = [
-            "ALTER TABLE orders ADD COLUMN IF NOT EXISTS daily_seq INTEGER DEFAULT 0;",
-            "ALTER TABLE orders ADD COLUMN IF NOT EXISTS content_json TEXT;",
-            "ALTER TABLE orders ADD COLUMN IF NOT EXISTS need_receipt BOOLEAN DEFAULT FALSE;",
-            "ALTER TABLE orders ADD COLUMN IF NOT EXISTS lang VARCHAR(10) DEFAULT 'zh';",
+            "ALTER TABLE products ADD COLUMN IF NOT EXISTS is_available BOOLEAN DEFAULT TRUE;",
             "ALTER TABLE products ADD COLUMN IF NOT EXISTS image_url TEXT;",
             "ALTER TABLE products ADD COLUMN IF NOT EXISTS name_en VARCHAR(100);",
             "ALTER TABLE products ADD COLUMN IF NOT EXISTS name_jp VARCHAR(100);",
             "ALTER TABLE products ADD COLUMN IF NOT EXISTS custom_options_en TEXT;",
             "ALTER TABLE products ADD COLUMN IF NOT EXISTS custom_options_jp TEXT;",
-            "ALTER TABLE products ADD COLUMN IF NOT EXISTS sort_order INTEGER DEFAULT 100;"
+            "ALTER TABLE orders ADD COLUMN IF NOT EXISTS daily_seq INTEGER DEFAULT 0;",
+            "ALTER TABLE orders ADD COLUMN IF NOT EXISTS content_json TEXT;",
+            "ALTER TABLE orders ADD COLUMN IF NOT EXISTS need_receipt BOOLEAN DEFAULT FALSE;",
+            "ALTER TABLE orders ADD COLUMN IF NOT EXISTS lang VARCHAR(10) DEFAULT 'zh';"
         ]
         for cmd in alters:
             try: cur.execute(cmd)
             except: pass
             
-        return "資料庫更新完成。<a href='/'>回首頁</a>"
+        return "資料庫結構檢查完成 (不會刪除資料)。<a href='/'>回首頁</a> | <a href='/admin'>回後台</a>"
     except Exception as e:
         return f"DB Error: {e}"
     finally:
         cur.close(); conn.close()
 
-# --- 2. 首頁與語言選擇 ---
+# --- 2. 首頁與語言選擇 (修復 404) ---
 @app.route('/')
 def language_select():
     tbl = request.args.get('table', '')
-    q = f"?table={tbl}" if tbl else ""
+    # 修復：正確的 Query String 拼接
+    base_qs = f"&table={tbl}" if tbl else ""
+    
     return f"""
     <!DOCTYPE html>
     <html><head><title>Language</title><meta name="viewport" content="width=device-width, initial-scale=1">
@@ -119,13 +121,13 @@ def language_select():
     .btn{{width:200px;padding:15px;margin:10px;text-align:center;text-decoration:none;font-size:1.2em;border-radius:50px;color:white;box-shadow:0 4px 6px rgba(0,0,0,0.1);}}
     .zh{{background:#e91e63;}} .en{{background:#007bff;}} .jp{{background:#ff9800;}}</style></head>
     <body><h2>Select Language</h2>
-    <a href="/menu{q}&lang=zh" class="btn zh">中文</a>
-    <a href="/menu{q}&lang=en" class="btn en">English</a>
-    <a href="/menu{q}&lang=jp" class="btn jp">日本語</a>
+    <a href="/menu?lang=zh{base_qs}" class="btn zh">中文</a>
+    <a href="/menu?lang=en{base_qs}" class="btn en">English</a>
+    <a href="/menu?lang=jp{base_qs}" class="btn jp">日本語</a>
     </body></html>
     """
 
-# --- 3. 點餐頁面 (GET & POST) ---
+# --- 3. 點餐頁面 (支援編輯帶入) ---
 @app.route('/menu', methods=['GET', 'POST'])
 def menu():
     lang = request.args.get('lang', 'zh')
@@ -133,13 +135,14 @@ def menu():
     conn = get_db_connection()
     cur = conn.cursor()
 
+    # --- 提交訂單 (POST) ---
     if request.method == 'POST':
         try:
-            # 這裡接收來自表單的資料
             table_number = request.form.get('table_number')
             cart_json = request.form.get('cart_data')
             need_receipt = request.form.get('need_receipt') == 'on'
-            lang_post = request.form.get('lang_input', 'zh') # 確保語言也傳過來
+            lang_post = request.form.get('lang_input', 'zh')
+            old_order_id = request.form.get('old_order_id') # 取得舊單 ID
             
             if not cart_json or cart_json == '[]': return "Empty Cart"
             
@@ -157,19 +160,22 @@ def menu():
 
             items_str = " + ".join(display_list)
             
-            # 產生每日流水號
+            # 每日流水號
             cur.execute("SELECT COUNT(*) FROM orders WHERE created_at >= CURRENT_DATE")
             new_seq = cur.fetchone()[0] + 1
             
+            # 1. 建立新單
             cur.execute("""
                 INSERT INTO orders (table_number, items, total_price, lang, daily_seq, content_json, need_receipt)
                 VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id
             """, (table_number, items_str, total_price, lang_post, new_seq, cart_json, need_receipt))
-            
             oid = cur.fetchone()[0]
-            conn.commit()
             
-            # 成功後轉址到 order_success (確保這個路由存在)
+            # 2. 如果是編輯模式 (有 old_order_id)，作廢舊單
+            if old_order_id:
+                cur.execute("UPDATE orders SET status='Cancelled' WHERE id=%s", (old_order_id,))
+            
+            conn.commit()
             return redirect(url_for('order_success', order_id=oid, lang=lang_post))
             
         except Exception as e:
@@ -178,8 +184,20 @@ def menu():
         finally:
             cur.close(); conn.close()
 
-    # GET: 顯示菜單
+    # --- 顯示菜單 (GET) ---
     url_table = request.args.get('table', '')
+    edit_oid = request.args.get('edit_oid') # 檢查是否為編輯模式
+    preload_cart = "[]"
+    
+    # 如果是編輯模式，撈取舊資料
+    if edit_oid:
+        cur.execute("SELECT table_number, content_json FROM orders WHERE id=%s", (edit_oid,))
+        old_data = cur.fetchone()
+        if old_data:
+            if not url_table: url_table = old_data[0] # 帶入舊桌號
+            preload_cart = old_data[1] # 帶入購物車 JSON
+
+    # 只撈取上架商品 (is_available=TRUE)
     cur.execute("SELECT * FROM products WHERE is_available=TRUE ORDER BY sort_order ASC, id ASC")
     products = cur.fetchall()
     cur.close(); conn.close()
@@ -202,13 +220,14 @@ def menu():
             'raw_category': p[3]
         })
 
-    # 傳入 render_frontend
-    return render_frontend(p_list, t, url_table, lang)
+    return render_frontend(p_list, t, url_table, lang, preload_cart, edit_oid)
 
-def render_frontend(products, t, default_table, lang):
+def render_frontend(products, t, default_table, lang, preload_cart, edit_oid):
     p_json = json.dumps(products)
     t_json = json.dumps(t)
-    # 重要：form action="/menu" 避免路徑錯誤
+    old_oid_input = f'<input type="hidden" name="old_order_id" value="{edit_oid}">' if edit_oid else ''
+    edit_notice = f'<div style="background:#fff3cd;padding:10px;color:#856404;text-align:center;">⚠️ 正在編輯 #{edit_oid} 號訂單 (送出後舊單將作廢)</div>' if edit_oid else ''
+    
     return f"""
     <!DOCTYPE html>
     <html><head><title>{t['title']}</title><meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=0">
@@ -226,6 +245,7 @@ def render_frontend(products, t, default_table, lang):
         .opt-tag.sel{{background:#e3f2fd;border-color:#2196f3;color:#2196f3;}}
     </style></head><body>
     <div class="header">
+        {edit_notice}
         <h3>{t['welcome']}</h3>
         <input type="text" id="visible_table" value="{default_table}" placeholder="{t['table_placeholder']}" style="padding:10px;width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:5px;">
     </div>
@@ -235,6 +255,7 @@ def render_frontend(products, t, default_table, lang):
         <input type="hidden" name="cart_data" id="cart_input">
         <input type="hidden" name="table_number" id="tbl_input">
         <input type="hidden" name="lang_input" value="{lang}">
+        {old_oid_input}
         
         <div class="cart-bar" id="bar">
             <div onclick="showCart()" style="flex-grow:1;">Total: $<span id="tot">0</span> (<span id="cnt">0</span>)</div>
@@ -259,8 +280,14 @@ def render_frontend(products, t, default_table, lang):
     </div></div>
 
     <script>
-    const P={p_json}, T={t_json};
+    const P={p_json}, T={t_json}, PRELOAD={preload_cart};
     let C=[], cur=null, q=1, opts=[], addP=0;
+
+    // Load Preload Data (如果有的話)
+    if(PRELOAD && PRELOAD.length > 0){{
+        C = PRELOAD;
+        setTimeout(upd, 100);
+    }}
     
     // Render
     let h="", cat="";
@@ -333,7 +360,7 @@ def render_frontend(products, t, default_table, lang):
     </script></body></html>
     """
 
-# --- 4. 下單成功頁面 (包含明細) ---
+# --- 4. 下單成功 ---
 @app.route('/order_success')
 def order_success():
     oid = request.args.get('order_id')
@@ -371,7 +398,7 @@ def order_success():
     </div>
     """
 
-# --- 5. 廚房看板 (日結、作廢顯示) ---
+# --- 5. 廚房看板 ---
 @app.route('/kitchen')
 def kitchen():
     conn = get_db_connection(); cur = conn.cursor()
@@ -410,12 +437,13 @@ def kitchen():
             btns += f"<a href='/kitchen/complete/{o[0]}' class='btn' style='background:#28a745'>完成</a>"
         
         if status != 'Cancelled':
-            btns += f"<a href='/order/cancel/{o[0]}' class='btn' style='background:#dc3545' onclick=\"return confirm('確定作廢？(不計營收)')\">🗑️ 作廢</a>"
+            # 編輯邏輯改變：連結到 /menu 並帶入 edit_oid
+            btns += f"""
+            <a href='/menu?edit_oid={o[0]}' class='btn' style='background:#ffc107;color:black;'>✏️ 編輯重開</a>
+            <a href='/order/cancel/{o[0]}' class='btn' style='background:#dc3545' onclick=\"return confirm('確定作廢？(不計營收)')\">🗑️ 作廢</a>
+            """
         
-        btns += f"""
-            <a href='/print_order/{o[0]}' target='_blank' class='btn' style='background:#17a2b8'>🖨️ 列印</a>
-            <a href='/admin/edit_order/{o[0]}' class='btn' style='background:#ffc107;color:black;'>✏️ 編輯</a>
-        """
+        btns += f"<a href='/print_order/{o[0]}' target='_blank' class='btn' style='background:#17a2b8'>🖨️ 列印</a>"
 
         html += f"""
         <div class="card {cls}">
@@ -461,7 +489,7 @@ def cancel_order(oid):
     c=get_db_connection(); c.cursor().execute("UPDATE orders SET status='Cancelled' WHERE id=%s",(oid,)); c.commit(); c.close()
     return redirect('/kitchen')
 
-# --- 7. 列印 (智慧判斷作廢單) ---
+# --- 7. 列印 ---
 @app.route('/print_order/<int:oid>')
 def print_order(oid):
     conn = get_db_connection(); cur = conn.cursor()
@@ -478,7 +506,6 @@ def print_order(oid):
     title = "❌ 作廢單 (VOID)" if is_void else "結帳單 (Receipt)"
     style = "text-decoration: line-through; color:red;" if is_void else ""
     
-    # 建立票據內容函式
     def mk_ticket(t_name, item_list, show_total=False):
         if not item_list and not show_total: return ""
         h = f"<div class='ticket' style='{style}'><div class='head'><h2>{t_name}</h2><h1>#{seq}</h1><p>Table: {o[1]}</p></div><hr>"
@@ -492,10 +519,7 @@ def print_order(oid):
         return h
 
     body = ""
-    # 1. 顧客/櫃檯聯
     body += mk_ticket(title, items, show_total=True)
-    
-    # 2. 廚房聯 (如果沒作廢才印)
     if not is_void:
         noodles = [i for i in items if '主食' in i.get('category','') or 'Main' in i.get('category','')]
         others = [i for i in items if i not in noodles]
@@ -504,7 +528,7 @@ def print_order(oid):
 
     return f"<html><head><style>body{{font-family:'Courier New';font-size:14px;background:#eee;}} .ticket{{width:58mm;background:white;margin:10px auto;padding:10px;}} .head{{text-align:center;}} .row{{display:flex;justify-content:space-between;margin-top:5px;font-weight:bold;}} .opt{{font-size:12px;color:#555;margin-left:10px;}} .break{{page-break-after:always;}} @media print{{.ticket{{width:100%;box-shadow:none;}}}}</style></head><body onload='window.print()'>{body}</body></html>"
 
-# --- 8. 後台管理 (完整 CRUD) ---
+# --- 8. 後台管理 (支援上下架、清空資料) ---
 @app.route('/admin', methods=['GET', 'POST'])
 def admin_panel():
     conn = get_db_connection(); cur = conn.cursor()
@@ -523,10 +547,20 @@ def admin_panel():
     prods = cur.fetchall()
     conn.close()
     
-    rows = "".join([f"<tr><td>{p[0]}</td><td><img src='{p[4]}' height='50'></td><td>{p[1]}</td><td>{p[2]}</td><td>{p[3]}</td><td><a href='/admin/edit_product/{p[0]}'>編輯</a> | <a href='/admin/delete_product/{p[0]}' onclick='return confirm(\"Del?\")'>刪除</a></td></tr>" for p in prods])
+    rows = ""
+    for p in prods:
+        # p[5] is is_available
+        status_text = "<span style='color:green'>上架中</span>" if p[5] else "<span style='color:red'>已下架</span>"
+        toggle_btn = f"<a href='/admin/toggle_product/{p[0]}' class='button button-outline' style='padding:0 10px;'>切換狀態</a>"
+        rows += f"<tr><td>{p[0]}</td><td><img src='{p[4]}' height='50'></td><td>{p[1]}</td><td>{p[2]}</td><td>{status_text}<br>{toggle_btn}</td><td><a href='/admin/edit_product/{p[0]}'>編輯</a> | <a href='/admin/delete_product/{p[0]}' onclick='return confirm(\"確定永久刪除？\")'>刪除</a></td></tr>"
+
     return f"""
     <!DOCTYPE html><head><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/milligram/1.4.1/milligram.min.css"></head>
-    <body style="padding:20px;"><h1>🔧 後台管理</h1>
+    <body style="padding:20px;">
+    <div style="display:flex;justify-content:space-between;">
+        <h1>🔧 後台管理</h1>
+        <a href="/admin/reset_orders" onclick="return confirm('⚠️ 確定清空所有訂單記錄？此動作無法復原！')" class="button" style="background:red;border-color:red;">⚠️ 清空所有訂單</a>
+    </div>
     <div style="background:#f4f4f4;padding:20px;">
         <form method="POST">
             <div class="row"><div class="column"><label>名稱</label><input type="text" name="name" required><label>Name(EN)</label><input type="text" name="name_en"><label>名前(JP)</label><input type="text" name="name_jp"></div>
@@ -534,13 +568,26 @@ def admin_panel():
             <label>選項 (例: 加麵:+10)</label><input type="text" name="custom_options">
             <button type="submit">新增</button>
         </form>
-    </div><hr><table><thead><tr><th>ID</th><th>圖</th><th>品名</th><th>價</th><th>類</th><th>操作</th></tr></thead><tbody>{rows}</tbody></table></body>
+    </div><hr><table><thead><tr><th>ID</th><th>圖</th><th>品名</th><th>價</th><th>狀態</th><th>操作</th></tr></thead><tbody>{rows}</tbody></table></body>
     """
 
+# 切換上架/下架
+@app.route('/admin/toggle_product/<int:pid>')
+def toggle_product(pid):
+    c=get_db_connection(); c.cursor().execute("UPDATE products SET is_available = NOT is_available WHERE id=%s", (pid,)); c.commit(); c.close()
+    return redirect('/admin')
+
+# 永久刪除
 @app.route('/admin/delete_product/<int:pid>')
 def delete_product(pid):
     c=get_db_connection(); c.cursor().execute("DELETE FROM products WHERE id=%s",(pid,)); c.commit(); c.close()
     return redirect('/admin')
+
+# 清空訂單
+@app.route('/admin/reset_orders')
+def reset_orders():
+    c=get_db_connection(); c.cursor().execute("DELETE FROM orders"); c.commit(); c.close()
+    return "已清空所有訂單。<a href='/admin'>回後台</a>"
 
 @app.route('/admin/edit_product/<int:pid>', methods=['GET','POST'])
 def edit_product(pid):
@@ -572,44 +619,6 @@ def edit_product(pid):
         <label>名前(JP)</label><input type="text" name="name_jp" value="{p[9] or ''}">
         <button type="submit">儲存</button> <a href="/admin" class="button button-outline">取消</a>
     </form></body>
-    """
-
-# --- 9. 訂單編輯 (修復恢復) ---
-@app.route('/admin/edit_order/<int:oid>', methods=['GET', 'POST'])
-def edit_order(oid):
-    conn = get_db_connection(); cur = conn.cursor()
-    
-    if request.method == 'POST':
-        # 接收修改後的 JSON
-        new_json = request.form.get('new_json')
-        try:
-            items = json.loads(new_json)
-            # 重算總價
-            new_total = sum(i['unit_price'] * i['qty'] for i in items)
-            # 重組字串
-            new_str = " + ".join([f"{i['name']} x{i['qty']}" for i in items])
-            
-            cur.execute("UPDATE orders SET content_json=%s, items=%s, total_price=%s WHERE id=%s", (new_json, new_str, new_total, oid))
-            conn.commit()
-            return redirect('/kitchen')
-        except:
-            return "Format Error"
-    
-    cur.execute("SELECT * FROM orders WHERE id=%s", (oid,))
-    o = cur.fetchone()
-    conn.close()
-    
-    return f"""
-    <!DOCTYPE html><head><meta name="viewport" content="width=device-width"><link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/milligram/1.4.1/milligram.min.css"></head>
-    <body style="padding:20px;">
-        <h3>編輯訂單 #{o[7]:03d}</h3>
-        <p>請小心編輯 JSON 內容 (刪除整行即可刪除品項)</p>
-        <form method="POST">
-            <textarea name="new_json" style="height:300px;">{o[8]}</textarea>
-            <button type="submit">更新訂單</button>
-            <a href="/kitchen" class="button button-outline">取消</a>
-        </form>
-    </body>
     """
 
 # --- 防休眠 ---
