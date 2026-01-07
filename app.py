@@ -49,7 +49,7 @@ def load_translations():
         }
     }
 
-# --- 1. 資料庫初始化 (結構更新) ---
+# --- 1. 資料庫初始化 ---
 @app.route('/init_db')
 def init_db():
     conn = get_db_connection()
@@ -107,13 +107,11 @@ def init_db():
     finally:
         cur.close(); conn.close()
 
-# --- 2. 首頁與語言選擇 (修復 404) ---
+# --- 2. 首頁與語言選擇 ---
 @app.route('/')
 def language_select():
     tbl = request.args.get('table', '')
-    # 修復：正確的 Query String 拼接
     base_qs = f"&table={tbl}" if tbl else ""
-    
     return f"""
     <!DOCTYPE html>
     <html><head><title>Language</title><meta name="viewport" content="width=device-width, initial-scale=1">
@@ -127,7 +125,7 @@ def language_select():
     </body></html>
     """
 
-# --- 3. 點餐頁面 (支援編輯帶入) ---
+# --- 3. 點餐頁面 ---
 @app.route('/menu', methods=['GET', 'POST'])
 def menu():
     lang = request.args.get('lang', 'zh')
@@ -135,14 +133,13 @@ def menu():
     conn = get_db_connection()
     cur = conn.cursor()
 
-    # --- 提交訂單 (POST) ---
     if request.method == 'POST':
         try:
             table_number = request.form.get('table_number')
             cart_json = request.form.get('cart_data')
             need_receipt = request.form.get('need_receipt') == 'on'
             lang_post = request.form.get('lang_input', 'zh')
-            old_order_id = request.form.get('old_order_id') # 取得舊單 ID
+            old_order_id = request.form.get('old_order_id')
             
             if not cart_json or cart_json == '[]': return "Empty Cart"
             
@@ -160,18 +157,16 @@ def menu():
 
             items_str = " + ".join(display_list)
             
-            # 每日流水號
             cur.execute("SELECT COUNT(*) FROM orders WHERE created_at >= CURRENT_DATE")
             new_seq = cur.fetchone()[0] + 1
             
-            # 1. 建立新單
             cur.execute("""
                 INSERT INTO orders (table_number, items, total_price, lang, daily_seq, content_json, need_receipt)
                 VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id
             """, (table_number, items_str, total_price, lang_post, new_seq, cart_json, need_receipt))
             oid = cur.fetchone()[0]
             
-            # 2. 如果是編輯模式 (有 old_order_id)，作廢舊單
+            # 廚房編輯模式：作廢舊單
             if old_order_id:
                 cur.execute("UPDATE orders SET status='Cancelled' WHERE id=%s", (old_order_id,))
             
@@ -184,20 +179,18 @@ def menu():
         finally:
             cur.close(); conn.close()
 
-    # --- 顯示菜單 (GET) ---
+    # GET
     url_table = request.args.get('table', '')
-    edit_oid = request.args.get('edit_oid') # 檢查是否為編輯模式
+    edit_oid = request.args.get('edit_oid')
     preload_cart = "[]"
     
-    # 如果是編輯模式，撈取舊資料
     if edit_oid:
         cur.execute("SELECT table_number, content_json FROM orders WHERE id=%s", (edit_oid,))
         old_data = cur.fetchone()
         if old_data:
-            if not url_table: url_table = old_data[0] # 帶入舊桌號
-            preload_cart = old_data[1] # 帶入購物車 JSON
+            if not url_table: url_table = old_data[0]
+            preload_cart = old_data[1]
 
-    # 只撈取上架商品 (is_available=TRUE)
     cur.execute("SELECT * FROM products WHERE is_available=TRUE ORDER BY sort_order ASC, id ASC")
     products = cur.fetchall()
     cur.close(); conn.close()
@@ -283,13 +276,11 @@ def render_frontend(products, t, default_table, lang, preload_cart, edit_oid):
     const P={p_json}, T={t_json}, PRELOAD={preload_cart};
     let C=[], cur=null, q=1, opts=[], addP=0;
 
-    // Load Preload Data (如果有的話)
     if(PRELOAD && PRELOAD.length > 0){{
         C = PRELOAD;
         setTimeout(upd, 100);
     }}
     
-    // Render
     let h="", cat="";
     P.forEach(p=>{{
         if(p.category!=cat) {{ h+=`<div style='padding:10px;font-weight:bold;color:#666'>${{p.category}}</div>`; cat=p.category; }}
@@ -437,7 +428,6 @@ def kitchen():
             btns += f"<a href='/kitchen/complete/{o[0]}' class='btn' style='background:#28a745'>完成</a>"
         
         if status != 'Cancelled':
-            # 編輯邏輯改變：連結到 /menu 並帶入 edit_oid
             btns += f"""
             <a href='/menu?edit_oid={o[0]}' class='btn' style='background:#ffc107;color:black;'>✏️ 編輯重開</a>
             <a href='/order/cancel/{o[0]}' class='btn' style='background:#dc3545' onclick=\"return confirm('確定作廢？(不計營收)')\">🗑️ 作廢</a>
@@ -478,7 +468,7 @@ def daily_report():
     </body>
     """
 
-# --- 6. 狀態變更邏輯 ---
+# --- 6. 狀態變更 ---
 @app.route('/kitchen/complete/<int:oid>')
 def complete_order(oid):
     c=get_db_connection(); c.cursor().execute("UPDATE orders SET status='Completed' WHERE id=%s",(oid,)); c.commit(); c.close()
@@ -489,7 +479,7 @@ def cancel_order(oid):
     c=get_db_connection(); c.cursor().execute("UPDATE orders SET status='Cancelled' WHERE id=%s",(oid,)); c.commit(); c.close()
     return redirect('/kitchen')
 
-# --- 7. 列印 ---
+# --- 7. 列印 (優化版：數量獨立欄位) ---
 @app.route('/print_order/<int:oid>')
 def print_order(oid):
     conn = get_db_connection(); cur = conn.cursor()
@@ -506,15 +496,40 @@ def print_order(oid):
     title = "❌ 作廢單 (VOID)" if is_void else "結帳單 (Receipt)"
     style = "text-decoration: line-through; color:red;" if is_void else ""
     
+    # 建立票據內容 (CSS Grid Layout)
     def mk_ticket(t_name, item_list, show_total=False):
         if not item_list and not show_total: return ""
-        h = f"<div class='ticket' style='{style}'><div class='head'><h2>{t_name}</h2><h1>#{seq}</h1><p>Table: {o[1]}</p></div><hr>"
+        
+        # Header
+        h = f"""
+        <div class='ticket' style='{style}'>
+            <div class='head'><h2>{t_name}</h2><h1>#{seq}</h1><p>Table: {o[1]}</p></div>
+            <hr>
+            <div class='row header-row'>
+                <span class='col-qty'>Qty</span>
+                <span class='col-name'>Item</span>
+                <span class='col-price'>Amt</span>
+            </div>
+            <hr>
+        """
+        
         t_price = 0
         for i in item_list:
             t_price += i['unit_price']*i['qty']
-            h += f"<div class='row'><span>{i['qty']} x {i['name']}</span><span>${i['unit_price']*i['qty']}</span></div>"
-            if i['options']: h+=f"<div class='opt'>({','.join(i['options'])})</div>"
-        if show_total: h += f"<hr><div style='text-align:right;font-size:1.2em;'>Total: ${t_price}</div>"
+            opt_str = f"<br><small>({','.join(i['options'])})</small>" if i['options'] else ""
+            
+            # Row Layout: [Qty] [Name+Opts] [Price]
+            h += f"""
+            <div class='row'>
+                <div class='col-qty'>{i['qty']}</div>
+                <div class='col-name'>{i['name']}{opt_str}</div>
+                <div class='col-price'>${i['unit_price']*i['qty']}</div>
+            </div>
+            """
+            
+        if show_total: 
+            h += f"<hr><div style='text-align:right;font-size:1.4em;font-weight:bold;'>Total: ${t_price}</div>"
+            
         h += "</div><div class='break'></div>"
         return h
 
@@ -526,9 +541,28 @@ def print_order(oid):
         body += mk_ticket("🍜 麵區工單", noodles)
         body += mk_ticket("🍲 綜合工單", others)
 
-    return f"<html><head><style>body{{font-family:'Courier New';font-size:14px;background:#eee;}} .ticket{{width:58mm;background:white;margin:10px auto;padding:10px;}} .head{{text-align:center;}} .row{{display:flex;justify-content:space-between;margin-top:5px;font-weight:bold;}} .opt{{font-size:12px;color:#555;margin-left:10px;}} .break{{page-break-after:always;}} @media print{{.ticket{{width:100%;box-shadow:none;}}}}</style></head><body onload='window.print()'>{body}</body></html>"
+    return f"""
+    <html><head><style>
+        body{{font-family:'Courier New', monospace; font-size:14px; background:#eee; margin:0;}} 
+        .ticket{{width:58mm; background:white; margin:10px auto; padding:15px; box-sizing:border-box;}} 
+        .head{{text-align:center;}} 
+        
+        /* Flexbox Layout for Rows */
+        .row{{display:flex; align-items:flex-start; margin-bottom:8px;}}
+        .header-row{{font-weight:bold; border-bottom:1px solid black; padding-bottom:5px;}}
+        
+        /* Column Widths */
+        .col-qty{{width:30px; text-align:center; font-weight:bold; font-size:1.2em; flex-shrink:0;}}
+        .col-name{{flex-grow:1; padding-left:5px; word-wrap:break-word;}}
+        .col-price{{width:50px; text-align:right; flex-shrink:0;}}
+        
+        .break{{page-break-after:always;}} 
+        @media print{{.ticket{{width:100%; margin:0; box-shadow:none;}}}}
+    </style></head>
+    <body onload='window.print()'>{body}</body></html>
+    """
 
-# --- 8. 後台管理 (支援上下架、清空資料) ---
+# --- 8. 後台管理 ---
 @app.route('/admin', methods=['GET', 'POST'])
 def admin_panel():
     conn = get_db_connection(); cur = conn.cursor()
@@ -549,7 +583,6 @@ def admin_panel():
     
     rows = ""
     for p in prods:
-        # p[5] is is_available
         status_text = "<span style='color:green'>上架中</span>" if p[5] else "<span style='color:red'>已下架</span>"
         toggle_btn = f"<a href='/admin/toggle_product/{p[0]}' class='button button-outline' style='padding:0 10px;'>切換狀態</a>"
         rows += f"<tr><td>{p[0]}</td><td><img src='{p[4]}' height='50'></td><td>{p[1]}</td><td>{p[2]}</td><td>{status_text}<br>{toggle_btn}</td><td><a href='/admin/edit_product/{p[0]}'>編輯</a> | <a href='/admin/delete_product/{p[0]}' onclick='return confirm(\"確定永久刪除？\")'>刪除</a></td></tr>"
@@ -571,19 +604,16 @@ def admin_panel():
     </div><hr><table><thead><tr><th>ID</th><th>圖</th><th>品名</th><th>價</th><th>狀態</th><th>操作</th></tr></thead><tbody>{rows}</tbody></table></body>
     """
 
-# 切換上架/下架
 @app.route('/admin/toggle_product/<int:pid>')
 def toggle_product(pid):
     c=get_db_connection(); c.cursor().execute("UPDATE products SET is_available = NOT is_available WHERE id=%s", (pid,)); c.commit(); c.close()
     return redirect('/admin')
 
-# 永久刪除
 @app.route('/admin/delete_product/<int:pid>')
 def delete_product(pid):
     c=get_db_connection(); c.cursor().execute("DELETE FROM products WHERE id=%s",(pid,)); c.commit(); c.close()
     return redirect('/admin')
 
-# 清空訂單
 @app.route('/admin/reset_orders')
 def reset_orders():
     c=get_db_connection(); c.cursor().execute("DELETE FROM orders"); c.commit(); c.close()
@@ -621,7 +651,6 @@ def edit_product(pid):
     </form></body>
     """
 
-# --- 防休眠 ---
 def keep_alive():
     while True:
         try: urllib.request.urlopen("http://127.0.0.1:10000/")
