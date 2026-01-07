@@ -124,23 +124,33 @@ def init_db():
 # --- 2. 首頁與語言選擇 ---
 @app.route('/')
 def language_select():
+    # 1. 嘗試從 QR Code 的網址中抓取 table 參數
     tbl = request.args.get('table', '')
-    base_qs = f"&table={tbl}" if tbl else ""
+    
+    # 2. 如果有桌號，就把它加到連結參數中 (例如 &table=1)
+    # 這樣點擊中文時，網址就會變成 /menu?lang=zh&table=1
+    qs_table = f"&table={tbl}" if tbl else ""
+
     return f"""
     <!DOCTYPE html>
-    <html><head><title>Language</title><meta name="viewport" content="width=device-width, initial-scale=1">
-    <style>body{{font-family:sans-serif;display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;margin:0;background:#f4f7f6;}}
-    .btn{{width:200px;padding:15px;margin:10px;text-align:center;text-decoration:none;font-size:1.2em;border-radius:50px;color:white;box-shadow:0 4px 6px rgba(0,0,0,0.1);}}
-    .zh{{background:#e91e63;}} .en{{background:#007bff;}} .jp{{background:#ff9800;}} .kr{{background:#20c997;}}</style></head>
-    <body><h2>Select Language</h2>
-    <a href="/menu?lang=zh{base_qs}" class="btn zh">中文</a>
-    <a href="/menu?lang=en{base_qs}" class="btn en">English</a>
-    <a href="/menu?lang=jp{base_qs}" class="btn jp">日本語</a>
-    <a href="/menu?lang=kr{base_qs}" class="btn kr">한국어</a>
+    <html><head><title>Select Language</title><meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body{{font-family:sans-serif;display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;margin:0;background:#f4f7f6;}}
+        h2{{color:#333;margin-bottom:30px;}}
+        .btn{{width:200px;padding:15px;margin:10px;text-align:center;text-decoration:none;font-size:1.2em;border-radius:50px;color:white;box-shadow:0 4px 6px rgba(0,0,0,0.1);transition:transform 0.1s;}}
+        .btn:active{{transform:scale(0.98);}}
+        .zh{{background:#e91e63;}} .en{{background:#007bff;}} .jp{{background:#ff9800;}} .kr{{background:#20c997;}}
+    </style></head>
+    <body>
+        <h2>Select Language / 請選擇語言</h2>
+        <a href="/menu?lang=zh{qs_table}" class="btn zh">中文</a>
+        <a href="/menu?lang=en{qs_table}" class="btn en">English</a>
+        <a href="/menu?lang=jp{qs_table}" class="btn jp">日本語</a>
+        <a href="/menu?lang=kr{qs_table}" class="btn kr">한국어</a>
     </body></html>
     """
 
-# --- 3. 點餐頁面 ---
+# --- 3. 點餐頁面 (完整版) ---
 @app.route('/menu', methods=['GET', 'POST'])
 def menu():
     lang = request.args.get('lang', 'zh')
@@ -148,6 +158,7 @@ def menu():
     conn = get_db_connection()
     cur = conn.cursor()
 
+    # --- 處理訂單送出 (POST) ---
     if request.method == 'POST':
         try:
             table_number = request.form.get('table_number')
@@ -172,10 +183,11 @@ def menu():
 
             items_str = " + ".join(display_list)
             
-            # 每日流水號
+            # 每日流水號生成
             cur.execute("SELECT COUNT(*) FROM orders WHERE created_at >= CURRENT_DATE")
             new_seq = cur.fetchone()[0] + 1
             
+            # 寫入資料庫
             cur.execute("""
                 INSERT INTO orders (table_number, items, total_price, lang, daily_seq, content_json, need_receipt)
                 VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id
@@ -183,11 +195,11 @@ def menu():
             
             oid = cur.fetchone()[0]
             
-            # 編輯模式：作廢舊單
+            # 如果是編輯模式，將舊單作廢
             if old_order_id:
                 cur.execute("UPDATE orders SET status='Cancelled' WHERE id=%s", (old_order_id,))
                 conn.commit()
-                # 編輯後關閉分頁
+                # 編輯完成後關閉視窗
                 return "<script>window.close();</script>"
             
             conn.commit()
@@ -199,19 +211,24 @@ def menu():
         finally:
             cur.close(); conn.close()
 
-    # GET Menu - 明確指定欄位讀取
+    # --- 顯示菜單 (GET) ---
+    
+    # [關鍵修改] 1. 接收網址傳來的桌號參數 (例如 ?table=1)
     url_table = request.args.get('table', '')
+    
     edit_oid = request.args.get('edit_oid')
     preload_cart = "[]"
     
+    # 如果是「編輯訂單」模式
     if edit_oid:
         cur.execute("SELECT table_number, content_json FROM orders WHERE id=%s", (edit_oid,))
         old_data = cur.fetchone()
         if old_data:
+            # 如果是編輯舊單，優先使用舊單的桌號 (除非網址有強制指定)
             if not url_table: url_table = old_data[0]
             preload_cart = old_data[1]
 
-    # 明確欄位順序: id, name, price, category, image_url, is_available, custom_options, sort_order, name_en, name_jp, name_kr, opt_en, opt_jp, opt_kr, print_cat
+    # 讀取所有上架產品
     cur.execute("""
         SELECT id, name, price, category, image_url, is_available, custom_options, sort_order,
                name_en, name_jp, name_kr, custom_options_en, custom_options_jp, custom_options_kr, print_category
@@ -220,14 +237,15 @@ def menu():
     products = cur.fetchall()
     cur.close(); conn.close()
     
+    # 整理產品資料與語言
     p_list = []
     for p in products:
-        # p[0]=id, p[1]=name, p[2]=price, p[3]=cat, p[4]=img, p[6]=opt, p[8]=en, p[9]=jp, p[10]=kr, p[11]=opt_en, p[12]=opt_jp, p[13]=opt_kr, p[14]=print
         name_zh = p[1]
         opts_zh = p[6].split(',') if p[6] else []
         d_name = p[1]
         d_opts_str = p[6]
 
+        # 根據選擇的語言切換顯示名稱
         if lang == 'en':
             if p[8]: d_name = p[8]
             if p[11]: d_opts_str = p[11]
@@ -243,14 +261,16 @@ def menu():
 
         p_list.append({
             'id': p[0], 
-            'name': d_name, 'name_zh': name_zh,       
+            'name': d_name, 'name_zh': name_zh,        
             'price': p[2], 'category': p[3],
             'image_url': p[4] if p[4] else '', 
             'custom_options': d_opts, 'custom_options_zh': opts_zh,
             'print_category': print_cat
         })
 
+    # [關鍵修改] 2. 將 url_table 傳遞給前端渲染函數
     return render_frontend(p_list, t, url_table, lang, preload_cart, edit_oid)
+
 
 def render_frontend(products, t, default_table, lang, preload_cart, edit_oid):
     p_json = json.dumps(products)
@@ -258,6 +278,11 @@ def render_frontend(products, t, default_table, lang, preload_cart, edit_oid):
     old_oid_input = f'<input type="hidden" name="old_order_id" value="{edit_oid}">' if edit_oid else ''
     edit_notice = f'<div style="background:#fff3cd;padding:10px;color:#856404;text-align:center;">⚠️ 正在編輯 #{edit_oid}</div>' if edit_oid else ''
     ai_badge = f"<div style='text-align:center;color:#999;font-size:0.8em;padding:10px;'>🤖 {t.get('ai_note', 'Translated by AI')}</div>"
+
+    # [可選] 如果桌號是自動帶入的，是否要鎖定不讓客人修改？
+    # 如果想鎖定，請把下一行解鎖：
+    # readonly_attr = "readonly style='background:#eee;'" if default_table else ""
+    readonly_attr = "" 
 
     return f"""
     <!DOCTYPE html>
@@ -279,8 +304,11 @@ def render_frontend(products, t, default_table, lang, preload_cart, edit_oid):
     <div class="header">
         {edit_notice}
         <h3>{t['welcome']}</h3>
-        <input type="text" id="visible_table" value="{default_table}" placeholder="{t['table_placeholder']}" style="padding:10px;width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:5px;">
+        
+        <input type="text" id="visible_table" value="{default_table}" placeholder="{t['table_placeholder']}" 
+               style="padding:10px;width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:5px;font-size:1.1em;" {readonly_attr}>
     </div>
+    
     <div id="list"></div>
     {ai_badge}
     
@@ -378,7 +406,7 @@ def render_frontend(products, t, default_table, lang, preload_cart, edit_oid):
 
         C.push({{
             id: cur.id, 
-            name: cur.name, name_zh: cur.name_zh,     
+            name: cur.name, name_zh: cur.name_zh,      
             unit_price: cur.price + addP, 
             qty: q, 
             options: finalOpts, options_zh: finalOptsZH,  
@@ -406,6 +434,8 @@ def render_frontend(products, t, default_table, lang, preload_cart, edit_oid):
         document.getElementById('c-list').innerHTML=h;
         document.getElementById('cart-m').style.display='flex';
     }}
+    
+    // [關鍵] 結帳時，將使用者在 visible_table 輸入的內容填入隱藏的表單欄位 tbl_input
     function sub(){{
         let t = document.getElementById('visible_table').value;
         if(!t) return alert(T.table_placeholder);
