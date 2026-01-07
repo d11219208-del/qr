@@ -885,7 +885,7 @@ def edit_product(pid):
 # --- 防休眠 ---
 def keep_alive():
     while True:
-        try: urllib.request.urlopen("http://127.0.0.1:10000/")
+        try: urllib.request.urlopen("https://qr-mbdv.onrender.com")
         except: pass
         time.sleep(800)
 threading.Thread(target=keep_alive, daemon=True).start()
