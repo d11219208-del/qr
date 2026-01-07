@@ -760,25 +760,30 @@ def print_order(oid):
 
     return f"<html><head><style>body{{font-family:'Courier New', 'Microsoft JhengHei', sans-serif;font-size:14px;background:#eee;}} .ticket{{width:58mm;background:white;margin:10px auto;padding:10px;}} .head{{text-align:center;}} .row{{display:flex;justify-content:space-between;margin-top:5px;font-weight:bold;}} .opt{{font-size:12px;color:#555;margin-left:20px;}} .break{{page-break-after:always;}} small{{color:#666;font-size:0.8em;}} @media print{{.ticket{{width:100%;box-shadow:none;}} body{{background:white;}}}}</style></head><body onload='setTimeout(function(){{window.print();}}, 500);'>{body}</body></html>"
 
-# --- 9. 後台管理 (含 Excel 匯入匯出) ---
+# --- 9. 後台管理 (含 Excel 匯入匯出 + 排序功能) ---
 @app.route('/admin', methods=['GET', 'POST'])
 def admin_panel():
     conn = get_db_connection(); cur = conn.cursor()
     
-    # --- 處理手動新增產品 ---
+    # --- [POST] 手動新增產品 ---
     if request.method == 'POST':
         try:
+            # 處理排序欄位 (預設為 0)
+            sort_val = request.form.get('sort_order')
+            sort_order = int(sort_val) if sort_val and sort_val.strip() else 0
+
             cur.execute("""
                 INSERT INTO products (name, price, category, image_url, custom_options, 
                 name_en, name_jp, name_kr,
                 custom_options_en, custom_options_jp, custom_options_kr,
-                print_category)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                print_category, sort_order)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """, (
                 request.form.get('name'), request.form.get('price'), request.form.get('category'), request.form.get('image_url'), request.form.get('custom_options'),
                 request.form.get('name_en'), request.form.get('name_jp'), request.form.get('name_kr'),
                 request.form.get('custom_options_en'), request.form.get('custom_options_jp'), request.form.get('custom_options_kr'),
-                request.form.get('print_category', 'Noodle')
+                request.form.get('print_category', 'Noodle'),
+                sort_order
             ))
             conn.commit()
             return redirect('/admin')
@@ -787,14 +792,20 @@ def admin_panel():
         finally:
             cur.close(); conn.close()
     
-    # --- 讀取現有產品列表 ---
-    cur.execute("SELECT id, name, price, category, image_url, is_available, custom_options, sort_order, name_en, name_jp, name_kr, custom_options_en, custom_options_jp, custom_options_kr, print_category FROM products ORDER BY id DESC")
+    # --- [GET] 讀取產品列表 (依分類 -> 排序 -> ID 排序) ---
+    # 注意：這裡 SQL 加入了 sort_order ASC
+    cur.execute("""
+        SELECT id, name, price, category, image_url, is_available, custom_options, sort_order, 
+               name_en, name_jp, name_kr, custom_options_en, custom_options_jp, custom_options_kr, print_category 
+        FROM products 
+        ORDER BY category DESC, sort_order ASC, id DESC
+    """)
     prods = cur.fetchall()
     conn.close()
     
     rows = ""
     for p in prods:
-        # p[0]=id, p[1]=name, p[2]=price, p[3]=cat, p[5]=avail, p[14]=print
+        # p[0]=id, p[1]=name, p[2]=price, p[3]=cat, p[5]=avail, p[7]=sort_order, p[14]=print_cat
         status_text = "<span style='color:green'>上架</span>" if p[5] else "<span style='color:red'>下架</span>"
         toggle = f"<a href='/admin/toggle_product/{p[0]}'>切換</a>"
         p_cat = p[14] if len(p)>14 and p[14] else 'Noodle'
@@ -802,7 +813,10 @@ def admin_panel():
         rows += f"""
         <tr>
             <td>{p[0]}</td>
-            <td>{p[1]}</td>
+            <td>
+                <span style="background:#eee;color:#555;padding:2px 5px;border-radius:3px;font-size:0.8em;">序: {p[7]}</span><br>
+                <b>{p[1]}</b>
+            </td>
             <td>{p[2]}</td>
             <td>{p[3]} / {p_cat}</td>
             <td>{status_text} {toggle}</td>
@@ -831,7 +845,7 @@ def admin_panel():
                 <input type="file" name="file" accept=".xlsx" required style="margin-right:10px; margin-bottom:10px;">
                 <button type="submit" onclick="return confirm('⚠️ 匯入將直接新增產品到資料庫，確定嗎？')">上傳並新增</button>
             </div>
-            <small style="color:#666;">說明：請先「匯出 Excel」作為範本。系統會保留舊資料，並將 Excel 中的內容新增為新產品 (不會覆蓋舊 ID)。</small>
+            <small style="color:#666;">說明：請先「匯出 Excel」作為範本。系統會保留舊資料，並將 Excel 中的內容新增為新產品。Excel 中可包含 'sort_order' 欄位來設定排序。</small>
         </form>
     </div>
 
@@ -848,11 +862,20 @@ def admin_panel():
                 <div class="column">
                     <label>價格</label><input type="number" name="price" required>
                     <label>分類 (Category)</label><input type="text" name="category" required>
-                    <label>出單區域 (Print Category)</label>
-                    <select name="print_category">
-                        <option value="Noodle">麵區 (Noodle)</option>
-                        <option value="Soup">湯區 (Soup)</option>
-                    </select>
+                    
+                    <div class="row">
+                        <div class="column">
+                             <label>出單區域</label>
+                             <select name="print_category">
+                                <option value="Noodle">麵區 (Noodle)</option>
+                                <option value="Soup">湯區 (Soup)</option>
+                             </select>
+                        </div>
+                        <div class="column">
+                            <label>排序 (數字小在前面)</label>
+                            <input type="number" name="sort_order" value="0">
+                        </div>
+                    </div>
                 </div>
             </div>
             <label>圖片 URL</label><input type="text" name="image_url">
@@ -870,29 +893,28 @@ def admin_panel():
     
     <hr>
     <table>
-        <thead><tr><th>ID</th><th>品名</th><th>價</th><th>類/區</th><th>狀態</th><th>操作</th></tr></thead>
+        <thead><tr><th>ID</th><th>品名 / 排序</th><th>價</th><th>類/區</th><th>狀態</th><th>操作</th></tr></thead>
         <tbody>{rows}</tbody>
     </table>
     </body>
     """
 
-# --- Excel 匯出路由 ---
+# --- Excel 匯出路由 (含 sort_order) ---
 @app.route('/admin/export_excel')
 def export_excel():
     try:
         conn = get_db_connection()
-        # 選取所有需要的欄位
+        # 選取所有欄位包含 sort_order
         sql = """
             SELECT name, price, category, image_url, custom_options, 
                    name_en, name_jp, name_kr, 
                    custom_options_en, custom_options_jp, custom_options_kr, 
                    print_category, is_available, sort_order
-            FROM products ORDER BY id ASC
+            FROM products ORDER BY category DESC, sort_order ASC, id ASC
         """
         df = pd.read_sql(sql, conn)
         conn.close()
 
-        # 建立 Excel 檔案
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
             df.to_excel(writer, index=False, sheet_name='Menu')
@@ -903,7 +925,7 @@ def export_excel():
     except Exception as e:
         return f"Export Error: {e}"
 
-# --- Excel 匯入路由 ---
+# --- Excel 匯入路由 (含 sort_order) ---
 @app.route('/admin/import_excel', methods=['POST'])
 def import_excel():
     if 'file' not in request.files: return "No file"
@@ -911,9 +933,8 @@ def import_excel():
     if file.filename == '': return "No selected file"
 
     try:
-        # 讀取 Excel
         df = pd.read_excel(file)
-        df = df.fillna('') # 將空值轉為空字串，避免資料庫錯誤
+        df = df.fillna('') 
         
         conn = get_db_connection()
         cur = conn.cursor()
@@ -940,6 +961,7 @@ def import_excel():
                 row.get('custom_options_kr'),
                 row.get('print_category', 'Noodle'),
                 True if str(row.get('is_available')).lower() in ['true', '1', 't', 'yes'] else False,
+                # 讀取 Excel 中的 sort_order，若無則預設 0
                 int(row.get('sort_order', 0)) if row.get('sort_order') != '' else 0
             ))
             
@@ -950,7 +972,7 @@ def import_excel():
     except Exception as e:
         return f"Import Failed: {e}"
 
-# --- 其他後台操作 (切換狀態、刪除、清空訂單、編輯) ---
+# --- 其他後台操作 ---
 @app.route('/admin/toggle_product/<int:pid>')
 def toggle_product(pid):
     c=get_db_connection(); c.cursor().execute("UPDATE products SET is_available = NOT is_available WHERE id=%s", (pid,)); c.commit(); c.close()
@@ -966,22 +988,30 @@ def reset_orders():
     c=get_db_connection(); c.cursor().execute("TRUNCATE TABLE orders RESTART IDENTITY"); c.commit(); c.close()
     return redirect('/admin')
 
+# --- 編輯產品 (含 sort_order) ---
 @app.route('/admin/edit_product/<int:pid>', methods=['GET','POST'])
 def edit_product(pid):
     conn = get_db_connection(); cur = conn.cursor()
+    
+    # [POST] 更新產品
     if request.method=='POST':
         try:
+            sort_val = request.form.get('sort_order')
+            sort_order = int(sort_val) if sort_val and sort_val.strip() else 0
+
             cur.execute("""
                 UPDATE products SET name=%s, price=%s, category=%s, image_url=%s, custom_options=%s,
                 name_en=%s, name_jp=%s, name_kr=%s,
                 custom_options_en=%s, custom_options_jp=%s, custom_options_kr=%s,
-                print_category=%s
+                print_category=%s, sort_order=%s
                 WHERE id=%s
             """, (
                 request.form.get('name'), int(request.form.get('price', 0)), request.form.get('category'), request.form.get('image_url'), request.form.get('custom_options'),
                 request.form.get('name_en'), request.form.get('name_jp'), request.form.get('name_kr'),
                 request.form.get('custom_options_en'), request.form.get('custom_options_jp'), request.form.get('custom_options_kr'),
-                request.form.get('print_category'), pid
+                request.form.get('print_category'), 
+                sort_order,
+                pid
             ))
             conn.commit()
             return redirect('/admin')
@@ -990,6 +1020,7 @@ def edit_product(pid):
         finally:
             conn.close()
     
+    # [GET] 顯示編輯表單
     cur.execute("""
         SELECT id, name, price, category, image_url, is_available, custom_options, sort_order, 
                name_en, name_jp, name_kr, custom_options_en, custom_options_jp, custom_options_kr, print_category
@@ -1001,13 +1032,21 @@ def edit_product(pid):
     def v(val): return val if val else ""
     sel_n = 'selected' if (p[14] == 'Noodle') else ''
     sel_s = 'selected' if (p[14] == 'Soup') else ''
+    
+    # 取得目前的排序值，若無則為 0
+    current_sort = p[7] if p[7] is not None else 0
 
     return f"""
     <!DOCTYPE html><head><meta name="viewport" content="width=device-width"><link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/milligram/1.4.1/milligram.min.css"></head>
     <body style="padding:20px;"><h3>編輯 #{p[0]}</h3>
     <form method="POST">
         <label>名稱</label><input type="text" name="name" value="{v(p[1])}">
-        <label>價格</label><input type="number" name="price" value="{p[2]}">
+        
+        <div class="row">
+            <div class="column"><label>價格</label><input type="number" name="price" value="{p[2]}"></div>
+            <div class="column"><label>排序 (數字小在前面)</label><input type="number" name="sort_order" value="{current_sort}"></div>
+        </div>
+
         <label>分類</label><input type="text" name="category" value="{v(p[3])}">
         <label>出單區域</label>
         <select name="print_category">
