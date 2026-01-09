@@ -179,6 +179,7 @@ def menu():
                 price = int(float(item['unit_price']))
                 qty = int(float(item['qty']))
                 total_price += (price * qty)
+                # 處理顯示名稱與選項字串供資料庫備份使用
                 n_field = f"name_{final_lang}" if f"name_{final_lang}" in item else "name_zh"
                 n_display = item.get(n_field, item.get('name_zh'))
                 opt_key = f"options_{final_lang}" if f"options_{final_lang}" in item else "options_zh"
@@ -209,7 +210,7 @@ def menu():
         finally:
             cur.close(); conn.close()
 
-    # --- GET 請求部分 (同原程式碼) ---
+    # --- GET 請求部分 ---
     url_table = request.args.get('table', '')
     edit_oid = request.args.get('edit_oid')
     preload_cart = "[]"
@@ -251,7 +252,7 @@ def render_frontend(products, t, default_table, lang, preload_cart, edit_oid):
     <!DOCTYPE html>
     <html><head><title>{t['title']}</title><meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=0">
     <style>
-        body{{font-family:'Microsoft JhengHei',sans-serif;margin:0;padding-bottom:100px;background:#f8f9fa;}}
+        body{{font-family:'Microsoft JhengHei',sans-serif;margin:0;padding-bottom:120px;background:#f8f9fa;}}
         .header{{background:white;padding:15px;position:sticky;top:0;z-index:99;box-shadow:0 2px 5px rgba(0,0,0,0.1);}}
         .menu-item{{background:white;margin:10px;padding:10px;border-radius:10px;display:flex;box-shadow:0 2px 4px rgba(0,0,0,0.05);position:relative;}}
         .menu-img{{width:80px;height:80px;border-radius:8px;object-fit:cover;background:#eee;}}
@@ -259,7 +260,14 @@ def render_frontend(products, t, default_table, lang, preload_cart, edit_oid):
         .add-btn{{background:#28a745;color:white;border:none;padding:5px 15px;border-radius:15px;align-self:flex-end;}}
         .sold-out {{ filter: grayscale(1); opacity: 0.6; pointer-events: none; }}
         .sold-out-badge {{ position: absolute; top: 10px; right: 10px; background: rgba(0,0,0,0.7); color: white; padding: 2px 8px; border-radius: 5px; font-size: 0.8em; font-weight: bold; z-index: 5; }}
-        .cart-bar{{position:fixed;bottom:0;width:100%;background:white;padding:15px;box-shadow:0 -2px 10px rgba(0,0,0,0.1);display:none;justify-content:space-between;align-items:center;box-sizing:border-box;z-index:100;}}
+        
+        /* 購物車底列佈局 */
+        .cart-bar{{position:fixed;bottom:0;width:100%;background:white;padding:10px 15px;box-shadow:0 -2px 10px rgba(0,0,0,0.1);display:none;flex-direction:column;box-sizing:border-box;z-index:100;}}
+        .cart-info{{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;font-weight:bold;}}
+        .cart-btns{{display:flex;gap:10px;}}
+        .btn-cart{{flex:1;background:#ff9800;color:white;border:none;padding:12px;border-radius:10px;font-size:1em;cursor:pointer;font-weight:bold;}}
+        .btn-sub{{flex:1;background:#28a745;color:white;border:none;padding:12px;border-radius:10px;font-size:1em;cursor:pointer;font-weight:bold;}}
+        
         .modal{{position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);display:none;z-index:200;justify-content:center;align-items:flex-end;}}
         .modal-c{{background:white;width:100%;padding:20px;border-radius:20px 20px 0 0;max-height:80vh;overflow-y:auto;}}
         .opt-tag{{border:1px solid #ddd;padding:5px 10px;border-radius:15px;margin:3px;display:inline-block;cursor:pointer;}}
@@ -278,12 +286,19 @@ def render_frontend(products, t, default_table, lang, preload_cart, edit_oid):
         <input type="hidden" name="table_number" id="tbl_input">
         <input type="hidden" name="lang_input" value="{lang}">
         {old_oid_input}
+        
         <div class="cart-bar" id="bar">
-            <div onclick="showCart()" style="flex-grow:1;">Total: $<span id="tot">0</span> (<span id="cnt">0</span>)</div>
-            <label style="margin-right:10px;"><input type="checkbox" name="need_receipt" checked> {t['print_receipt_opt']}</label>
-            <button type="button" onclick="sub()" style="background:#28a745;color:white;border:none;padding:10px 20px;border-radius:20px;">{t['checkout']}</button>
+            <div class="cart-info">
+                <span>Total: $<span id="tot">0</span> (<span id="cnt">0</span>)</span>
+                <label style="font-size:0.9em;font-weight:normal;"><input type="checkbox" name="need_receipt" checked> {t['print_receipt_opt']}</label>
+            </div>
+            <div class="cart-btns">
+                <button type="button" class="btn-cart" onclick="showCart()">🛒 {t['cart_detail']}</button>
+                <button type="button" class="btn-sub" onclick="sub()">{t['checkout']}</button>
+            </div>
         </div>
     </form>
+    
     <div class="modal" id="opt-m"><div class="modal-c">
         <h3 id="m-name"></h3><div id="m-opts"></div>
         <div style="margin-top:20px;text-align:center;">
@@ -292,14 +307,17 @@ def render_frontend(products, t, default_table, lang, preload_cart, edit_oid):
         <button onclick="addC()" style="width:100%;background:#28a745;color:white;padding:12px;border:none;border-radius:10px;margin-top:20px;">{t['modal_add_cart']}</button>
         <button onclick="document.getElementById('opt-m').style.display='none'" style="width:100%;background:white;padding:10px;border:none;margin-top:10px;">{t['modal_cancel']}</button>
     </div></div>
+    
     <div class="modal" id="cart-m"><div class="modal-c">
         <h3>{t['cart_title']}</h3><div id="c-list"></div>
-        <button onclick="document.getElementById('cart-m').style.display='none'" style="width:100%;padding:10px;margin-top:10px;">{t['close']}</button>
+        <button onclick="document.getElementById('cart-m').style.display='none'" style="width:100%;padding:10px;margin-top:10px;border:1px solid #ccc;border-radius:10px;">{t['close']}</button>
     </div></div>
+    
     <script>
     const P={p_json}, T={t_json}, PRELOAD={preload_cart}, CUR_LANG="{lang}";
     let C=[], cur=null, q=1, selectedOptIndices=[], addP=0;
     if(PRELOAD && PRELOAD.length > 0) C = PRELOAD;
+    
     let h="", cat="";
     P.forEach(p=>{{
         if(p.category!=cat) {{ h+=`<div class="cat-header">${{p.category}}</div>`; cat=p.category; }}
@@ -316,6 +334,7 @@ def render_frontend(products, t, default_table, lang, preload_cart, edit_oid):
     }});
     document.getElementById('list').innerHTML=h;
     upd();
+
     function openOpt(id){{
         cur=P.find(x=>x.id==id); q=1; selectedOptIndices=[]; addP=0;
         document.getElementById('m-name').innerText = cur['name_' + CUR_LANG] || cur.name_zh;
@@ -335,6 +354,7 @@ def render_frontend(products, t, default_table, lang, preload_cart, edit_oid):
         document.getElementById('m-q').innerText=1;
         document.getElementById('opt-m').style.display='flex';
     }}
+
     function addC(){{
         C.push({{ 
             id: cur.id, name: cur.name_en, name_zh: cur.name_zh, name_jp: cur.name_jp, name_kr: cur.name_kr, 
@@ -347,7 +367,9 @@ def render_frontend(products, t, default_table, lang, preload_cart, edit_oid):
         }});
         document.getElementById('opt-m').style.display='none'; upd();
     }}
+
     function cq(n){{ if(q+n>0) {{q+=n; document.getElementById('m-q').innerText=q;}} }}
+    
     function upd(){{
         if(C.length){{
             document.getElementById('bar').style.display='flex';
@@ -355,17 +377,20 @@ def render_frontend(products, t, default_table, lang, preload_cart, edit_oid):
             document.getElementById('cnt').innerText = C.reduce((a,b)=>a+b.qty,0);
         }} else document.getElementById('bar').style.display='none';
     }}
+
     function showCart(){{
         let h="";
         C.forEach((i,x)=>{{
-            h+=`<div style="border-bottom:1px solid #eee;padding:10px;display:flex;justify-content:space-between;">
-                <div><b>${{i['name_' + CUR_LANG] || i.name_zh}}</b> x${{i.qty}}</div>
-                <button onclick="C.splice(${{x}},1);upd();showCart()" style="color:red;border:none;background:none;">🗑️</button>
+            h+=`<div style="border-bottom:1px solid #eee;padding:10px;display:flex;justify-content:space-between;align-items:center;">
+                <div><b>${{i['name_' + CUR_LANG] || i.name_zh}}</b> x${{i.qty}}<br><small>$${{i.unit_price * i.qty}}</small></div>
+                <button onclick="C.splice(${{x}},1);upd();showCart()" style="color:red;border:none;background:none;font-size:1.2em;">🗑️</button>
             </div>`;
         }});
+        if(C.length === 0) h = `<p style="text-align:center;padding:20px;">${{T.empty_cart}}</p>`;
         document.getElementById('c-list').innerHTML=h;
         document.getElementById('cart-m').style.display='flex';
     }}
+
     function sub(){{
         let t = document.getElementById('visible_table').value;
         if(!t) return alert(T.table_placeholder);
@@ -375,6 +400,7 @@ def render_frontend(products, t, default_table, lang, preload_cart, edit_oid):
     }}
     </script></body></html>
     """
+
 
 # --- 4. 下單成功 ---
 @app.route('/order_success')
