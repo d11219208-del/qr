@@ -6,7 +6,7 @@ import urllib.request
 import time  
 import io  
 import pandas as pd  
-from flask import Flask, request, redirect, url_for, jsonify, send_file 
+from flask import Flask, request, jsonify, redirect, url_for, Response, send_file 
 from datetime import datetime, date
 from datetime import timedelta 
 
@@ -792,7 +792,7 @@ def print_order(oid):
     </style></head>
     <body onload='window.print(); setTimeout(function(){{ window.close(); }}, 1200);'>{body}</body></html>
     """
-# --- 9. 後台管理 (新增匯入/匯出/一鍵清空功能) ---
+# --- 9. 後台管理 (Excel 匯入/匯出/一鍵清空版) ---
 
 @app.route('/admin/reorder_products', methods=['POST'])
 def reorder_products():
@@ -821,23 +821,30 @@ def delete_product(pid):
     conn.commit(); conn.close()
     return redirect('/admin')
 
-# --- 核心新增功能：匯出/匯入/清空菜單 ---
+# --- 核心新增功能：Excel 匯出 / Excel 匯入 / 清空 ---
 
 @app.route('/admin/export_menu')
 def export_menu():
-    conn = get_db_connection(); cur = conn.cursor()
-    cur.execute("SELECT * FROM products ORDER BY sort_order ASC")
-    colnames = [desc[0] for desc in cur.description]
-    products = [dict(zip(colnames, row)) for row in cur.fetchall()]
-    conn.close()
-    
-    # 轉換成 JSON 字串並作為檔案下載
-    json_data = json.dumps(products, ensure_ascii=False, indent=4)
-    return Response(
-        json_data,
-        mimetype="application/json",
-        headers={"Content-disposition": "attachment; filename=menu_export.json"}
-    )
+    try:
+        conn = get_db_connection()
+        # 抓取所有欄位
+        df = pd.read_sql("SELECT * FROM products ORDER BY sort_order ASC", conn)
+        conn.close()
+
+        # 將 DataFrame 轉換成 Excel 檔案
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            df.to_excel(writer, index=False, sheet_name='Menu')
+        output.seek(0)
+
+        return send_file(
+            output,
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            as_attachment=True,
+            download_name="menu_export.xlsx"
+        )
+    except Exception as e:
+        return f"匯出失敗: {e}"
 
 @app.route('/admin/import_menu', methods=['POST'])
 def import_menu():
@@ -846,32 +853,36 @@ def import_menu():
     if file.filename == '': return "未選擇檔案", 400
     
     try:
-        data = json.load(file)
+        # 讀取 Excel 檔案
+        df = pd.read_excel(file)
+        # 將 NaN 替換為空字串，避免寫入資料庫出錯
+        df = df.where(pd.notnull(df), None)
+        
         conn = get_db_connection(); cur = conn.cursor()
-        for p in data:
+        for _, p in df.iterrows():
+            # 排除 ID，讓資料庫自動生成新 ID，避免衝突
             cur.execute("""
                 INSERT INTO products (name, price, category, image_url, custom_options, 
                 name_en, name_jp, name_kr, custom_options_en, custom_options_jp, custom_options_kr,
-                print_category, category_en, category_jp, category_kr, sort_order)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                print_category, category_en, category_jp, category_kr, sort_order, is_available)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """, (
                 p.get('name'), p.get('price'), p.get('category'), p.get('image_url'), p.get('custom_options'),
                 p.get('name_en'), p.get('name_jp'), p.get('name_kr'),
                 p.get('custom_options_en'), p.get('custom_options_jp'), p.get('custom_options_kr'),
                 p.get('print_category', 'Noodle'), p.get('category_en'), p.get('category_jp'), p.get('category_kr'),
-                p.get('sort_order', 999)
+                p.get('sort_order', 999), p.get('is_available', True)
             ))
         conn.commit(); conn.close()
         return redirect('/admin')
     except Exception as e:
-        return f"匯入失敗: {e}"
+        return f"匯入失敗 (請確保欄位名稱正確): {e}"
 
 @app.route('/admin/reset_menu')
 def reset_menu():
     try:
         conn = get_db_connection(); cur = conn.cursor()
-        cur.execute("DELETE FROM products")
-        cur.execute("ALTER SEQUENCE IF EXISTS products_id_seq RESTART WITH 1")
+        cur.execute("TRUNCATE TABLE products RESTART IDENTITY CASCADE")
         conn.commit(); conn.close()
         return redirect('/admin')
     except Exception as e:
@@ -881,8 +892,7 @@ def reset_menu():
 def reset_orders():
     try:
         conn = get_db_connection(); cur = conn.cursor()
-        cur.execute("DELETE FROM orders")
-        cur.execute("ALTER SEQUENCE IF EXISTS orders_id_seq RESTART WITH 1")
+        cur.execute("TRUNCATE TABLE orders RESTART IDENTITY CASCADE")
         conn.commit(); conn.close()
         return redirect('/admin')
     except Exception as e:
@@ -891,7 +901,6 @@ def reset_orders():
 @app.route('/admin', methods=['GET', 'POST'])
 def admin_panel():
     conn = get_db_connection(); cur = conn.cursor()
-
     if request.method == 'POST':
         try:
             cur.execute("""
@@ -915,7 +924,6 @@ def admin_panel():
         finally:
             cur.close(); conn.close()
 
-    # 讀取產品列表
     cur.execute("""
         SELECT id, name, price, category, image_url, is_available, custom_options, sort_order, 
                name_en, name_jp, name_kr, custom_options_en, custom_options_jp, custom_options_kr, 
@@ -961,7 +969,7 @@ def admin_panel():
             .handle {{ touch-action: none; }} 
             h5 {{ margin-bottom: 5px; color: #9b4dca; border-left: 4px solid #9b4dca; padding-left: 10px; }}
             .button-clear {{ text-decoration: underline; }}
-            .tool-bar {{ background: #fff; padding: 10px; border: 1px solid #ddd; border-radius: 8px; margin-bottom: 20px; display: flex; gap: 10px; flex-wrap: wrap; }}
+            .tool-bar {{ background: #fff; padding: 15px; border: 1px solid #ddd; border-radius: 8px; margin-bottom: 20px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }}
         </style>
     </head>
     <body style="padding:20px;">
@@ -991,7 +999,7 @@ def admin_panel():
             <div class="row">
                 <div class="column"><label>English</label><input type="text" name="name_en"></div>
                 <div class="column"><label>日本語</label><input type="text" name="name_jp"></div>
-                <div class="column"><label>한국어</label><input type="text" name="name_kr"></div>
+                <div class="column"><label>韓國語</label><input type="text" name="name_kr"></div>
             </div>
             <h5>3. 客製選項</h5>
             <div class="row">
@@ -1000,7 +1008,7 @@ def admin_panel():
             </div>
             <div class="row">
                 <div class="column"><label>日本語</label><input type="text" name="custom_options_jp"></div>
-                <div class="column"><label>한국어</label><input type="text" name="custom_options_kr"></div>
+                <div class="column"><label>韓國語</label><input type="text" name="custom_options_kr"></div>
             </div>
             <label>圖片 URL</label><input type="text" name="image_url">
             <button type="submit" style="width:100%;">🚀 新增產品</button>
@@ -1008,14 +1016,16 @@ def admin_panel():
     </div>
 
     <div class="tool-bar">
-        <a href="/admin/export_menu" class="button button-outline">📤 匯出菜單 (JSON)</a>
+        <a href="/admin/export_menu" class="button button-outline">📤 匯出菜單 (Excel)</a>
         
-        <form action="/admin/import_menu" method="POST" enctype="multipart/form-data" style="margin:0; display:flex; gap:5px;">
-            <input type="file" name="menu_file" accept=".json" required style="margin:0; width:200px; font-size:12px;">
-            <button type="submit" class="button button-outline">📥 匯入菜單</button>
+        <form action="/admin/import_menu" method="POST" enctype="multipart/form-data" style="margin:0; display:flex; gap:5px; border-left: 2px solid #eee; padding-left: 15px;">
+            <input type="file" name="menu_file" accept=".xlsx, .xls" required style="margin:0; width:220px; font-size:12px;">
+            <button type="submit" class="button button-outline">📥 匯入菜單 (Excel)</button>
         </form>
         
-        <a href="/admin/reset_menu" onclick="return confirm('危險操作！這將刪除所有菜單品項且無法復原。確定嗎？')" class="button" style="background:#e91e63; border-color:#e91e63;">🗑️ 一鍵刪除所有菜單</a>
+        <div style="flex-grow: 1; text-align: right;">
+            <a href="/admin/reset_menu" onclick="return confirm('危險！這將刪除所有菜單且無法復原。確定？')" class="button" style="background:#e91e63; border-color:#e91e63;">🗑️ 一鍵刪除所有菜單</a>
+        </div>
     </div>
 
     <div style="position:sticky; top:0; background:white; z-index:100; padding:10px 0; border-bottom:1px solid #eee;">
@@ -1023,7 +1033,7 @@ def admin_panel():
             <h3>📦 產品列表 (可拖曳排序)</h3>
             <div>
                  <button id="save-btn" onclick="saveOrder()" class="button" style="background:#9c27b0;border-color:#9c27b0;display:none;">💾 儲存排序</button>
-                 <a href="/admin/reset_orders" onclick="return confirm('警告：這將永久刪除所有歷史訂單數據！確定嗎？')" class="button button-clear" style="color:red;">⚠️ 清空訂單記錄</a>
+                 <a href="/admin/reset_orders" onclick="return confirm('確定清空所有訂單記錄嗎？')" class="button button-clear" style="color:red;">⚠️ 清空訂單記錄</a>
             </div>
         </div>
     </div>
@@ -1055,7 +1065,7 @@ def admin_panel():
     </body></html>
     """
 
-# --- 編輯產品頁面 ---
+# --- 編輯產品頁面 (維持原樣) ---
 @app.route('/admin/edit_product/<int:pid>', methods=['GET','POST'])
 def edit_product(pid):
     conn = get_db_connection(); cur = conn.cursor()
@@ -1123,7 +1133,7 @@ def edit_product(pid):
             <div class="row">
                 <div class="column"><label>English</label><input type="text" name="name_en" value="{v(p[8])}"></div>
                 <div class="column"><label>日本語</label><input type="text" name="name_jp" value="{v(p[9])}"></div>
-                <div class="column"><label>한국어</label><input type="text" name="name_kr" value="{v(p[10])}"></div>
+                <div class="column"><label>韓國語</label><input type="text" name="name_kr" value="{v(p[10])}"></div>
             </div>
             <hr>
             <h5>🛠️ 客製化選項翻譯</h5>
@@ -1131,7 +1141,7 @@ def edit_product(pid):
             <div class="row">
                 <div class="column"><label>English</label><input type="text" name="custom_options_en" value="{v(p[11])}"></div>
                 <div class="column"><label>日本語</label><input type="text" name="custom_options_jp" value="{v(p[12])}"></div>
-                <div class="column"><label>한국어</label><input type="text" name="custom_options_kr" value="{v(p[13])}"></div>
+                <div class="column"><label>韓國語</label><input type="text" name="custom_options_kr" value="{v(p[13])}"></div>
             </div>
             <div style="margin-top:20px;">
                 <button type="submit">💾 儲存</button>
@@ -1143,7 +1153,7 @@ def edit_product(pid):
 # --- 防休眠 ---
 def keep_alive():
     while True:
-        try: urllib.request.urlopen("https://qr-mbdv.onrender.com")
+        try: urllib.request.urlopen("https://ding-dong-tipi.onrender.com")
         except: pass
         time.sleep(800)
 threading.Thread(target=keep_alive, daemon=True).start()
