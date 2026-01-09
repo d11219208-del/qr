@@ -966,7 +966,7 @@ def edit_product(pid):
 # --- 防休眠 ---
 def keep_alive():
     while True:
-        try: urllib.request.urlopen("https://ding-dong-tipi.onrender.com")
+        try: urllib.request.urlopen("https://ding-dong-tipi.onrender.com"）
         except: pass
         time.sleep(800)
 threading.Thread(target=keep_alive, daemon=True).start()
