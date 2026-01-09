@@ -179,7 +179,6 @@ def menu():
                 price = int(float(item['unit_price']))
                 qty = int(float(item['qty']))
                 total_price += (price * qty)
-                # 處理顯示名稱與選項字串供資料庫備份使用
                 n_field = f"name_{final_lang}" if f"name_{final_lang}" in item else "name_zh"
                 n_display = item.get(n_field, item.get('name_zh'))
                 opt_key = f"options_{final_lang}" if f"options_{final_lang}" in item else "options_zh"
@@ -189,7 +188,6 @@ def menu():
 
             items_str = " + ".join(display_list)
 
-            # --- [關鍵修正：利用 SQL 原子操作防止單號重複] ---
             cur.execute("""
                 INSERT INTO orders (table_number, items, total_price, lang, daily_seq, content_json, need_receipt)
                 VALUES (%s, %s, %s, %s, (SELECT COALESCE(MAX(daily_seq), 0) + 1 FROM orders WHERE created_at >= CURRENT_DATE), %s, %s) 
@@ -210,7 +208,6 @@ def menu():
         finally:
             cur.close(); conn.close()
 
-    # --- GET 請求部分 ---
     url_table = request.args.get('table', '')
     edit_oid = request.args.get('edit_oid')
     preload_cart = "[]"
@@ -260,14 +257,11 @@ def render_frontend(products, t, default_table, lang, preload_cart, edit_oid):
         .add-btn{{background:#28a745;color:white;border:none;padding:5px 15px;border-radius:15px;align-self:flex-end;}}
         .sold-out {{ filter: grayscale(1); opacity: 0.6; pointer-events: none; }}
         .sold-out-badge {{ position: absolute; top: 10px; right: 10px; background: rgba(0,0,0,0.7); color: white; padding: 2px 8px; border-radius: 5px; font-size: 0.8em; font-weight: bold; z-index: 5; }}
-        
-        /* 購物車底列佈局 */
         .cart-bar{{position:fixed;bottom:0;width:100%;background:white;padding:10px 15px;box-shadow:0 -2px 10px rgba(0,0,0,0.1);display:none;flex-direction:column;box-sizing:border-box;z-index:100;}}
         .cart-info{{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;font-weight:bold;}}
         .cart-btns{{display:flex;gap:10px;}}
         .btn-cart{{flex:1;background:#ff9800;color:white;border:none;padding:12px;border-radius:10px;font-size:1em;cursor:pointer;font-weight:bold;}}
         .btn-sub{{flex:1;background:#28a745;color:white;border:none;padding:12px;border-radius:10px;font-size:1em;cursor:pointer;font-weight:bold;}}
-        
         .modal{{position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);display:none;z-index:200;justify-content:center;align-items:flex-end;}}
         .modal-c{{background:white;width:100%;padding:20px;border-radius:20px 20px 0 0;max-height:80vh;overflow-y:auto;}}
         .opt-tag{{border:1px solid #ddd;padding:5px 10px;border-radius:15px;margin:3px;display:inline-block;cursor:pointer;}}
@@ -286,7 +280,6 @@ def render_frontend(products, t, default_table, lang, preload_cart, edit_oid):
         <input type="hidden" name="table_number" id="tbl_input">
         <input type="hidden" name="lang_input" value="{lang}">
         {old_oid_input}
-        
         <div class="cart-bar" id="bar">
             <div class="cart-info">
                 <span>Total: $<span id="tot">0</span> (<span id="cnt">0</span>)</span>
@@ -298,7 +291,6 @@ def render_frontend(products, t, default_table, lang, preload_cart, edit_oid):
             </div>
         </div>
     </form>
-    
     <div class="modal" id="opt-m"><div class="modal-c">
         <h3 id="m-name"></h3><div id="m-opts"></div>
         <div style="margin-top:20px;text-align:center;">
@@ -307,17 +299,27 @@ def render_frontend(products, t, default_table, lang, preload_cart, edit_oid):
         <button onclick="addC()" style="width:100%;background:#28a745;color:white;padding:12px;border:none;border-radius:10px;margin-top:20px;">{t['modal_add_cart']}</button>
         <button onclick="document.getElementById('opt-m').style.display='none'" style="width:100%;background:white;padding:10px;border:none;margin-top:10px;">{t['modal_cancel']}</button>
     </div></div>
-    
     <div class="modal" id="cart-m"><div class="modal-c">
         <h3>{t['cart_title']}</h3><div id="c-list"></div>
         <button onclick="document.getElementById('cart-m').style.display='none'" style="width:100%;padding:10px;margin-top:10px;border:1px solid #ccc;border-radius:10px;">{t['close']}</button>
     </div></div>
-    
     <script>
     const P={p_json}, T={t_json}, PRELOAD={preload_cart}, CUR_LANG="{lang}";
     let C=[], cur=null, q=1, selectedOptIndices=[], addP=0;
+    
+    // 初始化購物車
     if(PRELOAD && PRELOAD.length > 0) C = PRELOAD;
     
+    // --- [關鍵修正：處理返回上一頁時清空購物車] ---
+    window.addEventListener('pageshow', function(event) {{
+        // 如果 event.persisted 為 true，表示頁面是從快取（如返回鍵）載入的
+        // 或者是導航類型為 back_forward
+        if (event.persisted || (window.performance && window.performance.navigation.type === 2)) {{
+            C = []; // 清空購物車變數
+            upd();  // 更新 UI
+        }}
+    }});
+
     let h="", cat="";
     P.forEach(p=>{{
         if(p.category!=cat) {{ h+=`<div class="cat-header">${{p.category}}</div>`; cat=p.category; }}
@@ -375,7 +377,9 @@ def render_frontend(products, t, default_table, lang, preload_cart, edit_oid):
             document.getElementById('bar').style.display='flex';
             document.getElementById('tot').innerText = C.reduce((a,b)=>a+b.unit_price*b.qty,0);
             document.getElementById('cnt').innerText = C.reduce((a,b)=>a+b.qty,0);
-        }} else document.getElementById('bar').style.display='none';
+        }} else {{
+            document.getElementById('bar').style.display='none';
+        }}
     }}
 
     function showCart(){{
@@ -400,6 +404,7 @@ def render_frontend(products, t, default_table, lang, preload_cart, edit_oid):
     }}
     </script></body></html>
     """
+
 
 
 # --- 4. 下單成功 ---
