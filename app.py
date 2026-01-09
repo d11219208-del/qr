@@ -62,7 +62,7 @@ def load_translations():
         }
     }
 
-# --- 1. 資料庫初始化 ---
+# --- 1. 資料庫初始化 (新增分類語系支援) ---
 @app.route('/init_db')
 def init_db():
     conn = get_db_connection()
@@ -81,7 +81,8 @@ def init_db():
                 sort_order INTEGER DEFAULT 100,
                 name_en VARCHAR(100), name_jp VARCHAR(100), name_kr VARCHAR(100),
                 custom_options_en TEXT, custom_options_jp TEXT, custom_options_kr TEXT,
-                print_category VARCHAR(20) DEFAULT 'Noodle'
+                print_category VARCHAR(20) DEFAULT 'Noodle',
+                category_en VARCHAR(50), category_jp VARCHAR(50), category_kr VARCHAR(50)
             );
         ''')
         cur.execute('''
@@ -98,6 +99,7 @@ def init_db():
                 lang VARCHAR(10) DEFAULT 'zh'
             );
         ''')
+        # 確保現有資料表也會補上新欄位
         alters = [
             "ALTER TABLE products ADD COLUMN IF NOT EXISTS is_available BOOLEAN DEFAULT TRUE;",
             "ALTER TABLE products ADD COLUMN IF NOT EXISTS image_url TEXT;",
@@ -108,6 +110,9 @@ def init_db():
             "ALTER TABLE products ADD COLUMN IF NOT EXISTS custom_options_jp TEXT;",
             "ALTER TABLE products ADD COLUMN IF NOT EXISTS custom_options_kr TEXT;",
             "ALTER TABLE products ADD COLUMN IF NOT EXISTS print_category VARCHAR(20) DEFAULT 'Noodle';",
+            "ALTER TABLE products ADD COLUMN IF NOT EXISTS category_en VARCHAR(50);",
+            "ALTER TABLE products ADD COLUMN IF NOT EXISTS category_jp VARCHAR(50);",
+            "ALTER TABLE products ADD COLUMN IF NOT EXISTS category_kr VARCHAR(50);",
             "ALTER TABLE orders ADD COLUMN IF NOT EXISTS daily_seq INTEGER DEFAULT 0;",
             "ALTER TABLE orders ADD COLUMN IF NOT EXISTS content_json TEXT;",
             "ALTER TABLE orders ADD COLUMN IF NOT EXISTS need_receipt BOOLEAN DEFAULT FALSE;",
@@ -117,7 +122,7 @@ def init_db():
             try: cur.execute(cmd)
             except: pass
 
-        return "資料庫結構檢查完成。<a href='/'>回首頁</a> | <a href='/admin'>回後台</a>"
+        return "資料庫結構檢查完成（含分類語系）。<a href='/'>回首頁</a> | <a href='/admin'>回後台</a>"
     except Exception as e:
         return f"DB Error: {e}"
     finally:
@@ -147,7 +152,7 @@ def language_select():
     </body></html>
     """
 
-# --- 3. 點餐頁面 ---
+# --- 3. 點餐頁面 (更新分類翻譯支援) ---
 @app.route('/menu', methods=['GET', 'POST'])
 def menu():
     lang = request.args.get('lang', 'zh')
@@ -160,7 +165,7 @@ def menu():
             table_number = request.form.get('table_number')
             cart_json = request.form.get('cart_data')
             need_receipt = request.form.get('need_receipt') == 'on'
-            lang_from_page = request.form.get('lang_input', 'zh')
+            final_lang = request.form.get('lang_input', 'zh')
             old_order_id = request.form.get('old_order_id')
 
             if not cart_json or cart_json == '[]': return "Empty Cart"
@@ -169,7 +174,6 @@ def menu():
             total_price = 0
             display_list = []
 
-            final_lang = lang_from_page 
             if old_order_id:
                 cur.execute("SELECT lang FROM orders WHERE id=%s", (old_order_id,))
                 orig_res = cur.fetchone()
@@ -179,16 +183,18 @@ def menu():
                 price = int(float(item['unit_price']))
                 qty = int(float(item['qty']))
                 total_price += (price * qty)
-                n_field = f"name_{final_lang}" if f"name_{final_lang}" in item else "name_zh"
-                n_display = item.get(n_field, item.get('name_zh'))
-                opt_key = f"options_{final_lang}" if f"options_{final_lang}" in item else "options_zh"
+                
+                name_key = f"name_{final_lang}"
+                n_display = item.get(name_key, item.get('name_zh'))
+                
+                opt_key = f"options_{final_lang}"
                 opts = item.get(opt_key, item.get('options_zh', []))
                 opt_str = f"({','.join(opts)})" if opts else ""
+                
                 display_list.append(f"{n_display} {opt_str} x{qty}")
 
             items_str = " + ".join(display_list)
 
-            # --- [關鍵修正：利用 SQL 原子操作防止單號重複] ---
             cur.execute("""
                 INSERT INTO orders (table_number, items, total_price, lang, daily_seq, content_json, need_receipt)
                 VALUES (%s, %s, %s, %s, (SELECT COALESCE(MAX(daily_seq), 0) + 1 FROM orders WHERE created_at >= CURRENT_DATE), %s, %s) 
@@ -209,7 +215,6 @@ def menu():
         finally:
             cur.close(); conn.close()
 
-    # --- GET 請求部分 (同原程式碼) ---
     url_table = request.args.get('table', '')
     edit_oid = request.args.get('edit_oid')
     preload_cart = "[]"
@@ -220,9 +225,11 @@ def menu():
             if not url_table: url_table = old_data[0]
             preload_cart = old_data[1]
 
+    # 這裡加入 category_en, category_jp, category_kr
     cur.execute("""
         SELECT id, name, price, category, image_url, is_available, custom_options, sort_order,
-               name_en, name_jp, name_kr, custom_options_en, custom_options_jp, custom_options_kr, print_category
+               name_en, name_jp, name_kr, custom_options_en, custom_options_jp, custom_options_kr, 
+               print_category, category_en, category_jp, category_kr
         FROM products ORDER BY sort_order ASC, id ASC
     """)
     products = cur.fetchall()
@@ -232,7 +239,9 @@ def menu():
     for p in products:
         p_list.append({
             'id': p[0], 'name_zh': p[1], 'name_en': p[8] or p[1], 'name_jp': p[9] or p[1], 'name_kr': p[10] or p[1],
-            'price': p[2], 'category': p[3], 'image_url': p[4] or '', 'is_available': p[5], 
+            'price': p[2], 
+            'category_zh': p[3], 'category_en': p[15] or p[3], 'category_jp': p[16] or p[3], 'category_kr': p[17] or p[3],
+            'image_url': p[4] or '', 'is_available': p[5], 
             'custom_options_zh': p[6].split(',') if p[6] else [],
             'custom_options_en': p[11].split(',') if p[11] else (p[6].split(',') if p[6] else []),
             'custom_options_jp': p[12].split(',') if p[12] else (p[6].split(',') if p[6] else []),
@@ -242,6 +251,7 @@ def menu():
     return render_frontend(p_list, t, url_table, lang, preload_cart, edit_oid)
 
 def render_frontend(products, t, default_table, lang, preload_cart, edit_oid):
+    import json # 確保有導入
     p_json = json.dumps(products)
     t_json = json.dumps(t)
     old_oid_input = f'<input type="hidden" name="old_order_id" value="{edit_oid}">' if edit_oid else ''
@@ -251,58 +261,120 @@ def render_frontend(products, t, default_table, lang, preload_cart, edit_oid):
     <!DOCTYPE html>
     <html><head><title>{t['title']}</title><meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=0">
     <style>
-        body{{font-family:'Microsoft JhengHei',sans-serif;margin:0;padding-bottom:100px;background:#f8f9fa;}}
-        .header{{background:white;padding:15px;position:sticky;top:0;z-index:99;box-shadow:0 2px 5px rgba(0,0,0,0.1);}}
+        body{{font-family:'Microsoft JhengHei',sans-serif;margin:0;padding-bottom:140px;background:#f8f9fa;touch-action:manipulation;}}
+        .header{{background:white;padding:15px 15px 5px 15px;position:sticky;top:0;z-index:99;box-shadow:0 2px 5px rgba(0,0,0,0.1);}}
+        
+        .cat-bar {{
+            display: flex; overflow-x: auto; white-space: nowrap; padding: 10px 0; gap: 10px; scrollbar-width: none;
+        }}
+        .cat-bar::-webkit-scrollbar {{ display: none; }}
+        .cat-btn {{
+            background: #f1f3f5; border: 1px solid #dee2e6; padding: 6px 15px; border-radius: 20px;
+            font-size: 0.9em; color: #495057; cursor: pointer;
+        }}
+        .cat-btn.active {{ background: #28a745; color: white; border-color: #28a745; }}
+
         .menu-item{{background:white;margin:10px;padding:10px;border-radius:10px;display:flex;box-shadow:0 2px 4px rgba(0,0,0,0.05);position:relative;}}
         .menu-img{{width:80px;height:80px;border-radius:8px;object-fit:cover;background:#eee;}}
         .menu-info{{flex:1;padding-left:15px;display:flex;flex-direction:column;justify-content:space-between;}}
-        .add-btn{{background:#28a745;color:white;border:none;padding:5px 15px;border-radius:15px;align-self:flex-end;}}
+        .add-btn{{background:#28a745;color:white;border:none;padding:5px 15px;border-radius:15px;align-self:flex-end;touch-action:manipulation;}}
         .sold-out {{ filter: grayscale(1); opacity: 0.6; pointer-events: none; }}
         .sold-out-badge {{ position: absolute; top: 10px; right: 10px; background: rgba(0,0,0,0.7); color: white; padding: 2px 8px; border-radius: 5px; font-size: 0.8em; font-weight: bold; z-index: 5; }}
-        .cart-bar{{position:fixed;bottom:0;width:100%;background:white;padding:15px;box-shadow:0 -2px 10px rgba(0,0,0,0.1);display:none;justify-content:space-between;align-items:center;box-sizing:border-box;z-index:100;}}
+        
+        .cart-bar{{position:fixed;bottom:0;width:100%;background:white;padding:12px;box-shadow:0 -2px 10px rgba(0,0,0,0.1);display:none;flex-direction:column;box-sizing:border-box;z-index:100;}}
+        .cart-summary{{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;padding:0 5px;}}
+        .cart-buttons{{display:flex;gap:10px;}}
+        .btn-view-cart{{background:#ff9800;color:white;border:none;flex:1;padding:12px;border-radius:10px;font-weight:bold;font-size:1.1em;touch-action:manipulation;}}
+        .btn-checkout{{background:#28a745;color:white;border:none;flex:1;padding:12px;border-radius:10px;font-weight:bold;font-size:1.1em;touch-action:manipulation;}}
+        
         .modal{{position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);display:none;z-index:200;justify-content:center;align-items:flex-end;}}
-        .modal-c{{background:white;width:100%;padding:20px;border-radius:20px 20px 0 0;max-height:80vh;overflow-y:auto;}}
-        .opt-tag{{border:1px solid #ddd;padding:5px 10px;border-radius:15px;margin:3px;display:inline-block;cursor:pointer;}}
+        .modal-c{{background:white;width:100%;padding:20px;border-radius:20px 20px 0 0;max-height:80vh;overflow-y:auto;box-sizing:border-box;position:relative;}}
+        .opt-tag{{border:1px solid #ddd;padding:5px 10px;border-radius:15px;margin:3px;display:inline-block;cursor:pointer;touch-action:manipulation;}}
         .opt-tag.sel{{background:#e3f2fd;border-color:#2196f3;color:#2196f3;}}
-        .cat-header {{padding:10px 15px;font-weight:bold;color:#444;background:#eee;margin-top:10px;}}
+        .cat-header {{padding:10px 15px;font-weight:bold;color:#444;background:#eee;margin-top:10px; scroll-margin-top: 140px;}}
+        
+        .qty-ctrl{{display:flex;align-items:center;gap:10px;justify-content:center;margin:15px 0;}}
+        .qty-ctrl button{{width:44px;height:44px;border-radius:22px;border:1px solid #ddd;background:white;font-size:1.5em;line-height:1;touch-action:manipulation;}}
+        .qty-input{{width:60px;text-align:center;font-size:1.2em;border:1px solid #ddd;padding:5px;border-radius:5px;}}
+        
+        .cart-item-row{{border-bottom:1px solid #eee;padding:12px 0;display:flex;flex-direction:column;gap:5px;}}
+        .cart-item-main{{display:flex;justify-content:space-between;align-items:center;}}
+        .cart-qty-sub{{display:flex;align-items:center;justify-content:flex-end;gap:10px;margin-top:5px;}}
     </style></head><body>
     <div class="header">
         {edit_notice}
-        <h3>{t['welcome']}</h3>
+        <h3 style="margin:0 0 10px 0;">{t['welcome']}</h3>
         <input type="text" id="visible_table" value="{default_table}" placeholder="{t['table_placeholder']}" 
-               style="padding:10px;width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:5px;font-size:1.1em;">
+               style="padding:10px;width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:5px;font-size:1.1em;margin-bottom:5px;">
+        <div class="cat-bar" id="cat-nav"></div>
     </div>
+    
     <div id="list"></div>
+    
     <form id="order-form" method="POST" action="/menu">
         <input type="hidden" name="cart_data" id="cart_input">
         <input type="hidden" name="table_number" id="tbl_input">
-        <input type="hidden" name="lang_input" value="{lang}">
+        <input type="hidden" name="lang_input" id="lang_final_input" value="{lang}">
         {old_oid_input}
         <div class="cart-bar" id="bar">
-            <div onclick="showCart()" style="flex-grow:1;">Total: $<span id="tot">0</span> (<span id="cnt">0</span>)</div>
-            <label style="margin-right:10px;"><input type="checkbox" name="need_receipt" checked> {t['print_receipt_opt']}</label>
-            <button type="button" onclick="sub()" style="background:#28a745;color:white;border:none;padding:10px 20px;border-radius:20px;">{t['checkout']}</button>
+            <div class="cart-summary">
+                <div style="font-weight:bold; font-size:1.1em;">Total: $<span id="tot">0</span> (<span id="cnt">0</span>)</div>
+                <label><input type="checkbox" name="need_receipt" checked> {t['print_receipt_opt']}</label>
+            </div>
+            <div class="cart-buttons">
+                <button type="button" class="btn-view-cart" onclick="showCart()">🛒 {t['cart_detail']}</button>
+                <button type="button" class="btn-checkout" onclick="sub()">{t['checkout']}</button>
+            </div>
         </div>
     </form>
-    <div class="modal" id="opt-m"><div class="modal-c">
-        <h3 id="m-name"></h3><div id="m-opts"></div>
-        <div style="margin-top:20px;text-align:center;">
-            <button onclick="cq(-1)">-</button> <span id="m-q" style="margin:0 15px;font-weight:bold;">1</span> <button onclick="cq(1)">+</button>
+    
+    <div class="modal" id="opt-m" onclick="closeModalByBg(event, 'opt-m')">
+        <div class="modal-c" onclick="event.stopPropagation()">
+            <h3 id="m-name"></h3><div id="m-opts"></div>
+            <div class="qty-ctrl">
+                <button onclick="cq(-1)">-</button>
+                <input type="number" id="m-q" class="qty-input" value="1" min="1" inputmode="numeric">
+                <button onclick="cq(1)">+</button>
+            </div>
+            <button onclick="addC()" style="width:100%;background:#28a745;color:white;padding:12px;border:none;border-radius:10px;margin-top:10px;font-size:1.1em;">{t['modal_add_cart']}</button>
+            <button onclick="document.getElementById('opt-m').style.display='none'" style="width:100%;background:white;padding:10px;border:none;margin-top:10px;">{t['modal_cancel']}</button>
         </div>
-        <button onclick="addC()" style="width:100%;background:#28a745;color:white;padding:12px;border:none;border-radius:10px;margin-top:20px;">{t['modal_add_cart']}</button>
-        <button onclick="document.getElementById('opt-m').style.display='none'" style="width:100%;background:white;padding:10px;border:none;margin-top:10px;">{t['modal_cancel']}</button>
-    </div></div>
-    <div class="modal" id="cart-m"><div class="modal-c">
-        <h3>{t['cart_title']}</h3><div id="c-list"></div>
-        <button onclick="document.getElementById('cart-m').style.display='none'" style="width:100%;padding:10px;margin-top:10px;">{t['close']}</button>
-    </div></div>
+    </div>
+
+    <div class="modal" id="cart-m" onclick="closeModalByBg(event, 'cart-m')">
+        <div class="modal-c" onclick="event.stopPropagation()">
+            <h3>{t['cart_title']}</h3>
+            <div id="c-list"></div>
+            <button onclick="document.getElementById('cart-m').style.display='none'" style="width:100%;padding:10px;margin-top:15px;border:1px solid #ddd;border-radius:10px;background:#f8f9fa;">{t['close']}</button>
+        </div>
+    </div>
+
     <script>
     const P={p_json}, T={t_json}, PRELOAD={preload_cart}, CUR_LANG="{lang}";
-    let C=[], cur=null, q=1, selectedOptIndices=[], addP=0;
+    let C=[], cur=null, selectedOptIndices=[], addP=0;
+    
+    window.onpageshow = function(event) {{
+        if (event.persisted || (window.performance && window.performance.navigation.type === 2)) {{
+            C = []; upd();
+        }}
+    }};
+
     if(PRELOAD && PRELOAD.length > 0) C = PRELOAD;
-    let h="", cat="";
+
+    // 生成菜單與分類導覽 (核心修改處)
+    let h="", lastCatKey="", cats=[];
     P.forEach(p=>{{
-        if(p.category!=cat) {{ h+=`<div class="cat-header">${{p.category}}</div>`; cat=p.category; }}
+        // 根據當前語言獲取分類名稱
+        let currentCatName = p['category_' + CUR_LANG] || p.category_zh;
+        // 使用 category_zh 作為唯一標識(ID)，避免因為翻譯不同導致 ID 衝突
+        let catId = "cat-" + p.category_zh; 
+
+        if(p.category_zh != lastCatKey) {{ 
+            h+=`<div class="cat-header" id="${{catId}}">${{currentCatName}}</div>`; 
+            lastCatKey=p.category_zh; 
+            cats.push({{ id: catId, name: currentCatName }});
+        }}
+        
         let isAvail = p.is_available;
         let d_name = p['name_' + CUR_LANG] || p.name_zh;
         h+=`<div class="menu-item ${{isAvail ? '' : 'sold-out'}}">
@@ -315,9 +387,29 @@ def render_frontend(products, t, default_table, lang, preload_cart, edit_oid):
         </div>`;
     }});
     document.getElementById('list').innerHTML=h;
-    upd();
+
+    // 生成分類按鈕
+    let navH = "";
+    cats.forEach(c => {{
+        navH += `<div class="cat-btn" onclick="scrollToCat('${{c.id}}', this)">${{c.name}}</div>`;
+    }});
+    document.getElementById('cat-nav').innerHTML = navH;
+
+    function scrollToCat(catId, btn) {{
+        const el = document.getElementById(catId);
+        if(el) {{
+            el.scrollIntoView({{ behavior: 'smooth' }});
+            document.querySelectorAll('.cat-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+        }}
+    }}
+
+    function closeModalByBg(e, id) {{
+        document.getElementById(id).style.display = 'none';
+    }}
+
     function openOpt(id){{
-        cur=P.find(x=>x.id==id); q=1; selectedOptIndices=[]; addP=0;
+        cur=P.find(x=>x.id==id); selectedOptIndices=[]; addP=0;
         document.getElementById('m-name').innerText = cur['name_' + CUR_LANG] || cur.name_zh;
         let area=document.getElementById('m-opts'); area.innerHTML="";
         let opts = cur['custom_options_' + CUR_LANG] || cur.custom_options_zh;
@@ -332,22 +424,32 @@ def render_frontend(products, t, default_table, lang, preload_cart, edit_oid):
             }};
             area.appendChild(d);
         }});
-        document.getElementById('m-q').innerText=1;
+        document.getElementById('m-q').value=1;
         document.getElementById('opt-m').style.display='flex';
     }}
+
+    function cq(n){{
+        let input = document.getElementById('m-q');
+        let val = parseInt(input.value) || 1;
+        if(val + n >= 1) input.value = val + n;
+    }}
+
     function addC(){{
+        let q = parseInt(document.getElementById('m-q').value) || 1;
         C.push({{ 
-            id: cur.id, name: cur.name_en, name_zh: cur.name_zh, name_jp: cur.name_jp, name_kr: cur.name_kr, 
+            id: cur.id, 
+            name_zh: cur.name_zh, name_en: cur.name_en, name_jp: cur.name_jp, name_kr: cur.name_kr, 
             unit_price: cur.price + addP, qty: q, 
-            options: selectedOptIndices.map(idx => cur.custom_options_en[idx]),
             options_zh: selectedOptIndices.map(idx => cur.custom_options_zh[idx]),
+            options_en: selectedOptIndices.map(idx => cur.custom_options_en[idx]),
             options_jp: selectedOptIndices.map(idx => cur.custom_options_jp[idx]),
             options_kr: selectedOptIndices.map(idx => cur.custom_options_kr[idx]),
-            category: cur.category, print_category: cur.print_category 
+            category: cur.category_zh, print_category: cur.print_category 
         }});
-        document.getElementById('opt-m').style.display='none'; upd();
+        document.getElementById('opt-m').style.display='none'; 
+        upd();
     }}
-    function cq(n){{ if(q+n>0) {{q+=n; document.getElementById('m-q').innerText=q;}} }}
+
     function upd(){{
         if(C.length){{
             document.getElementById('bar').style.display='flex';
@@ -355,27 +457,62 @@ def render_frontend(products, t, default_table, lang, preload_cart, edit_oid):
             document.getElementById('cnt').innerText = C.reduce((a,b)=>a+b.qty,0);
         }} else document.getElementById('bar').style.display='none';
     }}
+
+    function updateCartQty(idx, n){{
+        C[idx].qty += n;
+        if(C[idx].qty <= 0) C.splice(idx, 1);
+        showCart();
+        upd();
+    }}
+    
+    function setCartQty(idx, val){{
+        let q = parseInt(val) || 1;
+        if(q < 1) q = 1;
+        C[idx].qty = q;
+        upd();
+        document.getElementById('tot').innerText = C.reduce((a,b)=>a+b.unit_price*b.qty,0);
+        document.getElementById('cnt').innerText = C.reduce((a,b)=>a+b.qty,0);
+    }}
+
     function showCart(){{
         let h="";
         C.forEach((i,x)=>{{
-            h+=`<div style="border-bottom:1px solid #eee;padding:10px;display:flex;justify-content:space-between;">
-                <div><b>${{i['name_' + CUR_LANG] || i.name_zh}}</b> x${{i.qty}}</div>
-                <button onclick="C.splice(${{x}},1);upd();showCart()" style="color:red;border:none;background:none;">🗑️</button>
+            let d_name = i['name_' + CUR_LANG] || i.name_zh;
+            let opts = i['options_' + CUR_LANG] || i.options_zh || [];
+            let opt_str = opts.length ? `<div style="font-size:0.85em;color:#666;">(${{opts.join(',')}})</div>` : '';
+            
+            h+=`<div class="cart-item-row">
+                <div class="cart-item-main">
+                    <div><b>${{d_name}}</b>${{opt_str}}</div>
+                    <div style="font-weight:bold;color:#e91e63">$${{i.unit_price * i.qty}}</div>
+                </div>
+                <div class="cart-qty-sub">
+                    <button onclick="C.splice(${{x}},1);upd();showCart()" style="color:red;border:none;background:none;margin-right:auto;font-size:1.2em;">🗑️</button>
+                    <div class="qty-ctrl" style="margin:0;">
+                        <button onclick="updateCartQty(${{x}}, -1)">-</button>
+                        <input type="number" class="qty-input" value="${{i.qty}}" onchange="setCartQty(${{x}}, this.value)" inputmode="numeric">
+                        <button onclick="updateCartQty(${{x}}, 1)">+</button>
+                    </div>
+                </div>
             </div>`;
         }});
-        document.getElementById('c-list').innerHTML=h;
+        document.getElementById('c-list').innerHTML=h || `<p style="text-align:center;">${{T.empty_cart}}</p>`;
         document.getElementById('cart-m').style.display='flex';
     }}
+
     function sub(){{
         let t = document.getElementById('visible_table').value;
         if(!t) return alert(T.table_placeholder);
-        document.getElementById('tbl_input').value=t;
-        document.getElementById('cart_input').value=JSON.stringify(C);
+        document.getElementById('lang_final_input').value = CUR_LANG;
+        document.getElementById('tbl_input').value = t;
+        document.getElementById('cart_input').value = JSON.stringify(C);
         if(confirm(T.confirm_order)) document.getElementById('order-form').submit();
     }}
+    upd(); 
     </script></body></html>
     """
 
+    
 # --- 4. 下單成功 ---
 @app.route('/order_success')
 def order_success():
@@ -655,9 +792,8 @@ def print_order(oid):
     </style></head>
     <body onload='window.print(); setTimeout(function(){{ window.close(); }}, 1200);'>{body}</body></html>
     """
-# --- 9. 後台管理 (完整修正版：含清空訂單、切換、刪除與全語系支援) ---
+# --- 9. 後台管理 (新增匯入/匯出/一鍵清空功能) ---
 
-# [API] 接收前端拖拉後的 ID 順序
 @app.route('/admin/reorder_products', methods=['POST'])
 def reorder_products():
     try:
@@ -671,7 +807,6 @@ def reorder_products():
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
-# [功能] 切換產品上架/下架狀態
 @app.route('/admin/toggle_product/<int:pid>')
 def toggle_product(pid):
     conn = get_db_connection(); cur = conn.cursor()
@@ -679,7 +814,6 @@ def toggle_product(pid):
     conn.commit(); conn.close()
     return redirect('/admin')
 
-# [功能] 刪除產品
 @app.route('/admin/delete_product/<int:pid>')
 def delete_product(pid):
     conn = get_db_connection(); cur = conn.cursor()
@@ -687,41 +821,92 @@ def delete_product(pid):
     conn.commit(); conn.close()
     return redirect('/admin')
 
-# [功能] 徹底清空所有訂單記錄 (修正您提到的失效問題)
+# --- 核心新增功能：匯出/匯入/清空菜單 ---
+
+@app.route('/admin/export_menu')
+def export_menu():
+    conn = get_db_connection(); cur = conn.cursor()
+    cur.execute("SELECT * FROM products ORDER BY sort_order ASC")
+    colnames = [desc[0] for desc in cur.description]
+    products = [dict(zip(colnames, row)) for row in cur.fetchall()]
+    conn.close()
+    
+    # 轉換成 JSON 字串並作為檔案下載
+    json_data = json.dumps(products, ensure_ascii=False, indent=4)
+    return Response(
+        json_data,
+        mimetype="application/json",
+        headers={"Content-disposition": "attachment; filename=menu_export.json"}
+    )
+
+@app.route('/admin/import_menu', methods=['POST'])
+def import_menu():
+    if 'menu_file' not in request.files: return "無檔案", 400
+    file = request.files['menu_file']
+    if file.filename == '': return "未選擇檔案", 400
+    
+    try:
+        data = json.load(file)
+        conn = get_db_connection(); cur = conn.cursor()
+        for p in data:
+            cur.execute("""
+                INSERT INTO products (name, price, category, image_url, custom_options, 
+                name_en, name_jp, name_kr, custom_options_en, custom_options_jp, custom_options_kr,
+                print_category, category_en, category_jp, category_kr, sort_order)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """, (
+                p.get('name'), p.get('price'), p.get('category'), p.get('image_url'), p.get('custom_options'),
+                p.get('name_en'), p.get('name_jp'), p.get('name_kr'),
+                p.get('custom_options_en'), p.get('custom_options_jp'), p.get('custom_options_kr'),
+                p.get('print_category', 'Noodle'), p.get('category_en'), p.get('category_jp'), p.get('category_kr'),
+                p.get('sort_order', 999)
+            ))
+        conn.commit(); conn.close()
+        return redirect('/admin')
+    except Exception as e:
+        return f"匯入失敗: {e}"
+
+@app.route('/admin/reset_menu')
+def reset_menu():
+    try:
+        conn = get_db_connection(); cur = conn.cursor()
+        cur.execute("DELETE FROM products")
+        cur.execute("ALTER SEQUENCE IF EXISTS products_id_seq RESTART WITH 1")
+        conn.commit(); conn.close()
+        return redirect('/admin')
+    except Exception as e:
+        return f"清空失敗: {e}"
+
 @app.route('/admin/reset_orders')
 def reset_orders():
     try:
         conn = get_db_connection(); cur = conn.cursor()
-        # 刪除 orders 表中的所有數據
         cur.execute("DELETE FROM orders")
-        # 重設 daily_seq (可選，視您的需求而定)
-        # 如果您的 ID 是自增主鍵，也可以重設序列
         cur.execute("ALTER SEQUENCE IF EXISTS orders_id_seq RESTART WITH 1")
         conn.commit(); conn.close()
         return redirect('/admin')
     except Exception as e:
         return f"清空失敗: {e}"
 
-# [頁面] 後台主控台
 @app.route('/admin', methods=['GET', 'POST'])
 def admin_panel():
     conn = get_db_connection(); cur = conn.cursor()
 
-    # --- [POST] 手動新增產品 ---
     if request.method == 'POST':
         try:
             cur.execute("""
                 INSERT INTO products (name, price, category, image_url, custom_options, 
                 name_en, name_jp, name_kr,
                 custom_options_en, custom_options_jp, custom_options_kr,
-                print_category, sort_order)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 9999)
+                print_category, category_en, category_jp, category_kr, sort_order)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 9999)
             """, (
                 request.form.get('name'), request.form.get('price'), request.form.get('category'), 
                 request.form.get('image_url'), request.form.get('custom_options'),
                 request.form.get('name_en'), request.form.get('name_jp'), request.form.get('name_kr'),
                 request.form.get('custom_options_en'), request.form.get('custom_options_jp'), request.form.get('custom_options_kr'),
-                request.form.get('print_category', 'Noodle')
+                request.form.get('print_category', 'Noodle'),
+                request.form.get('category_en'), request.form.get('category_jp'), request.form.get('category_kr')
             ))
             conn.commit()
             return redirect('/admin')
@@ -730,10 +915,11 @@ def admin_panel():
         finally:
             cur.close(); conn.close()
 
-    # --- [GET] 讀取產品列表 ---
+    # 讀取產品列表
     cur.execute("""
         SELECT id, name, price, category, image_url, is_available, custom_options, sort_order, 
-               name_en, name_jp, name_kr, custom_options_en, custom_options_jp, custom_options_kr, print_category 
+               name_en, name_jp, name_kr, custom_options_en, custom_options_jp, custom_options_kr, 
+               print_category, category_en, category_jp, category_kr
         FROM products 
         ORDER BY sort_order ASC, id DESC
     """)
@@ -746,12 +932,13 @@ def admin_panel():
         status_text = "<span style='color:green'>上架</span>" if p[5] else "<span style='color:red'>下架</span>"
         toggle_link = f"<a href='/admin/toggle_product/{p[0]}' class='button button-clear' style='display:inline;padding:0;height:auto;line-height:normal;font-size:12px;'>[切換]</a>"
         p_cat = p[14] if len(p)>14 and p[14] else 'Noodle'
+        cat_display = f"{p[3]} <br><small style='color:#666'>(EN:{p[15] or '-'} JP:{p[16] or '-'})</small>"
 
         rows += f"""
         <tr data-id="{p[0]}" class="draggable-item" style="{row_style}">
             <td style="cursor:move;font-size:1.5em;color:#888;width:50px;text-align:center;" class="handle">☰</td>
             <td>{p[0]}</td>
-            <td><b>{p[1]}</b><br><small style="color:#888">{p[3]}</small></td>
+            <td><b>{p[1]}</b><br><small style="color:#888">{cat_display}</small></td>
             <td>{p[2]}</td>
             <td>{p_cat}</td>
             <td>{status_text} <br> {toggle_link}</td>
@@ -774,6 +961,7 @@ def admin_panel():
             .handle {{ touch-action: none; }} 
             h5 {{ margin-bottom: 5px; color: #9b4dca; border-left: 4px solid #9b4dca; padding-left: 10px; }}
             .button-clear {{ text-decoration: underline; }}
+            .tool-bar {{ background: #fff; padding: 10px; border: 1px solid #ddd; border-radius: 8px; margin-bottom: 20px; display: flex; gap: 10px; flex-wrap: wrap; }}
         </style>
     </head>
     <body style="padding:20px;">
@@ -781,11 +969,10 @@ def admin_panel():
     <div style="background:#f4f7f6; padding:20px; border-radius:8px; margin-bottom:30px; border:1px solid #ddd;">
         <h4 style="margin-top:0;">➕ 新增產品</h4>
         <form method="POST">
-            <h5>1. 基本資料</h5>
+            <h5>1. 基本資料 & 分類翻譯</h5>
             <div class="row">
                 <div class="column"><label>名稱 (中文)</label><input type="text" name="name" required></div>
                 <div class="column"><label>價格</label><input type="number" name="price" required></div>
-                <div class="column"><label>分類</label><input type="text" name="category" required></div>
                 <div class="column">
                     <label>出單區域</label>
                     <select name="print_category">
@@ -794,15 +981,19 @@ def admin_panel():
                     </select>
                 </div>
             </div>
-            
-            <h5>2. 多國語言名稱</h5>
+            <div class="row">
+                <div class="column"><label>分類 (中文)</label><input type="text" name="category" required></div>
+                <div class="column"><label>分類 (EN)</label><input type="text" name="category_en"></div>
+                <div class="column"><label>分類 (JP)</label><input type="text" name="category_jp"></div>
+                <div class="column"><label>分類 (KR)</label><input type="text" name="category_kr"></div>
+            </div>
+            <h5>2. 品名翻譯</h5>
             <div class="row">
                 <div class="column"><label>English</label><input type="text" name="name_en"></div>
                 <div class="column"><label>日本語</label><input type="text" name="name_jp"></div>
                 <div class="column"><label>한국어</label><input type="text" name="name_kr"></div>
             </div>
-
-            <h5>3. 客製選項 (例: 加麵:+20,不要蔥:+0)</h5>
+            <h5>3. 客製選項</h5>
             <div class="row">
                 <div class="column"><label>中文選項</label><input type="text" name="custom_options"></div>
                 <div class="column"><label>English</label><input type="text" name="custom_options_en"></div>
@@ -811,10 +1002,20 @@ def admin_panel():
                 <div class="column"><label>日本語</label><input type="text" name="custom_options_jp"></div>
                 <div class="column"><label>한국어</label><input type="text" name="custom_options_kr"></div>
             </div>
-
             <label>圖片 URL</label><input type="text" name="image_url">
             <button type="submit" style="width:100%;">🚀 新增產品</button>
         </form>
+    </div>
+
+    <div class="tool-bar">
+        <a href="/admin/export_menu" class="button button-outline">📤 匯出菜單 (JSON)</a>
+        
+        <form action="/admin/import_menu" method="POST" enctype="multipart/form-data" style="margin:0; display:flex; gap:5px;">
+            <input type="file" name="menu_file" accept=".json" required style="margin:0; width:200px; font-size:12px;">
+            <button type="submit" class="button button-outline">📥 匯入菜單</button>
+        </form>
+        
+        <a href="/admin/reset_menu" onclick="return confirm('危險操作！這將刪除所有菜單品項且無法復原。確定嗎？')" class="button" style="background:#e91e63; border-color:#e91e63;">🗑️ 一鍵刪除所有菜單</a>
     </div>
 
     <div style="position:sticky; top:0; background:white; z-index:100; padding:10px 0; border-bottom:1px solid #eee;">
@@ -854,7 +1055,7 @@ def admin_panel():
     </body></html>
     """
 
-# --- 編輯產品頁面 (維持原樣) ---
+# --- 編輯產品頁面 ---
 @app.route('/admin/edit_product/<int:pid>', methods=['GET','POST'])
 def edit_product(pid):
     conn = get_db_connection(); cur = conn.cursor()
@@ -865,7 +1066,8 @@ def edit_product(pid):
                 name=%s, price=%s, category=%s, image_url=%s, custom_options=%s,
                 name_en=%s, name_jp=%s, name_kr=%s,
                 custom_options_en=%s, custom_options_jp=%s, custom_options_kr=%s,
-                print_category=%s, sort_order=%s
+                print_category=%s, sort_order=%s,
+                category_en=%s, category_jp=%s, category_kr=%s
                 WHERE id=%s
             """, (
                 request.form.get('name'), request.form.get('price'), request.form.get('category'),
@@ -873,6 +1075,7 @@ def edit_product(pid):
                 request.form.get('name_en'), request.form.get('name_jp'), request.form.get('name_kr'),
                 request.form.get('custom_options_en'), request.form.get('custom_options_jp'), request.form.get('custom_options_kr'),
                 request.form.get('print_category'), request.form.get('sort_order'),
+                request.form.get('category_en'), request.form.get('category_jp'), request.form.get('category_kr'),
                 pid
             ))
             conn.commit()
@@ -885,6 +1088,7 @@ def edit_product(pid):
     cur.execute("SELECT * FROM products WHERE id=%s", (pid,))
     p = cur.fetchone()
     conn.close()
+    
     def v(val): return val if val else "" 
 
     return f"""
@@ -892,41 +1096,49 @@ def edit_product(pid):
     <body style="padding:20px;">
         <h3>編輯產品 #{p[0]}</h3>
         <form method="POST">
+            <h5>1. 基本資料 & 排序</h5>
             <div class="row">
                 <div class="column"><label>名稱 (中文)</label><input type="text" name="name" value="{v(p[1])}"></div>
                 <div class="column"><label>價格</label><input type="number" name="price" value="{p[2]}"></div>
                 <div class="column"><label>排序</label><input type="number" name="sort_order" value="{p[7]}"></div>
             </div>
+            <h5>2. 分類與區域</h5>
             <div class="row">
-                <div class="column"><label>分類</label><input type="text" name="category" value="{v(p[3])}"></div>
+                <div class="column"><label>分類 (中文)</label><input type="text" name="category" value="{v(p[3])}"></div>
+                <div class="column"><label>分類 (EN)</label><input type="text" name="category_en" value="{v(p[15])}"></div>
+                <div class="column"><label>分類 (JP)</label><input type="text" name="category_jp" value="{v(p[16])}"></div>
+                <div class="column"><label>分類 (KR)</label><input type="text" name="category_kr" value="{v(p[17])}"></div>
+            </div>
+            <div class="row">
                 <div class="column"><label>出單區域</label>
                     <select name="print_category">
                         <option value="Noodle" {'selected' if p[14]=='Noodle' else ''}>麵區</option>
                         <option value="Soup" {'selected' if p[14]=='Soup' else ''}>湯區</option>
                     </select>
                 </div>
+                <div class="column"><label>圖片 URL</label><input type="text" name="image_url" value="{v(p[4])}"></div>
             </div>
-            <label>圖片 URL</label><input type="text" name="image_url" value="{v(p[4])}">
             <hr>
-            <h5>🌐 多國語言名稱</h5>
+            <h5>🌐 品名多國語言</h5>
             <div class="row">
                 <div class="column"><label>English</label><input type="text" name="name_en" value="{v(p[8])}"></div>
                 <div class="column"><label>日本語</label><input type="text" name="name_jp" value="{v(p[9])}"></div>
                 <div class="column"><label>한국어</label><input type="text" name="name_kr" value="{v(p[10])}"></div>
             </div>
             <hr>
-            <h5>🛠️ 客製化選項</h5>
+            <h5>🛠️ 客製化選項翻譯</h5>
             <label>中文選項</label><input type="text" name="custom_options" value="{v(p[6])}">
-            <label>English Options</label><input type="text" name="custom_options_en" value="{v(p[11])}">
-            <label>日本語オプション</label><input type="text" name="custom_options_jp" value="{v(p[12])}">
-            <label>한국어 옵션</label><input type="text" name="custom_options_kr" value="{v(p[13])}">
+            <div class="row">
+                <div class="column"><label>English</label><input type="text" name="custom_options_en" value="{v(p[11])}"></div>
+                <div class="column"><label>日本語</label><input type="text" name="custom_options_jp" value="{v(p[12])}"></div>
+                <div class="column"><label>한국어</label><input type="text" name="custom_options_kr" value="{v(p[13])}"></div>
+            </div>
             <div style="margin-top:20px;">
                 <button type="submit">💾 儲存</button>
                 <a href="/admin" class="button button-outline">取消</a>
             </div>
         </form>
     </body></html>"""
-
     
 # --- 防休眠 ---
 def keep_alive():
