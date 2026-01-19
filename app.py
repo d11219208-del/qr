@@ -1,15 +1,3 @@
-這個錯誤 HTTP Error 422: Unprocessable Entity 通常發生在調用 Resend API 時，傳遞的資料格式不符合其要求。
-
-最常見的原因有兩個：
-
-發件人 (Sender Email) 未驗證：如果您還沒有在 Resend 綁定自己的網域，您必須使用 onboarding@resend.dev 作為發件人，且收件人只能是您註冊 Resend 時的那個 Email。
-
-JSON 格式錯誤：發送給 API 的資料缺少必要欄位。
-
-以下是修正後的完整 app.py 程式碼。我優化了 send_daily_report 的 JSON 處理邏輯，並強化了錯誤捕獲以便您調試。
-
-完整的整合程式碼
-Python
 import os
 import psycopg2
 import json
