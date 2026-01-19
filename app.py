@@ -1086,12 +1086,15 @@ def admin_panel():
         elif action == 'test_email':
             msg = send_daily_report()
         elif action == 'add_product':
-            # 新增產品包含所有多語言與客製化欄位
-            cur.execute("""INSERT INTO products (name, price, category, print_category, name_en, name_jp, name_kr, custom_options) 
-                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""", 
+            # 新增產品：包含品名(中英日韓)與客製化選項(中英日韓)
+            cur.execute("""INSERT INTO products (name, price, category, print_category, 
+                           name_en, name_jp, name_kr, 
+                           custom_options, custom_options_en, custom_options_jp, custom_options_kr) 
+                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""", 
                        (request.form.get('name'), request.form.get('price'), request.form.get('category'), 
                         request.form.get('print_category'), request.form.get('name_en'), request.form.get('name_jp'), 
-                        request.form.get('name_kr'), request.form.get('custom_options')))
+                        request.form.get('name_kr'), request.form.get('custom_options'),
+                        request.form.get('custom_options_en'), request.form.get('custom_options_jp'), request.form.get('custom_options_kr')))
             conn.commit(); return redirect('/admin')
 
     cur.execute("SELECT key, value FROM settings")
@@ -1137,12 +1140,20 @@ def admin_panel():
                 <div class="column"><label>出單區</label><select name="print_category"><option value="Noodle">麵區</option><option value="Soup">湯區</option></select></div>
             </div>
             <div class="row">
-                <div class="column"><label>EN</label><input type="text" name="name_en"></div>
-                <div class="column"><label>JP</label><input type="text" name="name_jp"></div>
-                <div class="column"><label>KR</label><input type="text" name="name_kr"></div>
+                <div class="column"><label>品名 EN</label><input type="text" name="name_en"></div>
+                <div class="column"><label>品名 JP</label><input type="text" name="name_jp"></div>
+                <div class="column"><label>品名 KR</label><input type="text" name="name_kr"></div>
             </div>
-            <label>客製化選項 (中文,逗號隔開)</label><input type="text" name="custom_options" placeholder="加麵,去蔥,大辣">
-            <button type="submit">🚀 新增產品</button>
+            <hr>
+            <div class="row">
+                <div class="column"><label>客製化選項 (中文)</label><input type="text" name="custom_options" placeholder="加麵,去蔥"></div>
+                <div class="column"><label>選項 EN</label><input type="text" name="custom_options_en"></div>
+            </div>
+            <div class="row">
+                <div class="column"><label>選項 JP</label><input type="text" name="custom_options_jp"></div>
+                <div class="column"><label>選項 KR</label><input type="text" name="custom_options_kr"></div>
+            </div>
+            <button type="submit" style="width:100%">🚀 新增產品</button>
         </form>
     </div>
 
