@@ -114,7 +114,7 @@ def init_db():
     finally:
         cur.close(); conn.close()
 
-# --- Email 報告邏輯 ---
+# --- Email 報告發送邏輯 (整合詳細報表內容) ---
 def send_daily_report():
     conn = get_db_connection(); cur = conn.cursor()
     try:
@@ -122,27 +122,85 @@ def send_daily_report():
         config = dict(cur.fetchall())
         api_key = config.get('resend_api_key', '').strip()
         to_email = config.get('report_email', '').strip()
-        if not api_key or not to_email: return "未設定"
+        if not api_key or not to_email: return "❌ 未設定 Email 或 API Key"
 
-        cur.execute("""
-            SELECT COUNT(*), SUM(total_price) FROM orders 
-            WHERE (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Taipei')::date = CURRENT_DATE
-            AND status != 'Cancelled'
-        """)
-        count, total = cur.fetchone()
-        total = total or 0
+        # 1. 抓取統計數據 (有效單與作廢單)
+        # 使用台北時間篩選今日訂單
+        time_filter = "(created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Taipei')::date = CURRENT_DATE"
+        
+        cur.execute(f"SELECT COUNT(*), SUM(total_price) FROM orders WHERE {time_filter} AND status != 'Cancelled'")
+        v_count, v_total = cur.fetchone()
+        
+        cur.execute(f"SELECT COUNT(*), SUM(total_price) FROM orders WHERE {time_filter} AND status = 'Cancelled'")
+        x_count, x_total = cur.fetchone()
 
+        # 2. 抓取品項明細進行彙整
+        cur.execute(f"SELECT content_json FROM orders WHERE {time_filter} AND status != 'Cancelled'")
+        valid_rows = cur.fetchall()
+        
+        def agg_items(rows):
+            stats = {}
+            for r in rows:
+                if not r[0]: continue
+                try:
+                    items = json.loads(r[0]) if isinstance(r[0], str) else r[0]
+                    for i in items:
+                        name = i.get('name_zh', i.get('name', '未知'))
+                        qty = int(i.get('qty', 0))
+                        stats[name] = stats.get(name, 0) + qty
+                except: pass
+            return stats
+
+        valid_stats = agg_items(valid_rows)
+        
+        # 3. 組裝 Email 文字內容
+        today_str = date.today().strftime('%Y-%m-%d')
+        item_detail_text = ""
+        if valid_stats:
+            item_detail_text = "\n【品項銷量統計】\n"
+            for name, qty in sorted(valid_stats.items(), key=lambda x: x[1], reverse=True):
+                item_detail_text += f"• {name}: {qty}\n"
+        else:
+            item_detail_text = "\n(今日無銷量明細)\n"
+
+        email_content = f"""
+🍴 餐廳日結報表 ({today_str})
+---------------------------------
+✅ 【有效營收】
+單量：{v_count or 0} 筆
+總額：${v_total or 0}
+
+{item_detail_text}
+---------------------------------
+❌ 【作廢統計】
+單量：{x_count or 0} 筆
+總額：${x_total or 0}
+---------------------------------
+報告產出時間：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+        """
+
+        # 4. 發送請求至 Resend API
         payload = {
             "from": config.get('sender_email', 'onboarding@resend.dev').strip(),
             "to": [to_email],
-            "subject": f"【日結單】{date.today()} 營業統計",
-            "text": f"今日成交: {count} 筆\n總金額: ${total}"
+            "subject": f"【日結單】{today_str} 營業統計報告",
+            "text": email_content
         }
-        req = urllib.request.Request("https://api.resend.com/emails", data=json.dumps(payload).encode('utf-8'),
-                                     headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}, method='POST')
-        with urllib.request.urlopen(req) as res: return "成功"
-    except Exception as e: return str(e)
-    finally: cur.close(); conn.close()
+        
+        req = urllib.request.Request(
+            "https://api.resend.com/emails", 
+            data=json.dumps(payload).encode('utf-8'),
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}, 
+            method='POST'
+        )
+        with urllib.request.urlopen(req) as res: 
+            return "✅ 成功"
+            
+    except Exception as e: 
+        return f"❌ 錯誤: {str(e)}"
+    finally: 
+        cur.close(); conn.close()
+        
 
 # --- 背景定時任務 ---
 def scheduler_loop():
@@ -1014,7 +1072,6 @@ def print_order(oid):
 def reorder_products():
     data = request.get_json()
     conn = get_db_connection(); cur = conn.cursor()
-    # 確保依照拖拽後的順序更新 sort_order
     for index, pid in enumerate(data.get('order', [])):
         cur.execute("UPDATE products SET sort_order = %s WHERE id = %s", (index + 1, pid))
     conn.commit(); cur.close(); conn.close()
@@ -1076,17 +1133,25 @@ def reset_orders():
 @app.route('/admin', methods=['GET', 'POST'])
 def admin_panel():
     conn = get_db_connection(); cur = conn.cursor()
-    msg = ""
+    msg = request.args.get('msg', '') # 從 URL 參數取得訊息，避免重整時重複操作
+    
     if request.method == 'POST':
         action = request.form.get('action')
         if action == 'save_settings':
             cur.execute("UPDATE settings SET value=%s WHERE key='report_email'", (request.form.get('report_email'),))
             cur.execute("UPDATE settings SET value=%s WHERE key='resend_api_key'", (request.form.get('resend_api_key'),))
-            conn.commit(); msg = "✅ 設定儲存成功"
+            conn.commit()
+            conn.close()
+            # 操作完畢後一定要 Redirect 回自己，這樣重整就不會重複 POST
+            return redirect(url_for('admin_panel', msg="✅ 設定儲存成功"))
+            
         elif action == 'test_email':
-            msg = send_daily_report()
+            # 呼叫發信函式並導向
+            status_msg = send_daily_report() 
+            conn.close()
+            return redirect(url_for('admin_panel', msg=status_msg))
+            
         elif action == 'add_product':
-            # 新增產品：包含品名(中英日韓)與客製化選項(中英日韓)
             cur.execute("""INSERT INTO products (name, price, category, print_category, 
                            name_en, name_jp, name_kr, 
                            custom_options, custom_options_en, custom_options_jp, custom_options_kr) 
@@ -1095,7 +1160,9 @@ def admin_panel():
                         request.form.get('print_category'), request.form.get('name_en'), request.form.get('name_jp'), 
                         request.form.get('name_kr'), request.form.get('custom_options'),
                         request.form.get('custom_options_en'), request.form.get('custom_options_jp'), request.form.get('custom_options_kr')))
-            conn.commit(); return redirect('/admin')
+            conn.commit()
+            conn.close()
+            return redirect(url_for('admin_panel', msg="✅ 產品新增成功"))
 
     cur.execute("SELECT key, value FROM settings")
     config = dict(cur.fetchall())
@@ -1119,7 +1186,8 @@ def admin_panel():
     return f"""
     <!DOCTYPE html><html><head><meta charset="UTF-8"><link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/milligram/1.4.1/milligram.min.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.14.0/Sortable.min.js"></script></head><body style="padding:20px;">
-    <h2>🍴 餐廳管理後台</h2><p style="color:blue;">{msg}</p>
+    <h2>🍴 餐廳管理後台</h2>
+    <div id="status-msg" style="color:blue; font-weight:bold; margin-bottom:10px;">{msg}</div>
     
     <div style="background:#f4f7f6; padding:15px; border-radius:8px; margin-bottom:20px;">
         <form method="POST"><input type="hidden" name="action" value="save_settings">
@@ -1180,12 +1248,16 @@ def admin_panel():
             }});
         }}
     }});
+    // 3秒後自動隱藏訊息
+    setTimeout(() => {{ 
+        const msgDiv = document.getElementById('status-msg');
+        if (msgDiv) msgDiv.style.display = 'none';
+    }}, 3000);
     </script></body></html>"""
 
 @app.route('/')
 def index():
     return "系統運作中。<a href='/admin'>進入後台</a>"
-
     
 # --- 編輯產品頁面 (維持原樣) ---
 @app.route('/admin/edit_product/<int:pid>', methods=['GET','POST'])
