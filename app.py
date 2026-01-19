@@ -1008,71 +1008,75 @@ def print_order(oid):
     """
 
     
-
 # --- 9. 後台管理核心功能 ---
 
-# --- 後台 API: 儲存排序 ---
 @app.route('/admin/reorder_products', methods=['POST'])
 def reorder_products():
     data = request.get_json()
     conn = get_db_connection(); cur = conn.cursor()
+    # 確保依照拖拽後的順序更新 sort_order
     for index, pid in enumerate(data.get('order', [])):
         cur.execute("UPDATE products SET sort_order = %s WHERE id = %s", (index + 1, pid))
     conn.commit(); cur.close(); conn.close()
     return jsonify({'status': 'success'})
 
-# --- 後台：編輯產品 ---
-@app.route('/admin/edit_product/<int:pid>', methods=['GET', 'POST'])
-def edit_product(pid):
+@app.route('/admin/toggle_product/<int:pid>')
+def toggle_product(pid):
     conn = get_db_connection(); cur = conn.cursor()
-    if request.method == 'POST':
-        cur.execute("""UPDATE products SET name=%s, price=%s, category=%s, print_category=%s, is_available=%s,
-                       name_en=%s, name_jp=%s, name_kr=%s, custom_options=%s, custom_options_en=%s, 
-                       custom_options_jp=%s, custom_options_kr=%s WHERE id=%s""", 
-                    (request.form.get('name'), request.form.get('price'), request.form.get('category'), request.form.get('print_category'),
-                     request.form.get('is_available') == 'on', request.form.get('name_en'), request.form.get('name_jp'), 
-                     request.form.get('name_kr'), request.form.get('custom_options'), request.form.get('custom_options_en'),
-                     request.form.get('custom_options_jp'), request.form.get('custom_options_kr'), pid))
-        conn.commit(); conn.close(); return redirect('/admin')
-    
-    cur.execute("SELECT * FROM products WHERE id = %s", (pid,))
-    p = cur.fetchone(); conn.close()
-    if not p: return "找不到產品", 404
-    v = lambda x: x if x is not None else ""
-    return f"""
-    <!DOCTYPE html><html><head><meta charset="UTF-8"><link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/milligram/1.4.1/milligram.min.css"></head><body style="padding:20px;">
-    <h3>✏️ 編輯產品 (ID: {pid})</h3>
-    <form method="POST">
-        <label>名稱 (中文)</label><input type="text" name="name" value="{v(p[1])}" required>
-        <label>價格</label><input type="number" name="price" value="{v(p[2])}" required>
-        <label>分類 (中文)</label><input type="text" name="category" value="{v(p[3])}">
-        <label>出單區域</label><select name="print_category"><option value="Noodle" {'selected' if p[14]=='Noodle' else ''}>麵區</option><option value="Soup" {'selected' if p[14]=='Soup' else ''}>湯區</option></select>
-        <label><input type="checkbox" name="is_available" {'checked' if p[5] else ''}> 上架中</label>
-        <h5>🌐 多國語言品名</h5>
-        <input type="text" name="name_en" placeholder="English" value="{v(p[8])}">
-        <input type="text" name="name_jp" placeholder="日本語" value="{v(p[9])}">
-        <input type="text" name="name_kr" placeholder="한국어" value="{v(p[10])}">
-        <h5>🛠️ 客製化選項 (用逗號隔開)</h5>
-        <input type="text" name="custom_options" placeholder="中文選項" value="{v(p[6])}">
-        <input type="text" name="custom_options_en" placeholder="English" value="{v(p[11])}">
-        <button type="submit">儲存修改</button> <a href="/admin" class="button button-outline">取消</a>
-    </form></body></html>"""
+    cur.execute("UPDATE products SET is_available = NOT is_available WHERE id = %s", (pid,))
+    conn.commit(); conn.close()
+    return redirect('/admin')
 
 @app.route('/admin/delete_product/<int:pid>')
 def delete_product(pid):
-    conn = get_db_connection(); cur = conn.cursor(); cur.execute("DELETE FROM products WHERE id = %s", (pid,)); conn.commit(); conn.close(); return redirect('/admin')
+    conn = get_db_connection(); cur = conn.cursor()
+    cur.execute("DELETE FROM products WHERE id = %s", (pid,))
+    conn.commit(); conn.close()
+    return redirect('/admin')
 
 @app.route('/admin/export_menu')
 def export_menu():
-    conn = get_db_connection(); df = pd.read_sql("SELECT * FROM products ORDER BY sort_order ASC", conn); conn.close()
+    conn = get_db_connection()
+    df = pd.read_sql("SELECT * FROM products ORDER BY sort_order ASC", conn)
+    conn.close()
     output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer: df.to_excel(writer, index=False)
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df.to_excel(writer, index=False)
     output.seek(0)
     return send_file(output, mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", as_attachment=True, download_name="menu_export.xlsx")
 
+@app.route('/admin/import_menu', methods=['POST'])
+def import_menu():
+    file = request.files.get('menu_file')
+    if not file: return "無檔案", 400
+    df = pd.read_excel(file)
+    df = df.where(pd.notnull(df), None)
+    conn = get_db_connection(); cur = conn.cursor()
+    for _, p in df.iterrows():
+        cur.execute("""INSERT INTO products (name, price, category, print_category, sort_order, is_available, name_en, name_jp, name_kr) 
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)""", 
+                    (p.get('name'), p.get('price'), p.get('category'), p.get('print_category','Noodle'), p.get('sort_order',99), p.get('is_available',True), p.get('name_en'), p.get('name_jp'), p.get('name_kr')))
+    conn.commit(); conn.close()
+    return redirect('/admin')
+
+@app.route('/admin/reset_menu')
+def reset_menu():
+    conn = get_db_connection(); cur = conn.cursor()
+    cur.execute("TRUNCATE TABLE products RESTART IDENTITY CASCADE")
+    conn.commit(); conn.close()
+    return redirect('/admin')
+
+@app.route('/admin/reset_orders')
+def reset_orders():
+    conn = get_db_connection(); cur = conn.cursor()
+    cur.execute("TRUNCATE TABLE orders RESTART IDENTITY CASCADE")
+    conn.commit(); conn.close()
+    return redirect('/admin')
+
 @app.route('/admin', methods=['GET', 'POST'])
 def admin_panel():
-    conn = get_db_connection(); cur = conn.cursor(); msg = ""
+    conn = get_db_connection(); cur = conn.cursor()
+    msg = ""
     if request.method == 'POST':
         action = request.form.get('action')
         if action == 'save_settings':
@@ -1082,49 +1086,94 @@ def admin_panel():
         elif action == 'test_email':
             msg = send_daily_report()
         elif action == 'add_product':
+            # 新增產品包含所有多語言與客製化欄位
             cur.execute("""INSERT INTO products (name, price, category, print_category, name_en, name_jp, name_kr, custom_options) 
                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""", 
-                        (request.form.get('name'), request.form.get('price'), request.form.get('category'), request.form.get('print_category'),
-                         request.form.get('name_en'), request.form.get('name_jp'), request.form.get('name_kr'), request.form.get('custom_options')))
+                       (request.form.get('name'), request.form.get('price'), request.form.get('category'), 
+                        request.form.get('print_category'), request.form.get('name_en'), request.form.get('name_jp'), 
+                        request.form.get('name_kr'), request.form.get('custom_options')))
             conn.commit(); return redirect('/admin')
 
-    cur.execute("SELECT key, value FROM settings"); config = dict(cur.fetchall())
-    cur.execute("SELECT id, name, price, category, is_available, print_category FROM products ORDER BY sort_order ASC, id DESC")
-    prods = cur.fetchall(); conn.close()
+    cur.execute("SELECT key, value FROM settings")
+    config = dict(cur.fetchall())
+    cur.execute("SELECT id, name, price, category, is_available, print_category, sort_order FROM products ORDER BY sort_order ASC, id DESC")
+    prods = cur.fetchall()
+    conn.close()
 
-    rows = "".join([f"<tr data-id='{p[0]}'><td class='handle' style='cursor:move'>☰</td><td>{p[0]}</td><td>{p[1]}<br><small>{p[3]}</small></td><td>{p[2]}</td><td>{p[5]}</td><td>{'上架' if p[4] else '下架'}</td><td><a href='/admin/edit_product/{p[0]}'>編輯</a> | <a href='/admin/delete_product/{p[0]}' onclick='return confirm(\"確定刪除？\")' style='color:red'>刪除</a></td></tr>" for p in prods])
+    rows = ""
+    for p in prods:
+        status = f"<span style='color:{'green' if p[4] else 'red'}'>{'上架' if p[4] else '下架'}</span>"
+        rows += f"""<tr data-id='{p[0]}'>
+            <td class='handle' style='cursor:move'>☰</td>
+            <td>{p[0]}</td>
+            <td>{p[1]}<br><small>{p[3]}</small></td>
+            <td>{p[2]}</td>
+            <td>{p[5]}</td>
+            <td>{status} <a href='/admin/toggle_product/{p[0]}'>[切換]</a></td>
+            <td><a href='/admin/edit_product/{p[0]}'>編輯</a> | <a href='/admin/delete_product/{p[0]}' onclick='return confirm("刪除？")'>刪除</a></td>
+        </tr>"""
 
     return f"""
     <!DOCTYPE html><html><head><meta charset="UTF-8"><link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/milligram/1.4.1/milligram.min.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.14.0/Sortable.min.js"></script></head><body style="padding:20px;">
-    <h2>🍴 管理後台</h2><p style="color:blue;">{msg}</p>
+    <h2>🍴 餐廳管理後台</h2><p style="color:blue;">{msg}</p>
+    
     <div style="background:#f4f7f6; padding:15px; border-radius:8px; margin-bottom:20px;">
         <form method="POST"><input type="hidden" name="action" value="save_settings">
             Email: <input type="email" name="report_email" value="{config.get('report_email','')}"> 
             API Key: <input type="password" name="resend_api_key" value="{config.get('resend_api_key','')}">
-            <button type="submit">儲存設定</button>
+            <button type="submit">儲存 Email 設定</button>
         </form>
-        <form method="POST"><input type="hidden" name="action" value="test_email"><button type="submit" class="button button-outline">🧪 測試發送報告</button></form>
+        <form method="POST"><input type="hidden" name="action" value="test_email"><button type="submit" class="button button-outline">🧪 測試發送 Email</button></form>
     </div>
+
     <div style="background:#fff3e0; padding:15px; border-radius:8px; margin-bottom:20px;">
-        <h4>➕ 新增產品</h4>
+        <h4>➕ 新增產品 (多語言)</h4>
         <form method="POST"><input type="hidden" name="action" value="add_product">
-            <div class="row"><div class="column"><label>品名</label><input type="text" name="name" required></div><div class="column"><label>價格</label><input type="number" name="price" required></div></div>
-            <div class="row"><div class="column"><label>EN</label><input type="text" name="name_en"></div><div class="column"><label>JP</label><input type="text" name="name_jp"></div><div class="column"><label>KR</label><input type="text" name="name_kr"></div></div>
-            <label>選項 (逗號隔開)</label><input type="text" name="custom_options">
-            <button type="submit" style="width:100%">新增</button>
+            <div class="row">
+                <div class="column"><label>名稱(中)</label><input type="text" name="name" required></div>
+                <div class="column"><label>價格</label><input type="number" name="price" required></div>
+                <div class="column"><label>分類</label><input type="text" name="category"></div>
+                <div class="column"><label>出單區</label><select name="print_category"><option value="Noodle">麵區</option><option value="Soup">湯區</option></select></div>
+            </div>
+            <div class="row">
+                <div class="column"><label>EN</label><input type="text" name="name_en"></div>
+                <div class="column"><label>JP</label><input type="text" name="name_jp"></div>
+                <div class="column"><label>KR</label><input type="text" name="name_kr"></div>
+            </div>
+            <label>客製化選項 (中文,逗號隔開)</label><input type="text" name="custom_options" placeholder="加麵,去蔥,大辣">
+            <button type="submit">🚀 新增產品</button>
         </form>
     </div>
-    <div style="margin-bottom:10px;"><a href="/admin/export_menu" class="button button-outline">📤 匯出 Excel</a></div>
-    <table><thead><tr><th>序</th><th>ID</th><th>品名</th><th>價</th><th>區</th><th>狀態</th><th>操作</th></tr></thead>
+
+    <div style="margin-bottom:20px;">
+        <a href="/admin/export_menu" class="button button-outline">📤 匯出 Excel</a>
+        <form action="/admin/import_menu" method="POST" enctype="multipart/form-data" style="display:inline;"><input type="file" name="menu_file" required><button type="submit">📥 匯入</button></form>
+        <a href="/admin/reset_menu" class="button" style="background:red; border-color:red;" onclick="return confirm('清空菜單？')">🗑️ 清空菜單</a>
+        <a href="/admin/reset_orders" class="button button-clear" onclick="return confirm('清空訂單？')">⚠️ 清空訂單</a>
+    </div>
+
+    <table><thead><tr><th>序</th><th>ID</th><th>品名</th><th>價</th><th>分區</th><th>狀態</th><th>操作</th></tr></thead>
     <tbody id="menu-list">{rows}</tbody></table>
-    <script>Sortable.create(document.getElementById('menu-list'), {{handle: '.handle', animation:150, onEnd: function() {{
-        let order = Array.from(document.querySelectorAll('#menu-list tr')).map(r => r.getAttribute('data-id'));
-        fetch('/admin/reorder_products', {{method:'POST', headers:{{'Content-Type':'application/json'}}, body:JSON.stringify({{order:order}})}});
-    }}}});</script></body></html>"""
+    
+    <script>
+    Sortable.create(document.getElementById('menu-list'), {{
+        handle: '.handle', 
+        animation: 150,
+        onEnd: function() {{
+            let order = Array.from(document.querySelectorAll('#menu-list tr')).map(r => r.getAttribute('data-id'));
+            fetch('/admin/reorder_products', {{
+                method:'POST', 
+                headers:{{'Content-Type':'application/json'}}, 
+                body:JSON.stringify({{order:order}})
+            }});
+        }}
+    }});
+    </script></body></html>"""
 
 @app.route('/')
-def index(): return "系統運作中。<a href='/admin'>進入後台</a>"
+def index():
+    return "系統運作中。<a href='/admin'>進入後台</a>"
 
     
 # --- 編輯產品頁面 (維持原樣) ---
