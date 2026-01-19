@@ -66,44 +66,52 @@ def load_translations():
         }
     }
 
-# --- 1. 資料庫初始化 ---
+# --- 1. 資料庫初始化 (Email 強化版) ---
 @app.route('/init_db')
 def init_db():
     conn = get_db_connection()
     conn.autocommit = True
     cur = conn.cursor()
     try:
+        # 建立產品表
         cur.execute('''
             CREATE TABLE IF NOT EXISTS products (
-                id SERIAL PRIMARY KEY,
-                name VARCHAR(100) NOT NULL,
-                price INTEGER NOT NULL,
-                category VARCHAR(50),
-                image_url TEXT,
-                is_available BOOLEAN DEFAULT TRUE,
-                custom_options TEXT,
-                sort_order INTEGER DEFAULT 100,
+                id SERIAL PRIMARY KEY, name VARCHAR(100) NOT NULL, price INTEGER NOT NULL,
+                category VARCHAR(50), image_url TEXT, is_available BOOLEAN DEFAULT TRUE,
+                custom_options TEXT, sort_order INTEGER DEFAULT 100,
                 name_en VARCHAR(100), name_jp VARCHAR(100), name_kr VARCHAR(100),
                 custom_options_en TEXT, custom_options_jp TEXT, custom_options_kr TEXT,
                 print_category VARCHAR(20) DEFAULT 'Noodle',
                 category_en VARCHAR(50), category_jp VARCHAR(50), category_kr VARCHAR(50)
             );
         ''')
+        # 建立訂單表
         cur.execute('''
             CREATE TABLE IF NOT EXISTS orders (
-                id SERIAL PRIMARY KEY,
-                table_number VARCHAR(10),
-                items TEXT NOT NULL, 
-                total_price INTEGER NOT NULL,
-                status VARCHAR(20) DEFAULT 'Pending',
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                daily_seq INTEGER DEFAULT 0,
-                content_json TEXT,
-                need_receipt BOOLEAN DEFAULT FALSE,
-                lang VARCHAR(10) DEFAULT 'zh'
+                id SERIAL PRIMARY KEY, table_number VARCHAR(10), items TEXT NOT NULL, 
+                total_price INTEGER NOT NULL, status VARCHAR(20) DEFAULT 'Pending',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, daily_seq INTEGER DEFAULT 0,
+                content_json TEXT, need_receipt BOOLEAN DEFAULT FALSE, lang VARCHAR(10) DEFAULT 'zh'
             );
         ''')
-        # 自動修復欄位邏輯 (Alters)
+        # 建立設定表 (儲存 API Key)
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            );
+        ''')
+        
+        # 插入預設 Email 設定
+        default_settings = [
+            ('report_email', ''),       # 收件人 Email
+            ('resend_api_key', ''),     # Resend API Key
+            ('sender_email', 'onboarding@resend.dev') # Resend 發件人
+        ]
+        for k, v in default_settings:
+            cur.execute("INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT DO NOTHING", (k, v))
+
+        # 自動修復欄位
         alters = [
             "ALTER TABLE orders ADD COLUMN IF NOT EXISTS lang VARCHAR(10) DEFAULT 'zh';",
             "ALTER TABLE orders ADD COLUMN IF NOT EXISTS content_json TEXT;"
@@ -112,11 +120,83 @@ def init_db():
             try: cur.execute(cmd)
             except: pass
 
-        return "資料庫結構檢查完成。<a href='/'>回首頁</a>"
+        return "資料庫結構檢查與 Email 設定初始化完成。<a href='/admin'>前往後台設定 Email</a>"
     except Exception as e:
         return f"DB Error: {e}"
     finally:
         cur.close(); conn.close()
+
+# --- Email 寄送函數 (使用 Resend API) ---
+def send_daily_report():
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT key, value FROM settings")
+        config = dict(cur.fetchall())
+        
+        if not config.get('resend_api_key') or not config.get('report_email'):
+            print("Email 尚未設定，跳過寄送")
+            return "尚未設定 API Key 或收件 Email"
+
+        # 統計今日數據 (台灣時間當天)
+        # 注意：Heroku/Render 通常是 UTC 時間，需調整
+        cur.execute("""
+            SELECT COUNT(*), SUM(total_price) FROM orders 
+            WHERE (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Taipei')::date = CURRENT_DATE
+            AND status != 'Cancelled'
+        """)
+        count, total = cur.fetchone()
+        total = total or 0
+
+        subject = f"【自動結報】{date.today()} 營業統計"
+        content = f"時間: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\\n今日成交訂單: {count} 筆\\n今日累計營收: ${total}"
+
+        api_url = "https://api.resend.com/emails"
+        headers = {
+            "Authorization": f"Bearer {config['resend_api_key']}",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "from": config.get('sender_email', 'onboarding@resend.dev'),
+            "to": config['report_email'],
+            "subject": subject,
+            "text": content
+        }
+
+        req = urllib.request.Request(api_url, data=json.dumps(payload).encode('utf-8'), headers=headers)
+        with urllib.request.urlopen(req) as res:
+            return f"發送成功 ({res.getcode()})"
+    except Exception as e:
+        print(f"Email 發送出錯: {e}")
+        return f"Error: {e}"
+    finally:
+        cur.close(); conn.close()
+        
+# --- 自動定時寄送邏輯 ---
+def scheduler_loop():
+    print("定時報告排程器已啟動...")
+    last_sent_time = "" # 記錄最後寄送的分鐘，避免重複寄送
+    
+    while True:
+        # 取得當前台灣時間 (UTC+8)
+        # 如果您的伺服器已經在台灣時區，直接用 datetime.now()
+        # 這裡示範標準做法：從 UTC 轉換
+        now_utc = datetime.utcnow()
+        now_tw = now_utc + timedelta(hours=8)
+        current_time_str = now_tw.strftime("%H:%M")
+        
+        # 設定目標時間點
+        targets = ["13:00", "18:00", "20:30"]
+        
+        if current_time_str in targets and current_time_str != last_sent_time:
+            print(f"觸發定時寄送: {current_time_str}")
+            send_daily_report()
+            last_sent_time = current_time_str
+            
+        time.sleep(30) # 每 30 秒檢查一次
+
+# 在 App 啟動時開啟背景執行緒
+threading.Thread(target=scheduler_loop, daemon=True).start()
 
 
 # --- 2. 首頁與語言選擇 (加大文字與視覺優化版) ---
@@ -971,7 +1051,7 @@ def print_order(oid):
     """
 
     
-# --- 9. 後台管理 (Excel 匯入/匯出/一鍵清空版) ---
+# --- 9. 後台管理 (整合版) ---
 
 @app.route('/admin/reorder_products', methods=['POST'])
 def reorder_products():
@@ -1000,115 +1080,100 @@ def delete_product(pid):
     conn.commit(); conn.close()
     return redirect('/admin')
 
-# --- 核心新增功能：Excel 匯出 / Excel 匯入 / 清空 ---
-
 @app.route('/admin/export_menu')
 def export_menu():
     try:
         conn = get_db_connection()
-        # 抓取所有欄位
         df = pd.read_sql("SELECT * FROM products ORDER BY sort_order ASC", conn)
         conn.close()
-
-        # 將 DataFrame 轉換成 Excel 檔案
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
             df.to_excel(writer, index=False, sheet_name='Menu')
         output.seek(0)
-
-        return send_file(
-            output,
-            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            as_attachment=True,
-            download_name="menu_export.xlsx"
-        )
-    except Exception as e:
-        return f"匯出失敗: {e}"
+        return send_file(output, mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                         as_attachment=True, download_name="menu_export.xlsx")
+    except Exception as e: return f"匯出失敗: {e}"
 
 @app.route('/admin/import_menu', methods=['POST'])
 def import_menu():
     if 'menu_file' not in request.files: return "無檔案", 400
     file = request.files['menu_file']
     if file.filename == '': return "未選擇檔案", 400
-    
     try:
-        # 讀取 Excel 檔案
         df = pd.read_excel(file)
-        # 將 NaN 替換為空字串，避免寫入資料庫出錯
         df = df.where(pd.notnull(df), None)
-        
         conn = get_db_connection(); cur = conn.cursor()
         for _, p in df.iterrows():
-            # 排除 ID，讓資料庫自動生成新 ID，避免衝突
             cur.execute("""
                 INSERT INTO products (name, price, category, image_url, custom_options, 
                 name_en, name_jp, name_kr, custom_options_en, custom_options_jp, custom_options_kr,
                 print_category, category_en, category_jp, category_kr, sort_order, is_available)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """, (
-                p.get('name'), p.get('price'), p.get('category'), p.get('image_url'), p.get('custom_options'),
-                p.get('name_en'), p.get('name_jp'), p.get('name_kr'),
-                p.get('custom_options_en'), p.get('custom_options_jp'), p.get('custom_options_kr'),
-                p.get('print_category', 'Noodle'), p.get('category_en'), p.get('category_jp'), p.get('category_kr'),
-                p.get('sort_order', 999), p.get('is_available', True)
-            ))
+            """, (p.get('name'), p.get('price'), p.get('category'), p.get('image_url'), p.get('custom_options'),
+                  p.get('name_en'), p.get('name_jp'), p.get('name_kr'),
+                  p.get('custom_options_en'), p.get('custom_options_jp'), p.get('custom_options_kr'),
+                  p.get('print_category', 'Noodle'), p.get('category_en'), p.get('category_jp'), p.get('category_kr'),
+                  p.get('sort_order', 999), p.get('is_available', True)))
         conn.commit(); conn.close()
         return redirect('/admin')
-    except Exception as e:
-        return f"匯入失敗 (請確保欄位名稱正確): {e}"
+    except Exception as e: return f"匯入失敗: {e}"
 
 @app.route('/admin/reset_menu')
 def reset_menu():
-    try:
-        conn = get_db_connection(); cur = conn.cursor()
-        cur.execute("TRUNCATE TABLE products RESTART IDENTITY CASCADE")
-        conn.commit(); conn.close()
-        return redirect('/admin')
-    except Exception as e:
-        return f"清空失敗: {e}"
+    conn = get_db_connection(); cur = conn.cursor()
+    cur.execute("TRUNCATE TABLE products RESTART IDENTITY CASCADE")
+    conn.commit(); conn.close()
+    return redirect('/admin')
 
 @app.route('/admin/reset_orders')
 def reset_orders():
-    try:
-        conn = get_db_connection(); cur = conn.cursor()
-        cur.execute("TRUNCATE TABLE orders RESTART IDENTITY CASCADE")
-        conn.commit(); conn.close()
-        return redirect('/admin')
-    except Exception as e:
-        return f"清空失敗: {e}"
+    conn = get_db_connection(); cur = conn.cursor()
+    cur.execute("TRUNCATE TABLE orders RESTART IDENTITY CASCADE")
+    conn.commit(); conn.close()
+    return redirect('/admin')
 
 @app.route('/admin', methods=['GET', 'POST'])
 def admin_panel():
     conn = get_db_connection(); cur = conn.cursor()
+    message = ""
+    
     if request.method == 'POST':
-        try:
-            cur.execute("""
-                INSERT INTO products (name, price, category, image_url, custom_options, 
-                name_en, name_jp, name_kr,
-                custom_options_en, custom_options_jp, custom_options_kr,
-                print_category, category_en, category_jp, category_kr, sort_order)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 9999)
-            """, (
-                request.form.get('name'), request.form.get('price'), request.form.get('category'), 
-                request.form.get('image_url'), request.form.get('custom_options'),
-                request.form.get('name_en'), request.form.get('name_jp'), request.form.get('name_kr'),
-                request.form.get('custom_options_en'), request.form.get('custom_options_jp'), request.form.get('custom_options_kr'),
-                request.form.get('print_category', 'Noodle'),
-                request.form.get('category_en'), request.form.get('category_jp'), request.form.get('category_kr')
-            ))
+        action = request.form.get('action')
+        # 處理 Email 設定儲存
+        if action == 'save_email_settings':
+            cur.execute("UPDATE settings SET value=%s WHERE key='report_email'", (request.form.get('report_email'),))
+            cur.execute("UPDATE settings SET value=%s WHERE key='resend_api_key'", (request.form.get('resend_api_key'),))
+            cur.execute("UPDATE settings SET value=%s WHERE key='sender_email'", (request.form.get('sender_email'),))
             conn.commit()
-            return redirect('/admin')
-        except Exception as e:
-            return f"Error: {e}"
-        finally:
-            cur.close(); conn.close()
+            message = "✅ Email 設定已儲存"
+        elif action == 'test_email':
+            message = send_daily_report()
+        # 處理新增產品
+        elif not action:
+            try:
+                cur.execute("""
+                    INSERT INTO products (name, price, category, image_url, custom_options, 
+                    name_en, name_jp, name_kr, custom_options_en, custom_options_jp, custom_options_kr,
+                    print_category, category_en, category_jp, category_kr, sort_order)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 9999)
+                """, (request.form.get('name'), request.form.get('price'), request.form.get('category'), 
+                    request.form.get('image_url'), request.form.get('custom_options'),
+                    request.form.get('name_en'), request.form.get('name_jp'), request.form.get('name_kr'),
+                    request.form.get('custom_options_en'), request.form.get('custom_options_jp'), request.form.get('custom_options_kr'),
+                    request.form.get('print_category', 'Noodle'),
+                    request.form.get('category_en'), request.form.get('category_jp'), request.form.get('category_kr')))
+                conn.commit()
+                return redirect('/admin')
+            except Exception as e: message = f"新增出錯: {e}"
 
+    # 讀取資料
+    cur.execute("SELECT key, value FROM settings")
+    config = dict(cur.fetchall())
     cur.execute("""
         SELECT id, name, price, category, image_url, is_available, custom_options, sort_order, 
                name_en, name_jp, name_kr, custom_options_en, custom_options_jp, custom_options_kr, 
                print_category, category_en, category_jp, category_kr
-        FROM products 
-        ORDER BY sort_order ASC, id DESC
+        FROM products ORDER BY sort_order ASC, id DESC
     """)
     prods = cur.fetchall()
     conn.close()
@@ -1117,130 +1182,91 @@ def admin_panel():
     for p in prods:
         row_style = "" if p[5] else "background-color: #f0f0f0; opacity: 0.7;"
         status_text = "<span style='color:green'>上架</span>" if p[5] else "<span style='color:red'>下架</span>"
-        toggle_link = f"<a href='/admin/toggle_product/{p[0]}' class='button button-clear' style='display:inline;padding:0;height:auto;line-height:normal;font-size:12px;'>[切換]</a>"
-        p_cat = p[14] if len(p)>14 and p[14] else 'Noodle'
-        cat_display = f"{p[3]} <br><small style='color:#666'>(EN:{p[15] or '-'} JP:{p[16] or '-'})</small>"
-
+        toggle_link = f"<a href='/admin/toggle_product/{p[0]}' class='button button-clear' style='font-size:12px;'>[切換]</a>"
         rows += f"""
         <tr data-id="{p[0]}" class="draggable-item" style="{row_style}">
-            <td style="cursor:move;font-size:1.5em;color:#888;width:50px;text-align:center;" class="handle">☰</td>
+            <td class="handle" style="cursor:move;text-align:center;">☰</td>
             <td>{p[0]}</td>
-            <td><b>{p[1]}</b><br><small style="color:#888">{cat_display}</small></td>
-            <td>{p[2]}</td>
-            <td>{p_cat}</td>
-            <td>{status_text} <br> {toggle_link}</td>
-            <td>
-                <a href='/admin/edit_product/{p[0]}'>編輯</a> | 
-                <a href='/admin/delete_product/{p[0]}' onclick='return confirm(\"確定刪除？\")' style='color:red;'>刪除</a>
-            </td>
+            <td><b>{p[1]}</b><br><small>{p[3]}</small></td>
+            <td>${p[2]}</td>
+            <td>{p[14]}</td>
+            <td>{status_text}<br>{toggle_link}</td>
+            <td><a href='/admin/delete_product/{p[0]}' onclick='return confirm(\"確定刪除？\")' style='color:red;'>刪除</a></td>
         </tr>"""
 
     return f"""
     <!DOCTYPE html><html><head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1">
-        <title>餐廳後台管理</title>
+        <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>餐廳管理後台</title>
         <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/milligram/1.4.1/milligram.min.css">
         <script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.14.0/Sortable.min.js"></script>
         <style>
-            .draggable-item {{ background: white; transition: background 0.3s; }}
-            .sortable-ghost {{ background: #e3f2fd; opacity: 0.5; }}
-            .handle {{ touch-action: none; }} 
-            h5 {{ margin-bottom: 5px; color: #9b4dca; border-left: 4px solid #9b4dca; padding-left: 10px; }}
-            .button-clear {{ text-decoration: underline; }}
-            .tool-bar {{ background: #fff; padding: 15px; border: 1px solid #ddd; border-radius: 8px; margin-bottom: 20px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }}
+            .card {{ background:#fff; padding:20px; border-radius:8px; margin-bottom:20px; border:1px solid #ddd; }}
+            .tool-bar {{ background:#f4f7f6; padding:15px; border-radius:8px; display:flex; gap:10px; flex-wrap:wrap; }}
         </style>
-    </head>
-    <body style="padding:20px;">
-    
-    <div style="background:#f4f7f6; padding:20px; border-radius:8px; margin-bottom:30px; border:1px solid #ddd;">
-        <h4 style="margin-top:0;">➕ 新增產品</h4>
-        <form method="POST">
-            <h5>1. 基本資料 & 分類翻譯</h5>
-            <div class="row">
-                <div class="column"><label>名稱 (中文)</label><input type="text" name="name" required></div>
-                <div class="column"><label>價格</label><input type="number" name="price" required></div>
-                <div class="column">
-                    <label>出單區域</label>
-                    <select name="print_category">
-                        <option value="Noodle">麵區 (Noodle)</option>
-                        <option value="Soup">湯區 (Soup)</option>
-                    </select>
+    </head><body style="padding:20px;">
+        <h2>🏪 後台管理中心</h2>
+        {f'<p style="color:blue;">{message}</p>' if message else ''}
+
+        <div class="card" style="border-left: 5px solid #9b4dca;">
+            <h4>📧 日結單 Email 設定 (API Key 版)</h4>
+            <p><small>將於台灣時間 13:00, 18:00, 20:30 自動發送報告</small></p>
+            <form method="POST">
+                <input type="hidden" name="action" value="save_email_settings">
+                <div class="row">
+                    <div class="column"><label>收件 Email</label><input type="email" name="report_email" value="{config.get('report_email','')}"></div>
+                    <div class="column"><label>Resend API Key</label><input type="password" name="resend_api_key" value="{config.get('resend_api_key','')}"></div>
                 </div>
-            </div>
-            <div class="row">
-                <div class="column"><label>分類 (中文)</label><input type="text" name="category" required></div>
-                <div class="column"><label>分類 (EN)</label><input type="text" name="category_en"></div>
-                <div class="column"><label>分類 (JP)</label><input type="text" name="category_jp"></div>
-                <div class="column"><label>分類 (KR)</label><input type="text" name="category_kr"></div>
-            </div>
-            <h5>2. 品名翻譯</h5>
-            <div class="row">
-                <div class="column"><label>English</label><input type="text" name="name_en"></div>
-                <div class="column"><label>日本語</label><input type="text" name="name_jp"></div>
-                <div class="column"><label>韓國語</label><input type="text" name="name_kr"></div>
-            </div>
-            <h5>3. 客製選項</h5>
-            <div class="row">
-                <div class="column"><label>中文選項</label><input type="text" name="custom_options"></div>
-                <div class="column"><label>English</label><input type="text" name="custom_options_en"></div>
-            </div>
-            <div class="row">
-                <div class="column"><label>日本語</label><input type="text" name="custom_options_jp"></div>
-                <div class="column"><label>韓國語</label><input type="text" name="custom_options_kr"></div>
-            </div>
-            <label>圖片 URL</label><input type="text" name="image_url">
-            <button type="submit" style="width:100%;">🚀 新增產品</button>
-        </form>
-    </div>
-
-    <div class="tool-bar">
-        <a href="/admin/export_menu" class="button button-outline">📤 匯出菜單 (Excel)</a>
-        
-        <form action="/admin/import_menu" method="POST" enctype="multipart/form-data" style="margin:0; display:flex; gap:5px; border-left: 2px solid #eee; padding-left: 15px;">
-            <input type="file" name="menu_file" accept=".xlsx, .xls" required style="margin:0; width:220px; font-size:12px;">
-            <button type="submit" class="button button-outline">📥 匯入菜單 (Excel)</button>
-        </form>
-        
-        <div style="flex-grow: 1; text-align: right;">
-            <a href="/admin/reset_menu" onclick="return confirm('危險！這將刪除所有菜單且無法復原。確定？')" class="button" style="background:#e91e63; border-color:#e91e63;">🗑️ 一鍵刪除所有菜單</a>
+                <button type="submit">💾 儲存 Email 設定</button>
+            </form>
+            <form method="POST" style="display:inline;">
+                <input type="hidden" name="action" value="test_email">
+                <button type="submit" class="button button-outline">🧪 立即寄送測試信</button>
+            </form>
         </div>
-    </div>
 
-    <div style="position:sticky; top:0; background:white; z-index:100; padding:10px 0; border-bottom:1px solid #eee;">
-        <div style="display:flex;justify-content:space-between;align-items:center;">
-            <h3>📦 產品列表 (可拖曳排序)</h3>
-            <div>
-                 <button id="save-btn" onclick="saveOrder()" class="button" style="background:#9c27b0;border-color:#9c27b0;display:none;">💾 儲存排序</button>
-                 <a href="/admin/reset_orders" onclick="return confirm('確定清空所有訂單記錄嗎？')" class="button button-clear" style="color:red;">⚠️ 清空訂單記錄</a>
-            </div>
+        <div class="card">
+            <h4>➕ 新增產品</h4>
+            <form method="POST">
+                <div class="row">
+                    <div class="column"><label>名稱</label><input type="text" name="name" required></div>
+                    <div class="column"><label>價格</label><input type="number" name="price" required></div>
+                    <div class="column"><label>分類</label><input type="text" name="category" required></div>
+                </div>
+                <button type="submit" style="width:100%;">🚀 新增產品</button>
+            </form>
         </div>
-    </div>
 
-    <table>
-        <thead><tr><th>序</th><th>ID</th><th>品名/分類</th><th>價</th><th>出單區</th><th>狀態</th><th>操作</th></tr></thead>
-        <tbody id="menu-list">{rows}</tbody>
-    </table>
+        <div class="tool-bar">
+            <a href="/admin/export_menu" class="button">📤 匯出 Excel</a>
+            <form action="/admin/import_menu" method="POST" enctype="multipart/form-data" style="margin:0; display:flex; gap:5px;">
+                <input type="file" name="menu_file" accept=".xlsx" required style="margin:0; width:180px;">
+                <button type="submit" class="button button-outline">📥 匯入 Excel</button>
+            </form>
+            <a href="/admin/reset_menu" onclick="return confirm('確定清空菜單？')" class="button" style="background:red; border-color:red;">🗑️ 清空菜單</a>
+            <a href="/admin/reset_orders" onclick="return confirm('確定清空訂單？')" class="button button-clear" style="color:red;">⚠️ 清空訂單</a>
+        </div>
 
-    <script>
-        var sortable = Sortable.create(document.getElementById('menu-list'), {{
-            handle: '.handle', animation: 150,
-            onEnd: function () {{ document.getElementById('save-btn').style.display = 'inline-block'; }}
-        }});
+        <h3>📦 產品列表</h3>
+        <button id="save-btn" onclick="saveOrder()" class="button" style="display:none; background:green;">💾 儲存排序</button>
+        <table>
+            <thead><tr><th>拖曳</th><th>ID</th><th>品名</th><th>價</th><th>區</th><th>狀態</th><th>操作</th></tr></thead>
+            <tbody id="menu-list">{rows}</tbody>
+        </table>
 
-        function saveOrder() {{
-            var order = Array.from(document.querySelectorAll('#menu-list tr')).map(row => row.getAttribute('data-id'));
-            fetch('/admin/reorder_products', {{
-                method: 'POST', headers: {{ 'Content-Type': 'application/json' }},
-                body: JSON.stringify({{ order: order }})
-            }}).then(r => r.json()).then(data => {{
-                if(data.status === 'success') {{
-                    alert('排序已儲存！');
-                    location.reload();
-                }}
+        <script>
+            Sortable.create(document.getElementById('menu-list'), {{
+                handle: '.handle', animation: 150,
+                onEnd: function() {{ document.getElementById('save-btn').style.display = 'inline-block'; }}
             }});
-        }}
-    </script>
+            function saveOrder() {{
+                var order = Array.from(document.querySelectorAll('#menu-list tr')).map(row => row.getAttribute('data-id'));
+                fetch('/admin/reorder_products', {{
+                    method: 'POST', headers: {{ 'Content-Type': 'application/json' }},
+                    body: JSON.stringify({{ order: order }})
+                }}).then(() => location.reload());
+            }}
+        </script>
     </body></html>
     """
 
