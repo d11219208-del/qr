@@ -116,7 +116,7 @@ def init_db():
     finally:
         cur.close(); conn.close()
 
-# --- Email 報告發送邏輯 (整合詳細報表內容) ---
+# --- Email 報告發送邏輯 (修正日期判定) ---
 def send_daily_report():
     conn = get_db_connection(); cur = conn.cursor()
     try:
@@ -126,17 +126,24 @@ def send_daily_report():
         to_email = config.get('report_email', '').strip()
         if not api_key or not to_email: return "❌ 未設定 Email 或 API Key"
 
-        # 1. 抓取統計數據 (有效單與作廢單)
-        # 使用台北時間篩選今日訂單
-        time_filter = "(created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Taipei')::date = CURRENT_DATE"
+        # --- [關鍵修改 1] 先算出台灣時間的「今天日期」 ---
+        # 伺服器時間 (UTC) + 8 小時 = 台灣時間
+        tw_now = datetime.utcnow() + timedelta(hours=8)
+        today_str = tw_now.strftime('%Y-%m-%d') 
+
+        # --- [關鍵修改 2] SQL 篩選條件改用 Python 算出來的日期 ---
+        # 邏輯：將訂單時間轉為台灣時間後，必須等於 today_str
+        # 這樣無論資料庫主機在哪個時區，都會精準抓取台灣這以天的資料
+        time_filter = f"(created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Taipei')::date = '{today_str}'::date"
         
+        # 1. 抓取統計數據
         cur.execute(f"SELECT COUNT(*), SUM(total_price) FROM orders WHERE {time_filter} AND status != 'Cancelled'")
         v_count, v_total = cur.fetchone()
         
         cur.execute(f"SELECT COUNT(*), SUM(total_price) FROM orders WHERE {time_filter} AND status = 'Cancelled'")
         x_count, x_total = cur.fetchone()
 
-        # 2. 抓取品項明細進行彙整
+        # 2. 抓取品項明細
         cur.execute(f"SELECT content_json FROM orders WHERE {time_filter} AND status != 'Cancelled'")
         valid_rows = cur.fetchall()
         
@@ -155,20 +162,14 @@ def send_daily_report():
 
         valid_stats = agg_items(valid_rows)
         
-        # 3. 組裝 Email 文字內容
-        
-        # --- [修改重點] 設定台灣時間變數 ---
-        # 伺服器通常是 UTC 時間，加上 8 小時即為台灣時間
-        tw_now = datetime.utcnow() + timedelta(hours=8)
-        today_str = tw_now.strftime('%Y-%m-%d') # 使用台灣時間的日期，確保跨日正確
-        
+        # 3. 組裝 Email
         item_detail_text = ""
         if valid_stats:
             item_detail_text = "\n【品項銷量統計】\n"
             for name, qty in sorted(valid_stats.items(), key=lambda x: x[1], reverse=True):
                 item_detail_text += f"• {name}: {qty}\n"
         else:
-            item_detail_text = "\n(今日無銷量明細)\n"
+            item_detail_text = "\n(今日尚無有效銷量)\n"
 
         email_content = f"""
 🍴 餐廳日結報表 ({today_str})
@@ -186,7 +187,7 @@ def send_daily_report():
 報告產出時間：{tw_now.strftime('%Y-%m-%d %H:%M:%S')} (Taiwan Time)
         """
 
-        # 4. 發送請求至 Resend API
+        # 4. 發送
         payload = {
             "from": config.get('sender_email', 'onboarding@resend.dev').strip(),
             "to": [to_email],
@@ -207,6 +208,7 @@ def send_daily_report():
         return f"❌ 錯誤: {str(e)}"
     finally: 
         cur.close(); conn.close()
+        
         
 
 # --- 背景定時任務 ---
