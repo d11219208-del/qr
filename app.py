@@ -156,7 +156,12 @@ def send_daily_report():
         valid_stats = agg_items(valid_rows)
         
         # 3. 組裝 Email 文字內容
-        today_str = date.today().strftime('%Y-%m-%d')
+        
+        # --- [修改重點] 設定台灣時間變數 ---
+        # 伺服器通常是 UTC 時間，加上 8 小時即為台灣時間
+        tw_now = datetime.utcnow() + timedelta(hours=8)
+        today_str = tw_now.strftime('%Y-%m-%d') # 使用台灣時間的日期，確保跨日正確
+        
         item_detail_text = ""
         if valid_stats:
             item_detail_text = "\n【品項銷量統計】\n"
@@ -178,7 +183,7 @@ def send_daily_report():
 單量：{x_count or 0} 筆
 總額：${x_total or 0}
 ---------------------------------
-報告產出時間：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+報告產出時間：{tw_now.strftime('%Y-%m-%d %H:%M:%S')} (Taiwan Time)
         """
 
         # 4. 發送請求至 Resend API
