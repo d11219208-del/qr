@@ -116,9 +116,10 @@ def init_db():
     finally:
         cur.close(); conn.close()
 
-# --- Email 報告發送邏輯 (修正日期判定) ---
+# --- Email 報告發送邏輯 (改用 UTC 時間範圍精準鎖定) ---
 def send_daily_report():
-    conn = get_db_connection(); cur = conn.cursor()
+    conn = get_db_connection()
+    cur = conn.cursor()
     try:
         cur.execute("SELECT key, value FROM settings")
         config = dict(cur.fetchall())
@@ -126,16 +127,29 @@ def send_daily_report():
         to_email = config.get('report_email', '').strip()
         if not api_key or not to_email: return "❌ 未設定 Email 或 API Key"
 
-        # --- [關鍵修改 1] 先算出台灣時間的「今天日期」 ---
-        # 伺服器時間 (UTC) + 8 小時 = 台灣時間
-        tw_now = datetime.utcnow() + timedelta(hours=8)
-        today_str = tw_now.strftime('%Y-%m-%d') 
-
-        # --- [關鍵修改 2] SQL 篩選條件改用 Python 算出來的日期 ---
-        # 邏輯：將訂單時間轉為台灣時間後，必須等於 today_str
-        # 這樣無論資料庫主機在哪個時區，都會精準抓取台灣這以天的資料
-        time_filter = f"(created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Taipei')::date = '{today_str}'::date"
+        # --- 【核心修正】改用時間範圍查詢 (Range Query) ---
         
+        # 1. 取得現在的台灣時間
+        utc_now = datetime.utcnow()
+        tw_now = utc_now + timedelta(hours=8)
+        
+        # 2. 取得「台灣今天」的 00:00:00 和 23:59:59
+        # 例如：如果是 1月20日，起點就是 2026-01-20 00:00:00
+        tw_start_of_day = tw_now.replace(hour=0, minute=0, second=0, microsecond=0)
+        tw_end_of_day = tw_now.replace(hour=23, minute=59, second=59, microsecond=999999)
+
+        # 3. 將這兩個時間點「減 8 小時」轉回 UTC
+        # 因為資料庫(Render)裡面存的是 UTC 時間
+        # 例如：台灣 00:00 其實是前一天的 UTC 16:00
+        utc_start_query = tw_start_of_day - timedelta(hours=8)
+        utc_end_query = tw_end_of_day - timedelta(hours=8)
+
+        # 4. 建立 SQL 篩選條件
+        # 語法解釋：created_at 必須在 "計算好的UTC起始時間" 與 "計算好的UTC結束時間" 之間
+        time_filter = f"created_at >= '{utc_start_query}' AND created_at <= '{utc_end_query}'"
+
+        # --- 以下邏輯維持不變，但 SQL 查詢會引用新的 time_filter ---
+
         # 1. 抓取統計數據
         cur.execute(f"SELECT COUNT(*), SUM(total_price) FROM orders WHERE {time_filter} AND status != 'Cancelled'")
         v_count, v_total = cur.fetchone()
@@ -162,7 +176,9 @@ def send_daily_report():
 
         valid_stats = agg_items(valid_rows)
         
-        # 3. 組裝 Email
+        # 3. 組裝 Email 文字
+        today_str = tw_now.strftime('%Y-%m-%d') # 信件標題用的日期 (台灣日期)
+        
         item_detail_text = ""
         if valid_stats:
             item_detail_text = "\n【品項銷量統計】\n"
@@ -176,15 +192,14 @@ def send_daily_report():
 ---------------------------------
 ✅ 【有效營收】
 單量：{v_count or 0} 筆
-總額：${v_total or 0}
-
-{item_detail_text}
+總額：${v_total or 0}{item_detail_text}
 ---------------------------------
 ❌ 【作廢統計】
 單量：{x_count or 0} 筆
 總額：${x_total or 0}
 ---------------------------------
 報告產出時間：{tw_now.strftime('%Y-%m-%d %H:%M:%S')} (Taiwan Time)
+資料統計區間：{tw_start_of_day.strftime('%H:%M')} ~ {tw_end_of_day.strftime('%H:%M')}
         """
 
         # 4. 發送
@@ -204,7 +219,10 @@ def send_daily_report():
         with urllib.request.urlopen(req) as res: 
             return "✅ 成功"
             
-    except Exception as e: 
+    except Exception as e:
+        # 為了除錯，如果失敗請印出詳細錯誤
+        import traceback
+        traceback.print_exc()
         return f"❌ 錯誤: {str(e)}"
     finally: 
         cur.close(); conn.close()
