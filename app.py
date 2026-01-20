@@ -1,3 +1,4 @@
+
 import os
 import psycopg2
 import json
@@ -1185,27 +1186,65 @@ def admin_panel():
             <td><a href='/admin/edit_product/{p[0]}'>編輯</a> | <a href='/admin/delete_product/{p[0]}' onclick='return confirm("刪除？")'>刪除</a></td>
         </tr>"""
 
-    return f"""
-    <!DOCTYPE html><html><head><meta charset="UTF-8"><link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/milligram/1.4.1/milligram.min.css">
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.14.0/Sortable.min.js"></script></head><body style="padding:20px;">
+        return f"""
+    <!DOCTYPE html><html><head><meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/milligram/1.4.1/milligram.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.14.0/Sortable.min.js"></script>
+    <style>
+        body {{ padding: 15px; background: #f9f9f9; }}
+        h2 {{ font-size: 2.2rem; text-align: center; margin-bottom: 20px; }}
+        .section-box {{ background: #fff; padding: 15px; border-radius: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); margin-bottom: 20px; }}
+        .row {{ margin-bottom: 0; }}
+        input[type], select {{ margin-bottom: 1.5rem; }}
+        .button {{ width: 100%; margin-bottom: 1rem; }}
+        
+        /* 表格手機版優化：轉為卡片 */
+        @media (max-width: 600px) {{
+            table, thead, tbody, th, td, tr {{ display: block; }}
+            thead tr {{ position: absolute; top: -9999px; left: -9999px; }}
+            tr {{ border: 1px solid #ddd; border-radius: 8px; margin-bottom: 10px; background: #fff; position: relative; padding-left: 40%; }}
+            td {{ border: none; position: relative; padding: 8px 10px !important; text-align: left; }}
+            td:before {{ position: absolute; left: 10px; width: 35%; font-weight: bold; white-space: nowrap; color: #606c76; }}
+            
+            td:nth-of-type(1):before {{ content: "排序"; }}
+            td:nth-of-type(2):before {{ content: "ID"; }}
+            td:nth-of-type(3):before {{ content: "品名/分類"; }}
+            td:nth-of-type(4):before {{ content: "價格"; }}
+            td:nth-of-type(5):before {{ content: "分區"; }}
+            td:nth-of-type(6):before {{ content: "狀態"; }}
+            td:nth-of-type(7):before {{ content: "動作"; }}
+            
+            .handle {{ font-size: 24px; color: #9b4dca; }}
+            td:nth-of-type(1) {{ background: #f4f7f6; text-align: center; padding-left: 10px !important; }}
+            td:nth-of-type(1):before {{ content: ""; }}
+        }}
+    </style>
+    </head><body>
     <h2>🍴 餐廳管理後台</h2>
-    <div id="status-msg" style="color:blue; font-weight:bold; margin-bottom:10px;">{msg}</div>
+    <div id="status-msg" style="color:blue; font-weight:bold; margin-bottom:10px; text-align:center;">{msg}</div>
     
-    <div style="background:#f4f7f6; padding:15px; border-radius:8px; margin-bottom:20px;">
+    <div class="section-box" style="background:#f4f7f6;">
         <form method="POST"><input type="hidden" name="action" value="save_settings">
-            Email: <input type="email" name="report_email" value="{config.get('report_email','')}"> 
-            API Key: <input type="password" name="resend_api_key" value="{config.get('resend_api_key','')}">
-            <button type="submit">儲存 Email 設定</button>
+            <label>通知 Email</label>
+            <input type="email" name="report_email" value="{config.get('report_email','')}"> 
+            <label>Resend API Key</label>
+            <input type="password" name="resend_api_key" value="{config.get('resend_api_key','')}">
+            <button type="submit">儲存設定</button>
         </form>
-        <form method="POST"><input type="hidden" name="action" value="test_email"><button type="submit" class="button button-outline">🧪 測試發送 Email</button></form>
+        <form method="POST"><input type="hidden" name="action" value="test_email">
+            <button type="submit" class="button button-outline">🧪 測試發送 Email</button>
+        </form>
     </div>
 
-    <div style="background:#fff3e0; padding:15px; border-radius:8px; margin-bottom:20px;">
+    <div class="section-box" style="background:#fff3e0;">
         <h4>➕ 新增產品 (多語言)</h4>
         <form method="POST"><input type="hidden" name="action" value="add_product">
             <div class="row">
                 <div class="column"><label>名稱(中)</label><input type="text" name="name" required></div>
                 <div class="column"><label>價格</label><input type="number" name="price" required></div>
+            </div>
+            <div class="row">
                 <div class="column"><label>分類(中)</label><input type="text" name="category"></div>
                 <div class="column"><label>出單區</label><select name="print_category"><option value="Noodle">麵區</option><option value="Soup">湯區</option></select></div>
             </div>
@@ -1228,19 +1267,24 @@ def admin_panel():
                 <div class="column"><label>選項 JP</label><input type="text" name="custom_options_jp"></div>
                 <div class="column"><label>選項 KR</label><input type="text" name="custom_options_kr"></div>
             </div>
-            <button type="submit" style="width:100%">🚀 新增產品</button>
+            <button type="submit" style="width:100%; height: 50px; font-size: 1.8rem;">🚀 新增產品</button>
         </form>
     </div>
 
-    <div style="margin-bottom:20px;">
+    <div class="section-box">
         <a href="/admin/export_menu" class="button button-outline">📤 匯出 Excel</a>
-        <form action="/admin/import_menu" method="POST" enctype="multipart/form-data" style="display:inline;"><input type="file" name="menu_file" required><button type="submit">📥 匯入</button></form>
+        <form action="/admin/import_menu" method="POST" enctype="multipart/form-data">
+            <input type="file" name="menu_file" required style="margin-bottom: 10px;">
+            <button type="submit" class="button">📥 匯入 Excel</button>
+        </form>
         <a href="/admin/reset_menu" class="button" style="background:red; border-color:red;" onclick="return confirm('清空菜單？')">🗑️ 清空菜單</a>
         <a href="/admin/reset_orders" class="button button-clear" onclick="return confirm('清空訂單？')">⚠️ 清空訂單</a>
     </div>
 
-    <table><thead><tr><th>序</th><th>ID</th><th>品名</th><th>價</th><th>分區</th><th>狀態</th><th>操作</th></tr></thead>
-    <tbody id="menu-list">{rows}</tbody></table>
+    <div class="section-box">
+        <table><thead><tr><th>序</th><th>ID</th><th>品名</th><th>價</th><th>分區</th><th>狀態</th><th>操作</th></tr></thead>
+        <tbody id="menu-list">{rows}</tbody></table>
+    </div>
     
     <script>
     Sortable.create(document.getElementById('menu-list'), {{
@@ -1260,6 +1304,8 @@ def admin_panel():
         if (msgDiv) msgDiv.style.display = 'none';
     }}, 3000);
     </script></body></html>"""
+
+
 
 @app.route('/')
 def index():
