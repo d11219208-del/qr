@@ -1079,12 +1079,15 @@ def reorder_products():
     conn.commit(); cur.close(); conn.close()
     return jsonify({'status': 'success'})
 
-@app.route('/admin/toggle_product/<int:pid>')
+# 修改為 API 模式，支援 AJAX 切換不跳頁
+@app.route('/admin/toggle_product/<int:pid>', methods=['POST'])
 def toggle_product(pid):
     conn = get_db_connection(); cur = conn.cursor()
     cur.execute("UPDATE products SET is_available = NOT is_available WHERE id = %s", (pid,))
+    cur.execute("SELECT is_available FROM products WHERE id = %s", (pid,))
+    new_status = cur.fetchone()[0]
     conn.commit(); conn.close()
-    return redirect('/admin')
+    return jsonify({'status': 'success', 'is_available': new_status})
 
 @app.route('/admin/delete_product/<int:pid>')
 def delete_product(pid):
@@ -1176,13 +1179,17 @@ def admin_panel():
     for p in prods:
         status_text = "上架" if p[4] else "下架"
         status_color = "green" if p[4] else "red"
+        # 將切換連結改為呼叫 JavaScript 函式
         rows += f"""<tr data-id='{p[0]}'>
             <td class='handle' style='cursor:move'>☰</td>
             <td>{p[0]}</td>
             <td style="word-break: break-all;"><b>{p[1]}</b><br><small style="color:#777;">{p[3]}</small></td>
             <td>${p[2]}</td>
             <td>{p[5]}</td>
-            <td><a href='/admin/toggle_product/{p[0]}' style='color:{status_color}; font-weight:bold;'>[{status_text}]</a></td>
+            <td>
+                <a href='javascript:void(0)' onclick='toggleProduct({p[0]}, this)' 
+                   id='status-{p[0]}' style='color:{status_color}; font-weight:bold;'>[{status_text}]</a>
+            </td>
             <td>
                 <a href='/admin/edit_product/{p[0]}'>編輯</a> | 
                 <a href='/admin/delete_product/{p[0]}' style='color:red;' onclick='return confirm("確定要刪除 ID:{p[0]} 嗎？")'>刪除</a>
@@ -1203,7 +1210,6 @@ def admin_panel():
         .button {{ width: 100%; margin-bottom: 1rem; }}
         summary {{ cursor: pointer; font-weight: bold; color: #9b4dca; margin-bottom: 10px; padding: 5px; background: #f0e6f7; border-radius: 5px; }}
         
-        /* 表格手機版優化：修正卡片文字重疊 */
         @media (max-width: 600px) {{
             table, thead, tbody, th, td, tr {{ display: block; }}
             thead tr {{ position: absolute; top: -9999px; left: -9999px; }}
@@ -1213,8 +1219,6 @@ def admin_panel():
                 position: absolute; left: 15px; width: 35%; font-weight: bold; white-space: nowrap; color: #606c76; 
                 text-align: left; content: attr(data-label);
             }}
-            
-            /* 使用 nth-of-type 定義標籤 */
             td:nth-of-type(1):before {{ content: "排序"; }}
             td:nth-of-type(2):before {{ content: "ID"; }}
             td:nth-of-type(3):before {{ content: "品名/分類"; }}
@@ -1222,7 +1226,6 @@ def admin_panel():
             td:nth-of-type(5):before {{ content: "分區"; }}
             td:nth-of-type(6):before {{ content: "狀態"; }}
             td:nth-of-type(7):before {{ content: "動作"; }}
-            
             .handle {{ font-size: 28px; color: #9b4dca; }}
             td:nth-of-type(1) {{ 
                 background: #f4f7f6; text-align: center; padding: 10px !important; margin-bottom: 10px; border-bottom: 1px solid #eee;
@@ -1258,7 +1261,6 @@ def admin_panel():
                 <div class="column"><label>分類(中)</label><input type="text" name="category"></div>
                 <div class="column"><label>出單區</label><select name="print_category"><option value="Noodle">麵區</option><option value="Soup">湯區</option></select></div>
             </div>
-
             <details>
                 <summary>🌐 多語言名稱設定</summary>
                 <div style="padding: 10px 0;">
@@ -1273,7 +1275,6 @@ def admin_panel():
                     <input type="text" name="category_kr" placeholder="카테고리 KR">
                 </div>
             </details>
-
             <details style="margin-top:10px;">
                 <summary>⚙️ 客製化選項設定</summary>
                 <div style="padding: 10px 0;">
@@ -1283,7 +1284,6 @@ def admin_panel():
                     <input type="text" name="custom_options_kr" placeholder="한국어 옵션">
                 </div>
             </details>
-            
             <button type="submit" style="width:100%; height: 50px; font-size: 1.8rem; margin-top:15px;">🚀 立即新增產品</button>
         </form>
     </div>
@@ -1309,6 +1309,23 @@ def admin_panel():
     </div>
     
     <script>
+    // AJAX 切換狀態函式
+    function toggleProduct(pid, element) {{
+        fetch('/admin/toggle_product/' + pid, {{ method: 'POST' }})
+        .then(response => response.json())
+        .then(data => {{
+            if(data.status === 'success') {{
+                if(data.is_available) {{
+                    element.innerText = '[上架]';
+                    element.style.color = 'green';
+                }} else {{
+                    element.innerText = '[下架]';
+                    element.style.color = 'red';
+                }}
+            }}
+        }});
+    }}
+
     Sortable.create(document.getElementById('menu-list'), {{
         handle: '.handle', 
         animation: 150,
@@ -1321,6 +1338,7 @@ def admin_panel():
             }});
         }}
     }});
+
     setTimeout(() => {{ 
         const msgDiv = document.getElementById('status-msg');
         if (msgDiv) msgDiv.style.display = 'none';
