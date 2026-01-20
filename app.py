@@ -1147,7 +1147,6 @@ def admin_panel():
             return redirect(url_for('admin_panel', msg="✅ 設定儲存成功"))
             
         elif action == 'test_email':
-            # 使用 Threading 解決發信延遲問題
             threading.Thread(target=send_daily_report).start()
             conn.close()
             return redirect(url_for('admin_panel', msg="📩 測試郵件已在後台發送，請稍候查收"))
@@ -1175,18 +1174,22 @@ def admin_panel():
 
     rows = ""
     for p in prods:
-        status = f"<span style='color:{'green' if p[4] else 'red'}'>{'上架' if p[4] else '下架'}</span>"
+        status_text = "上架" if p[4] else "下架"
+        status_color = "green" if p[4] else "red"
         rows += f"""<tr data-id='{p[0]}'>
             <td class='handle' style='cursor:move'>☰</td>
             <td>{p[0]}</td>
             <td>{p[1]}<br><small>{p[3]}</small></td>
             <td>{p[2]}</td>
             <td>{p[5]}</td>
-            <td>{status} <a href='/admin/toggle_product/{p[0]}'>[切換]</a></td>
-            <td><a href='/admin/edit_product/{p[0]}'>編輯</a> | <a href='/admin/delete_product/{p[0]}' onclick='return confirm("刪除？")'>刪除</a></td>
+            <td><a href='/admin/toggle_product/{p[0]}' style='color:{status_color}; font-weight:bold;'>[{status_text}]</a></td>
+            <td>
+                <a href='/admin/edit_product/{p[0]}'>編輯</a> | 
+                <a href='/admin/delete_product/{p[0]}' style='color:red;' onclick='return confirm("確定要刪除 ID:{p[0]} 嗎？")'>刪除</a>
+            </td>
         </tr>"""
 
-        return f"""
+    return f"""
     <!DOCTYPE html><html><head><meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/milligram/1.4.1/milligram.min.css">
@@ -1198,6 +1201,7 @@ def admin_panel():
         .row {{ margin-bottom: 0; }}
         input[type], select {{ margin-bottom: 1.5rem; }}
         .button {{ width: 100%; margin-bottom: 1rem; }}
+        summary {{ cursor: pointer; font-weight: bold; color: #9b4dca; margin-bottom: 10px; }}
         
         /* 表格手機版優化：轉為卡片 */
         @media (max-width: 600px) {{
@@ -1248,26 +1252,34 @@ def admin_panel():
                 <div class="column"><label>分類(中)</label><input type="text" name="category"></div>
                 <div class="column"><label>出單區</label><select name="print_category"><option value="Noodle">麵區</option><option value="Soup">湯區</option></select></div>
             </div>
-            <div class="row">
-                <div class="column"><label>品名 EN</label><input type="text" name="name_en"></div>
-                <div class="column"><label>品名 JP</label><input type="text" name="name_jp"></div>
-                <div class="column"><label>品名 KR</label><input type="text" name="name_kr"></div>
-            </div>
-            <div class="row">
-                <div class="column"><label>分類 EN</label><input type="text" name="category_en"></div>
-                <div class="column"><label>分類 JP</label><input type="text" name="category_jp"></div>
-                <div class="column"><label>分類 KR</label><input type="text" name="category_kr"></div>
-            </div>
-            <hr>
-            <div class="row">
-                <div class="column"><label>客製化選項 (中文)</label><input type="text" name="custom_options" placeholder="加麵,去蔥"></div>
-                <div class="column"><label>選項 EN</label><input type="text" name="custom_options_en"></div>
-            </div>
-            <div class="row">
-                <div class="column"><label>選項 JP</label><input type="text" name="custom_options_jp"></div>
-                <div class="column"><label>選項 KR</label><input type="text" name="custom_options_kr"></div>
-            </div>
-            <button type="submit" style="width:100%; height: 50px; font-size: 1.8rem;">🚀 新增產品</button>
+
+            <details>
+                <summary>🌐 設定多語言名稱</summary>
+                <div class="row">
+                    <div class="column"><label>品名 EN</label><input type="text" name="name_en"></div>
+                    <div class="column"><label>品名 JP</label><input type="text" name="name_jp"></div>
+                    <div class="column"><label>品名 KR</label><input type="text" name="name_kr"></div>
+                </div>
+                <div class="row">
+                    <div class="column"><label>分類 EN</label><input type="text" name="category_en"></div>
+                    <div class="column"><label>分類 JP</label><input type="text" name="category_jp"></div>
+                    <div class="column"><label>分類 KR</label><input type="text" name="category_kr"></div>
+                </div>
+            </details>
+
+            <details style="margin-top:10px;">
+                <summary>⚙️ 設定客製化選項</summary>
+                <div class="row">
+                    <div class="column"><label>選項 (中)</label><input type="text" name="custom_options" placeholder="加麵,去蔥"></div>
+                    <div class="column"><label>選項 EN</label><input type="text" name="custom_options_en"></div>
+                </div>
+                <div class="row">
+                    <div class="column"><label>選項 JP</label><input type="text" name="custom_options_jp"></div>
+                    <div class="column"><label>選項 KR</label><input type="text" name="custom_options_kr"></div>
+                </div>
+            </details>
+            
+            <button type="submit" style="width:100%; height: 50px; font-size: 1.8rem; margin-top:15px;">🚀 新增產品</button>
         </form>
     </div>
 
@@ -1277,8 +1289,10 @@ def admin_panel():
             <input type="file" name="menu_file" required style="margin-bottom: 10px;">
             <button type="submit" class="button">📥 匯入 Excel</button>
         </form>
-        <a href="/admin/reset_menu" class="button" style="background:red; border-color:red;" onclick="return confirm('清空菜單？')">🗑️ 清空菜單</a>
-        <a href="/admin/reset_orders" class="button button-clear" onclick="return confirm('清空訂單？')">⚠️ 清空訂單</a>
+        <div class="row">
+            <div class="column"><a href="/admin/reset_menu" class="button" style="background:red; border-color:red;" onclick="return confirm('確定要清空菜單嗎？')">🗑️ 清空菜單</a></div>
+            <div class="column"><a href="/admin/reset_orders" class="button button-clear" onclick="return confirm('確定要清空訂單嗎？')">⚠️ 清空訂單</a></div>
+        </div>
     </div>
 
     <div class="section-box">
@@ -1304,8 +1318,6 @@ def admin_panel():
         if (msgDiv) msgDiv.style.display = 'none';
     }}, 3000);
     </script></body></html>"""
-
-
 
 @app.route('/')
 def index():
