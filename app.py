@@ -1383,12 +1383,11 @@ def index():
     return "系統運作中。<a href='/admin'>進入後台</a>"
 
 
-# --- 編輯產品頁面 (修正後版本) ---
+# --- 編輯產品頁面 (根據 init_db 結構優化版) ---
 @app.route('/admin/edit_product/<int:pid>', methods=['GET','POST'])
 def edit_product(pid):
     conn = get_db_connection()
-    # 使用 RealDictCursor 讓結果以「字典」形式傳回，避免索引錯誤
-    cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur = conn.cursor()  # 使用標準 cursor，相容性最高
     
     if request.method == 'POST':
         try:
@@ -1422,22 +1421,54 @@ def edit_product(pid):
             conn.commit()
             return redirect('/admin')
         except Exception as e:
-            return f"更新失敗 Error: {e}"
+            conn.rollback()
+            return f"資料庫更新失敗: {e}"
         finally:
             conn.close()
 
     # 獲取產品資料
     cur.execute("SELECT * FROM products WHERE id=%s", (pid,))
-    p = cur.fetchone()
+    row = cur.fetchone()
     conn.close()
     
-    if not p:
-        return "找不到該產品", 404
-    
-    # 安全取值函式：處理 None 值，避免在 input 內顯示 "None"
-    def v(field_name):
-        val = p.get(field_name)
-        return val if val is not None else ""
+    if not row:
+        return "找不到該產品 (ID錯誤)", 404
+
+    # --- 關鍵對應：根據您的 init_db SQL 順序建立索引 ---
+    # 資料表順序: id, name, price, category, image_url, is_available, custom_options, sort_order...
+    idx = {
+        'id': 0, 
+        'name': 1, 
+        'price': 2, 
+        'category': 3, 
+        'image_url': 4,
+        # 'is_available': 5, (雖然表單沒用到，但它佔據了第5個位置)
+        'custom_options': 6, 
+        'sort_order': 7, 
+        'name_en': 8, 
+        'name_jp': 9, 
+        'name_kr': 10,
+        'custom_options_en': 11, 
+        'custom_options_jp': 12, 
+        'custom_options_kr': 13,
+        'print_category': 14, 
+        'category_en': 15, 
+        'category_jp': 16, 
+        'category_kr': 17
+    }
+
+    # 智能取值函式 (相容字典與元組)
+    def v(key):
+        try:
+            # 如果 row 是字典 (例如使用了 DictCursor)
+            if isinstance(row, dict):
+                val = row.get(key)
+            # 如果 row 是元組 (標準 cursor)
+            else:
+                val = row[idx[key]]
+            return val if val is not None else ""
+        except Exception:
+            return ""
 
     return f"""
     <!DOCTYPE html><html><head><meta charset="UTF-8">
