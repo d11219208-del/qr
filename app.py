@@ -877,9 +877,16 @@ def kitchen_panel():
         .btn { display: inline-block; padding: 12px 18px; border-radius: 8px; text-decoration: none; color: white; margin-right: 8px; font-size: 1em; border: none; cursor: pointer; font-weight: bold; }
         .btn-report { background: #6f42c1; } .btn-complete { background: #28a745; } .btn-print { background: #17a2b8; } .btn-void { background: #822; } .btn-edit { background: #555; }
         #audio-banner { background: #d32f2f; color: white; text-align: center; padding: 10px; font-weight: bold; cursor: pointer; }
+        .nav-btn { background: #6c757d; color: white; padding: 10px 15px; text-decoration: none; border-radius: 5px; font-weight: bold; margin-right: 10px; }
     </style></head><body>
     <div id="audio-banner" onclick="enableAudio()">🔔 點擊此處啟動「新訂單語音」與「自動列印」功能</div>
-    <div class="header-container"><h1>👨‍🍳 廚房出單看板</h1><a href="/admin" class="nav-btn">⚙️ 前往後台</a><div><a href="/kitchen/report" class="btn btn-report">📊 當日營收報表</a></div></div>
+    <div class="header-container">
+        <h1>👨‍🍳 廚房出單看板</h1>
+        <div>
+            <a href="/admin" class="nav-btn">⚙️ 前往後台</a>
+            <a href="/kitchen/report" class="btn btn-report">📊 當日營收報表</a>
+        </div>
+    </div>
     <div id="order-grid" class="grid">正在同步訂單數據...</div>
     <audio id="notice-sound" preload="auto"><source src="https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3" type="audio/mpeg"></audio>
     <script>
@@ -899,31 +906,61 @@ def kitchen_panel():
     </script></body></html>
     """
 
-# --- 5. 廚房看板 API ---
+# --- 5. 廚房看板 API (精準鎖定當日) ---
 @app.route('/check_new_orders')
 def check_new_orders():
     current_max = request.args.get('current_seq', 0, type=int)
+    
+    # 1. 計算台灣時間的「今天」對應的 UTC 時間範圍
+    # 這樣可以無視資料庫主機位置，精準只抓取台灣這一天內的訂單
+    utc_now = datetime.utcnow()
+    tw_now = utc_now + timedelta(hours=8)
+    
+    tw_start = tw_now.replace(hour=0, minute=0, second=0, microsecond=0)
+    tw_end = tw_now.replace(hour=23, minute=59, second=59, microsecond=999999)
+    
+    # 轉回 UTC 供資料庫查詢 (減8小時)
+    utc_start_query = tw_start - timedelta(hours=8)
+    utc_end_query = tw_end - timedelta(hours=8)
+    
+    # 建立時間篩選字串
+    time_filter = f"created_at >= '{utc_start_query}' AND created_at <= '{utc_end_query}'"
+
     conn = get_db_connection(); cur = conn.cursor()
-    cur.execute("""
+    
+    # 2. 抓取訂單 (套用時間篩選)
+    cur.execute(f"""
         SELECT id, table_number, items, total_price, status, created_at, lang, daily_seq, content_json 
-        FROM orders WHERE created_at > (NOW() - INTERVAL '18 hours') 
+        FROM orders WHERE {time_filter} 
         ORDER BY CASE WHEN status = 'Pending' THEN 0 ELSE 1 END, daily_seq DESC
     """)
     orders = cur.fetchall()
-    cur.execute("SELECT MAX(daily_seq) FROM orders WHERE created_at > (NOW() - INTERVAL '18 hours')")
+    
+    # 3. 抓取最大序號 (套用時間篩選)
+    cur.execute(f"SELECT MAX(daily_seq) FROM orders WHERE {time_filter}")
     max_seq_val = cur.fetchone()[0] or 0
+    
+    # 4. 判斷是否有新訂單 (套用時間篩選)
     new_order_ids = []
     if current_max > 0:
-        cur.execute("SELECT id FROM orders WHERE daily_seq > %s AND created_at > (NOW() - INTERVAL '18 hours')", (current_max,))
+        cur.execute(f"SELECT id FROM orders WHERE daily_seq > %s AND {time_filter}", (current_max,))
         new_order_ids = [r[0] for r in cur.fetchall()]
+        
     conn.close()
+
+    # 5. 生成 HTML
     html_content = ""
-    if not orders: html_content = "<div style='grid-column:1/-1;text-align:center;padding:100px;font-size:1.5em;color:#666;'>目前無新訂單</div>"
+    if not orders: 
+        html_content = "<div style='grid-column:1/-1;text-align:center;padding:100px;font-size:1.5em;color:#666;'>目前無新訂單</div>"
+    
     for o in orders:
         oid, table, raw_items, total, status, created, order_lang, seq_num, c_json = o
         cls, seq = status.lower(), f"{seq_num:03d}"
+        
+        # 顯示時間轉為台灣時間
         tw_time = created + timedelta(hours=8)
         time_str = tw_time.strftime('%H:%M:%S')
+        
         items_html = ""
         try:
             if c_json:
@@ -933,20 +970,35 @@ def check_new_orders():
                     ops = item.get('options_zh', item.get('options', []))
                     ops_str = f"<br><small style='color:#aaa'>└ {', '.join(ops)}</small>" if ops else ""
                     items_html += f"<div>● {n} <span style='color:#ff9800'>x{item['qty']}</span> {ops_str}</div>"
-            else: items_html = raw_items.replace("+", "<br>● ")
-        except: items_html = f"解析錯誤: {raw_items}"
+            else: 
+                items_html = raw_items.replace("+", "<br>● ")
+        except: 
+            items_html = f"解析錯誤: {raw_items}"
+            
         tag = "已完成" if status == 'Completed' else "已作廢" if status == 'Cancelled' else "● 新訂單"
+        
         btns = ""
-        if status == 'Pending': btns += f"<button onclick='action(\"/kitchen/complete/{oid}\")' class='btn btn-complete'>✔️ 付款完成</button>"
+        if status == 'Pending': 
+            btns += f"<button onclick='action(\"/kitchen/complete/{oid}\")' class='btn btn-complete'>✔️ 付款完成</button>"
+        
         if status != 'Cancelled':
             btns += f"<a href='/menu?edit_oid={oid}&lang=zh' target='_blank' class='btn btn-edit'>✏️ 單據修改</a>"
             btns += f"<button onclick='if(confirm(\"確定作廢？\")) action(\"/order/cancel/{oid}\")' class='btn btn-void'>🗑️ 單據作廢</button>"
+        
         btns += f"<a href='/print_order/{oid}' target='_blank' class='btn btn-print'>🖨️ 列印 ({order_lang})</a>"
+        
         html_content += f"""
-        <div class="card {cls}"><div class="tag" style="color:{'#28a745' if status=='Completed' else '#ff9800'}">{tag}</div>
+        <div class="card {cls}">
+            <div class="tag" style="color:{'#28a745' if status=='Completed' else '#ff9800'}">{tag}</div>
             <div style="font-size:0.9em; color:#888;">{time_str} (TPE) | 原始語系: <b>{order_lang}</b></div>
-            <div style="margin: 10px 0;"><span style="font-size:2.5em; color:#ff9800; font-weight:bold; margin-right:10px;">#{seq}</span><span style="font-size:1.8em; background:#444; padding:2px 12px; border-radius:6px;">桌: {table}</span></div>
-            <div class="items">{items_html}</div><div style="border-top: 1px solid #444; padding-top: 15px;">{btns}</div></div>"""
+            <div style="margin: 10px 0;">
+                <span style="font-size:2.5em; color:#ff9800; font-weight:bold; margin-right:10px;">#{seq}</span>
+                <span style="font-size:1.8em; background:#444; padding:2px 12px; border-radius:6px;">桌: {table}</span>
+            </div>
+            <div class="items">{items_html}</div>
+            <div style="border-top: 1px solid #444; padding-top: 15px;">{btns}</div>
+        </div>"""
+        
     return jsonify({'html': html_content, 'max_seq': max_seq_val, 'new_ids': new_order_ids})
 
 
@@ -1299,16 +1351,10 @@ def admin_panel():
             return redirect(url_for('admin_panel', msg="✅ 設定儲存成功"))
             
         elif action == 'test_email':
-            # --- 修正重點開始 ---
-            # 獲取真實的 app 實例，而不是 proxy
             app_instance = current_app._get_current_object()
-            
-            # 將 app 實例傳給執行緒，確保 send_daily_report 執行時有正確的 Context
             threading.Thread(target=async_send_report, args=(app_instance,)).start()
-            
-            conn.close() # 關閉當前請求的資料庫連線 (執行緒會自己開新的)
-            return redirect(url_for('admin_panel', msg="📩 測試郵件已在後台發送，請檢查收件匣或終端機日誌"))
-            # --- 修正重點結束 ---
+            conn.close()
+            return redirect(url_for('admin_panel', msg="📩 測試郵件已在後台發送"))
             
         elif action == 'add_product':
             cur.execute("""INSERT INTO products (name, price, category, print_category, 
@@ -1333,207 +1379,329 @@ def admin_panel():
 
     rows = ""
     for p in prods:
-        status_text = "上架" if p[4] else "下架"
-        status_color = "green" if p[4] else "red"
-        # 標記品名類別 class 用於搜尋
+        status_text = "上架中" if p[4] else "已下架"
+        status_class = "status-on" if p[4] else "status-off"
+        
         rows += f"""<tr data-id='{p[0]}' class='product-row'>
-            <td class='handle' style='cursor:move'>☰</td>
-            <td>{p[0]}</td>
-            <td class='search-key' style="word-break: break-all;"><b>{p[1]}</b><br><small style="color:#777;">{p[3]}</small></td>
-            <td>${p[2]}</td>
-            <td>{p[5]}</td>
-            <td>
-                <a href='javascript:void(0)' onclick='toggleProduct({p[0]}, this)' 
-                   id='status-{p[0]}' style='color:{status_color}; font-weight:bold;'>[{status_text}]</a>
+            <td class='handle'>☰</td>
+            <td data-label="ID">{p[0]}</td>
+            <td data-label="品名" class='search-key'>
+                <div class="prod-name">{p[1]}</div>
+                <div class="prod-cat">{p[3]} / {p[5]}</div>
             </td>
-            <td>
-                <a href='/admin/edit_product/{p[0]}'>編輯</a> | 
-                <a href='/admin/delete_product/{p[0]}' style='color:red;' onclick='return confirm("確定要刪除 ID:{p[0]} 嗎？")'>刪除</a>
+            <td data-label="價格"><b>${p[2]}</b></td>
+            <td data-label="狀態">
+                <button onclick='toggleProduct({p[0]}, this)' id='status-{p[0]}' class='btn-sm {status_class}'>
+                    {status_text}
+                </button>
+            </td>
+            <td data-label="操作" class="actions">
+                <a href='/admin/edit_product/{p[0]}' class="btn-icon edit" title="編輯">✎</a>
+                <a href='/admin/delete_product/{p[0]}' class="btn-icon del" title="刪除" onclick='return confirm("確定要刪除 ID:{p[0]} 嗎？")'>✖</a>
             </td>
         </tr>"""
 
     return f"""
-    <!DOCTYPE html><html><head><meta charset="UTF-8">
+    <!DOCTYPE html>
+    <html lang="zh-TW">
+    <head>
+    <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>餐廳管理後台</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/milligram/1.4.1/milligram.min.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.14.0/Sortable.min.js"></script>
     <style>
-        body {{ padding: 15px; background: #f9f9f9; font-family: sans-serif; }}
-        h2 {{ font-size: 2.2rem; text-align: center; margin-bottom: 20px; }}
-        .section-box {{ background: #fff; padding: 15px; border-radius: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); margin-bottom: 20px; }}
-        .row {{ margin-bottom: 0; }}
-        input[type], select {{ margin-bottom: 1.5rem; }}
-        .button {{ width: 100%; margin-bottom: 1rem; }}
-        summary {{ cursor: pointer; font-weight: bold; color: #9b4dca; margin-bottom: 10px; padding: 5px; background: #f0e6f7; border-radius: 5px; }}
+        :root {{ --primary: #9b4dca; --bg: #f4f5f7; --card-bg: #ffffff; --text: #333; }}
+        body {{ background: var(--bg); color: var(--text); font-family: 'Segoe UI', system-ui, sans-serif; padding-bottom: 50px; }}
         
-        /* 固定搜尋框 CSS */
-        .sticky-search-container {{
-            position: sticky;
-            top: 0;
-            z-index: 100;
-            background: #fff;
-            padding: 10px 0;
-            border-bottom: 2px solid #9b4dca;
-            margin-bottom: 10px;
-        }}
+        /* 佈局容器 */
+        .container {{ max-width: 1000px; margin: 0 auto; padding: 20px; }}
+        
+        /* 頂部導航 */
+        .header {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px; flex-wrap: wrap; gap: 10px; }}
+        .header h2 {{ margin: 0; font-size: 2.4rem; color: var(--primary); font-weight: bold; }}
+        .nav-btn {{ background: #606c76; border-color: #606c76; padding: 0 20px; height: 38px; line-height: 38px; font-size: 1.4rem; text-transform: none; }}
+        
+        /* 卡片樣式 */
+        .card {{ background: var(--card-bg); border-radius: 12px; padding: 25px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); margin-bottom: 25px; border: 1px solid #eee; }}
+        .card h4 {{ border-bottom: 2px solid #f0f0f0; padding-bottom: 15px; margin-bottom: 20px; color: #555; font-size: 1.8rem; font-weight: 600; }}
 
+        /* 表單優化 */
+        label {{ font-size: 1.3rem; color: #666; margin-bottom: 5px; }}
+        input[type="text"], input[type="number"], input[type="email"], input[type="password"], select {{ 
+            border: 1px solid #ddd; border-radius: 6px; height: 42px; background: #fff; 
+        }}
+        input:focus, select:focus {{ border-color: var(--primary); outline: none; }}
+        
+        /* 詳細資訊折疊面板 */
+        details {{ background: #fafafa; border: 1px solid #eee; border-radius: 8px; padding: 10px; margin-top: 15px; transition: 0.2s; }}
+        details[open] {{ background: #fff; border-color: #ddd; box-shadow: 0 2px 5px rgba(0,0,0,0.05); }}
+        summary {{ cursor: pointer; font-weight: bold; color: #666; padding: 5px; outline: none; list-style: none; }}
+        summary::-webkit-details-marker {{ display: none; }}
+        summary:after {{ content: "+"; float: right; font-weight: bold; }}
+        details[open] summary:after {{ content: "-"; }}
+        .lang-group {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; padding-top: 15px; }}
+
+        /* 按鈕優化 */
+        .btn-full {{ width: 100%; font-size: 1.6rem; height: 45px; }}
+        .btn-group {{ display: flex; gap: 10px; flex-wrap: wrap; margin-top: 10px; }}
+        .btn-outline {{ background: transparent; color: #606c76; border: 1px solid #bbb; }}
+        .btn-danger {{ background: #ff4d4f; border-color: #ff4d4f; color: white; }}
+        
+        /* 列表與搜尋 */
+        .sticky-search {{ position: sticky; top: 0; z-index: 99; background: var(--card-bg); padding: 15px 0; border-bottom: 1px solid #eee; margin-bottom: 0; }}
+        table {{ width: 100%; border-collapse: collapse; margin-top: 10px; }}
+        thead th {{ border-bottom: 2px solid #eee; color: #888; font-size: 1.3rem; }}
+        td {{ padding: 12px 10px; vertical-align: middle; border-bottom: 1px solid #f5f5f5; }}
+        
+        /* 列表元件 */
+        .handle {{ cursor: move; color: #ccc; font-size: 20px; user-select: none; width: 30px; }}
+        .handle:hover {{ color: var(--primary); }}
+        .prod-name {{ font-weight: bold; font-size: 1.5rem; color: #333; }}
+        .prod-cat {{ font-size: 1.2rem; color: #888; }}
+        
+        /* 狀態按鈕 */
+        .btn-sm {{ padding: 0 10px; height: 28px; line-height: 26px; font-size: 1.2rem; border-radius: 4px; border: 1px solid transparent; cursor: pointer; display: inline-block; }}
+        .status-on {{ background: #e6ffed; color: #28a745; border-color: #b7eb8f; }}
+        .status-off {{ background: #fff1f0; color: #f5222d; border-color: #ffa39e; }}
+        
+        /* 操作圖示 */
+        .btn-icon {{ text-decoration: none; font-size: 1.6rem; padding: 5px; margin: 0 2px; transition: 0.2s; }}
+        .edit {{ color: #1890ff; }}
+        .del {{ color: #ff4d4f; }}
+        .btn-icon:hover {{ transform: scale(1.2); }}
+
+        /* 訊息提示 */
+        .alert {{ padding: 12px; background: #e6f7ff; border: 1px solid #91d5ff; border-radius: 6px; color: #0050b3; text-align: center; margin-bottom: 20px; display: none; }}
+
+        /* RWD 手機版優化 */
         @media (max-width: 600px) {{
+            .header {{ flex-direction: column; align-items: stretch; text-align: center; }}
+            .nav-btn {{ margin-top: 10px; width: 100%; }}
+            
+            /* 表格變卡片 */
             table, thead, tbody, th, td, tr {{ display: block; }}
             thead tr {{ position: absolute; top: -9999px; left: -9999px; }}
-            tr {{ border: 1px solid #ddd; border-radius: 8px; margin-bottom: 15px; background: #fff; position: relative; padding: 10px 0; }}
-            td {{ border: none; position: relative; padding: 8px 10px 8px 45% !important; text-align: left; min-height: 40px; line-height: 1.4; }}
-            td:before {{ 
-                position: absolute; left: 15px; width: 35%; font-weight: bold; white-space: nowrap; color: #606c76; 
-                text-align: left; content: attr(data-label);
-            }}
-            td:nth-of-type(1):before {{ content: "排序"; }}
-            td:nth-of-type(2):before {{ content: "ID"; }}
-            td:nth-of-type(3):before {{ content: "品名/分類"; }}
-            td:nth-of-type(4):before {{ content: "價格"; }}
-            td:nth-of-type(5):before {{ content: "分區"; }}
-            td:nth-of-type(6):before {{ content: "狀態"; }}
-            td:nth-of-type(7):before {{ content: "動作"; }}
-            .handle {{ font-size: 28px; color: #9b4dca; }}
-            td:nth-of-type(1) {{ 
-                background: #f4f7f6; text-align: center; padding: 10px !important; margin-bottom: 10px; border-bottom: 1px solid #eee;
-            }}
-            td:nth-of-type(1):before {{ content: ""; position: static; display: block; width: 100%; margin-bottom: 5px; }}
+            tr {{ background: #fff; border: 1px solid #eee; border-radius: 8px; margin-bottom: 15px; padding: 15px; position: relative; box-shadow: 0 2px 5px rgba(0,0,0,0.03); }}
+            
+            td {{ padding: 5px 0; border: none; display: flex; justify-content: space-between; align-items: center; }}
+            td:before {{ content: attr(data-label); font-weight: bold; color: #999; font-size: 1.2rem; margin-right: 15px; }}
+            
+            .handle {{ position: absolute; top: 10px; right: 10px; width: auto; font-size: 24px; }}
+            .prod-name {{ font-size: 1.6rem; }}
+            
+            /* 隱藏不需要標籤的欄位 */
+            td.handle:before, td.search-key:before {{ display: none; }}
+            td.search-key {{ display: block; margin-bottom: 10px; padding-right: 30px; }}
+            td.actions {{ justify-content: flex-end; margin-top: 10px; border-top: 1px solid #eee; padding-top: 10px; }}
         }}
     </style>
-    </head><body>
-    <h2>🍴 餐廳管理後台</h2><a href="/kitchen" class="nav-btn">👨‍🍳 前往廚房看板</a>
-    <div id="status-msg" style="color:blue; font-weight:bold; margin-bottom:10px; text-align:center;">{msg}</div>
-    
-    <div class="section-box" style="background:#f4f7f6;">
-        <form method="POST"><input type="hidden" name="action" value="save_settings">
-            <label>通知 Email</label>
-            <input type="email" name="report_email" value="{config.get('report_email','')}"> 
-            <label>Resend API Key</label>
-            <input type="password" name="resend_api_key" value="{config.get('resend_api_key','')}">
-            <button type="submit">儲存設定</button>
-        </form>
-        <form method="POST"><input type="hidden" name="action" value="test_email">
-            <button type="submit" class="button button-outline">🧪 測試發送 Email</button>
-        </form>
-    </div>
+    </head>
+    <body>
 
-    <div class="section-box" style="background:#fff3e0;">
-        <h4>➕ 新增產品 (多語言)</h4>
-        <form method="POST"><input type="hidden" name="action" value="add_product">
-            <div class="row">
-                <div class="column"><label>名稱(中)</label><input type="text" name="name" required></div>
-                <div class="column"><label>價格</label><input type="number" name="price" required></div>
-            </div>
-            <div class="row">
-                <div class="column"><label>分類(中)</label><input type="text" name="category"></div>
-                <div class="column"><label>出單區</label><select name="print_category"><option value="Noodle">麵區</option><option value="Soup">湯區</option></select></div>
-            </div>
-            <details>
-                <summary>🌐 多語言名稱設定</summary>
-                <div style="padding: 10px 0;">
-                    <label>EN 名稱/分類</label>
-                    <input type="text" name="name_en" placeholder="Name EN">
-                    <input type="text" name="category_en" placeholder="Category EN">
-                    <label>JP 名稱/分類</label>
-                    <input type="text" name="name_jp" placeholder="名称 JP">
-                    <input type="text" name="category_jp" placeholder="カテゴリ JP">
-                    <label>KR 名稱/分類</label>
-                    <input type="text" name="name_kr" placeholder="이름 KR">
-                    <input type="text" name="category_kr" placeholder="카테고리 KR">
-                </div>
-            </details>
-            <details style="margin-top:10px;">
-                <summary>⚙️ 客製化選項設定</summary>
-                <div style="padding: 10px 0;">
-                    <input type="text" name="custom_options" placeholder="中文 (例如: 加麵,去蔥)">
-                    <input type="text" name="custom_options_en" placeholder="English Options">
-                    <input type="text" name="custom_options_jp" placeholder="日本語オプション">
-                    <input type="text" name="custom_options_kr" placeholder="한국어 옵션">
-                </div>
-            </details>
-            <button type="submit" style="width:100%; height: 50px; font-size: 1.8rem; margin-top:15px;">🚀 立即新增產品</button>
-        </form>
-    </div>
-
-    <div class="section-box">
-        <a href="/admin/export_menu" class="button button-outline">📤 匯出 Excel</a>
-        <form action="/admin/import_menu" method="POST" enctype="multipart/form-data">
-            <input type="file" name="menu_file" required style="margin-bottom: 10px;">
-            <button type="submit" class="button">📥 匯入 Excel</button>
-        </form>
-        <div class="row">
-            <div class="column"><a href="/admin/reset_menu" class="button" style="background:red; border-color:red;" onclick="return confirm('確定要清空菜單嗎？')">🗑️ 清空菜單</a></div>
-            <div class="column"><a href="/admin/reset_orders" class="button button-clear" onclick="return confirm('確定要清空訂單嗎？')">⚠️ 清空訂單</a></div>
+    <div class="container">
+        <div class="header">
+            <h2>🍴 餐廳後台管理</h2>
+            <a href="/kitchen" class="button nav-btn">👨‍🍳 前往廚房看板</a>
         </div>
-    </div>
-
-    <div class="section-box">
-        <h4 style="text-align:center;">📋 產品管理清單</h4>
         
-        <div class="sticky-search-container">
-            <input type="text" id="productSearch" placeholder="🔍 輸入產品名稱或分類進行搜尋..." style="margin-bottom:0;">
+        <div id="status-msg" class="alert">{msg}</div>
+
+        <div class="card">
+            <h4>⚙️ 系統設定</h4>
+            <form method="POST">
+                <input type="hidden" name="action" value="save_settings">
+                <div class="row">
+                    <div class="column">
+                        <label>日結報表 Email</label>
+                        <input type="email" name="report_email" value="{config.get('report_email','')}" placeholder="接收通知的信箱">
+                    </div>
+                    <div class="column">
+                        <label>Resend API Key</label>
+                        <input type="password" name="resend_api_key" value="{config.get('resend_api_key','')}" placeholder="API 金鑰">
+                    </div>
+                </div>
+                <div class="btn-group">
+                    <button type="submit" class="button">💾 儲存設定</button>
+                    <button type="submit" formaction="/admin?action=test_email" formmethod="POST" name="action" value="test_email" class="button btn-outline">🧪 測試發信</button>
+                </div>
+            </form>
         </div>
 
-        <div style="overflow-x: auto;">
-            <table style="width:100%;">
-                <thead><tr><th>序</th><th>ID</th><th>品名</th><th>價</th><th>分區</th><th>狀態</th><th>操作</th></tr></thead>
-                <tbody id="menu-list">{rows}</tbody>
-            </table>
+        <div class="card">
+            <h4>➕ 新增產品項目</h4>
+            <form method="POST">
+                <input type="hidden" name="action" value="add_product">
+                
+                <div class="row">
+                    <div class="column column-60">
+                        <label>產品名稱 (中文)</label>
+                        <input type="text" name="name" required placeholder="例如：牛肉麵">
+                    </div>
+                    <div class="column column-20">
+                        <label>價格</label>
+                        <input type="number" name="price" required placeholder="150">
+                    </div>
+                    <div class="column column-20">
+                        <label>出單區</label>
+                        <select name="print_category">
+                            <option value="Noodle">🍜 麵台</option>
+                            <option value="Soup">🍲 湯台</option>
+                        </select>
+                    </div>
+                </div>
+                
+                <div class="row">
+                    <div class="column">
+                        <label>前台分類 (中文)</label>
+                        <input type="text" name="category" placeholder="例如：主廚推薦">
+                    </div>
+                </div>
+
+                <details>
+                    <summary>🌐 多國語言設定 (點擊展開)</summary>
+                    <div class="lang-group">
+                        <div>
+                            <label>🇺🇸 English Name</label>
+                            <input type="text" name="name_en">
+                            <input type="text" name="category_en" placeholder="Category EN">
+                        </div>
+                        <div>
+                            <label>🇯🇵 日本語 名称</label>
+                            <input type="text" name="name_jp">
+                            <input type="text" name="category_jp" placeholder="カテゴリ JP">
+                        </div>
+                        <div>
+                            <label>🇰🇷 한국어 이름</label>
+                            <input type="text" name="name_kr">
+                            <input type="text" name="category_kr" placeholder="카테고리 KR">
+                        </div>
+                    </div>
+                </details>
+
+                <details>
+                    <summary>🔧 客製化選項 (點擊展開)</summary>
+                    <div class="lang-group">
+                        <div>
+                            <label>中文選項 (逗號分隔)</label>
+                            <input type="text" name="custom_options" placeholder="如: 加麵,不蔥">
+                        </div>
+                        <div>
+                            <label>🇺🇸 Options</label>
+                            <input type="text" name="custom_options_en">
+                        </div>
+                        <div>
+                            <label>🇯🇵 オプション</label>
+                            <input type="text" name="custom_options_jp">
+                        </div>
+                        <div>
+                            <label>🇰🇷 옵션</label>
+                            <input type="text" name="custom_options_kr">
+                        </div>
+                    </div>
+                </details>
+
+                <button type="submit" class="button btn-full" style="margin-top:20px;">🚀 新增產品</button>
+            </form>
         </div>
+
+        <div class="card">
+            <h4>📋 菜單管理與排序</h4>
+            
+            <div class="sticky-search">
+                <input type="text" id="productSearch" placeholder="🔍 輸入關鍵字搜尋產品..." style="margin-bottom:0; width:100%;">
+            </div>
+
+            <div style="overflow-x: auto;">
+                <table id="menu-table">
+                    <thead>
+                        <tr>
+                            <th style="width:50px;">排序</th>
+                            <th style="width:50px;">ID</th>
+                            <th>品項資訊</th>
+                            <th>價格</th>
+                            <th>狀態</th>
+                            <th style="text-align:right;">操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="menu-list">
+                        {rows}
+                    </tbody>
+                </table>
+            </div>
+            
+            <hr>
+            
+            <h4>📦 資料庫操作</h4>
+            <div class="btn-group">
+                <a href="/admin/export_menu" class="button btn-outline">📤 匯出 Excel</a>
+                
+                <form action="/admin/import_menu" method="POST" enctype="multipart/form-data" style="display:inline-flex; gap:5px; align-items:center;">
+                    <input type="file" name="menu_file" required style="width:200px; height:38px; padding:5px;">
+                    <button type="submit" class="button btn-outline">📥 匯入</button>
+                </form>
+
+                <div style="flex-grow:1; text-align:right;">
+                    <a href="/admin/reset_menu" class="button btn-danger" onclick="return confirm('⚠️ 警告：這將刪除所有菜單品項，確定嗎？')">🗑️ 清空菜單</a>
+                    <a href="/admin/reset_orders" class="button btn-danger" onclick="return confirm('⚠️ 警告：這將刪除所有訂單紀錄，確定嗎？')">💥 清空訂單</a>
+                </div>
+            </div>
+        </div>
+
     </div>
-    
+
     <script>
-    // 1. AJAX 切換狀態
-    function toggleProduct(pid, element) {{
+    // 顯示訊息動畫
+    const msgDiv = document.getElementById('status-msg');
+    if (msgDiv && msgDiv.innerText.trim() !== '') {{
+        msgDiv.style.display = 'block';
+        setTimeout(() => {{ msgDiv.style.opacity = '0'; }}, 3000);
+    }}
+
+    // AJAX 切換狀態
+    function toggleProduct(pid, btn) {{
         fetch('/admin/toggle_product/' + pid, {{ method: 'POST' }})
-        .then(response => response.json())
+        .then(res => res.json())
         .then(data => {{
             if(data.status === 'success') {{
                 if(data.is_available) {{
-                    element.innerText = '[上架]';
-                    element.style.color = 'green';
+                    btn.innerText = '上架中';
+                    btn.className = 'btn-sm status-on';
                 }} else {{
-                    element.innerText = '[下架]';
-                    element.style.color = 'red';
+                    btn.innerText = '已下架';
+                    btn.className = 'btn-sm status-off';
                 }}
             }}
         }});
     }}
 
-    // 2. 即時搜尋過濾功能
+    // 搜尋過濾
     document.getElementById('productSearch').addEventListener('input', function(e) {{
         let filter = e.target.value.toLowerCase();
-        let rows = document.querySelectorAll('.product-row');
-        
-        rows.forEach(row => {{
+        document.querySelectorAll('.product-row').forEach(row => {{
             let text = row.querySelector('.search-key').innerText.toLowerCase();
-            if (text.includes(filter)) {{
-                row.style.display = "";
-            }} else {{
-                row.style.display = "none";
-            }}
+            row.style.display = text.includes(filter) ? "" : "none";
         }});
     }});
 
-    // 3. 拖曳排序
+    // 拖曳排序
     Sortable.create(document.getElementById('menu-list'), {{
         handle: '.handle', 
         animation: 150,
+        ghostClass: 'blue-background-class',
         onEnd: function() {{
             let order = Array.from(document.querySelectorAll('#menu-list tr')).map(r => r.getAttribute('data-id'));
             fetch('/admin/reorder_products', {{
-                method:'POST', 
-                headers:{{'Content-Type':'application/json'}}, 
-                body:JSON.stringify({{order:order}})
+                method: 'POST', 
+                headers: {{'Content-Type':'application/json'}}, 
+                body: JSON.stringify({{order: order}})
             }});
         }}
     }});
-
-    setTimeout(() => {{ 
-        const msgDiv = document.getElementById('status-msg');
-        if (msgDiv) msgDiv.style.display = 'none';
-    }}, 3000);
-    </script></body></html>"""
+    </script>
+    </body>
+    </html>
+    """
 
 @app.route('/')
 def index():
