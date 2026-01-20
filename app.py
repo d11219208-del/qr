@@ -1146,7 +1146,7 @@ def admin_panel():
             return redirect(url_for('admin_panel', msg="✅ 設定儲存成功"))
             
         elif action == 'test_email':
-            # 改用 Threading 非同步執行發信，解決網頁卡頓問題
+            # 使用 Threading 解決發信延遲問題
             threading.Thread(target=send_daily_report).start()
             conn.close()
             return redirect(url_for('admin_panel', msg="📩 測試郵件已在後台發送，請稍候查收"))
@@ -1154,11 +1154,13 @@ def admin_panel():
         elif action == 'add_product':
             cur.execute("""INSERT INTO products (name, price, category, print_category, 
                            name_en, name_jp, name_kr, 
+                           category_en, category_jp, category_kr,
                            custom_options, custom_options_en, custom_options_jp, custom_options_kr) 
-                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""", 
+                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""", 
                        (request.form.get('name'), request.form.get('price'), request.form.get('category'), 
                         request.form.get('print_category'), request.form.get('name_en'), request.form.get('name_jp'), 
-                        request.form.get('name_kr'), request.form.get('custom_options'),
+                        request.form.get('name_kr'), request.form.get('category_en'), request.form.get('category_jp'), 
+                        request.form.get('category_kr'), request.form.get('custom_options'),
                         request.form.get('custom_options_en'), request.form.get('custom_options_jp'), request.form.get('custom_options_kr')))
             conn.commit()
             conn.close()
@@ -1204,13 +1206,18 @@ def admin_panel():
             <div class="row">
                 <div class="column"><label>名稱(中)</label><input type="text" name="name" required></div>
                 <div class="column"><label>價格</label><input type="number" name="price" required></div>
-                <div class="column"><label>分類</label><input type="text" name="category"></div>
+                <div class="column"><label>分類(中)</label><input type="text" name="category"></div>
                 <div class="column"><label>出單區</label><select name="print_category"><option value="Noodle">麵區</option><option value="Soup">湯區</option></select></div>
             </div>
             <div class="row">
                 <div class="column"><label>品名 EN</label><input type="text" name="name_en"></div>
                 <div class="column"><label>品名 JP</label><input type="text" name="name_jp"></div>
                 <div class="column"><label>品名 KR</label><input type="text" name="name_kr"></div>
+            </div>
+            <div class="row">
+                <div class="column"><label>分類 EN</label><input type="text" name="category_en"></div>
+                <div class="column"><label>分類 JP</label><input type="text" name="category_jp"></div>
+                <div class="column"><label>分類 KR</label><input type="text" name="category_kr"></div>
             </div>
             <hr>
             <div class="row">
