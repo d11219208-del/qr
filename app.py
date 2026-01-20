@@ -6,6 +6,7 @@ import urllib.request
 import urllib.error
 import time  
 import io  
+import threading  # 新增：用於非同步發信，解決延遲問題
 import pandas as pd  
 from flask import Flask, request, jsonify, redirect, url_for, Response, send_file 
 from datetime import datetime, date, timedelta 
@@ -1133,7 +1134,7 @@ def reset_orders():
 @app.route('/admin', methods=['GET', 'POST'])
 def admin_panel():
     conn = get_db_connection(); cur = conn.cursor()
-    msg = request.args.get('msg', '') # 從 URL 參數取得訊息，避免重整時重複操作
+    msg = request.args.get('msg', '') 
     
     if request.method == 'POST':
         action = request.form.get('action')
@@ -1142,14 +1143,13 @@ def admin_panel():
             cur.execute("UPDATE settings SET value=%s WHERE key='resend_api_key'", (request.form.get('resend_api_key'),))
             conn.commit()
             conn.close()
-            # 操作完畢後一定要 Redirect 回自己，這樣重整就不會重複 POST
             return redirect(url_for('admin_panel', msg="✅ 設定儲存成功"))
             
         elif action == 'test_email':
-            # 呼叫發信函式並導向
-            status_msg = send_daily_report() 
+            # 改用 Threading 非同步執行發信，解決網頁卡頓問題
+            threading.Thread(target=send_daily_report).start()
             conn.close()
-            return redirect(url_for('admin_panel', msg=status_msg))
+            return redirect(url_for('admin_panel', msg="📩 測試郵件已在後台發送，請稍候查收"))
             
         elif action == 'add_product':
             cur.execute("""INSERT INTO products (name, price, category, print_category, 
@@ -1248,7 +1248,6 @@ def admin_panel():
             }});
         }}
     }});
-    // 3秒後自動隱藏訊息
     setTimeout(() => {{ 
         const msgDiv = document.getElementById('status-msg');
         if (msgDiv) msgDiv.style.display = 'none';
