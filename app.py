@@ -1383,14 +1383,10 @@ def index():
     return "系統運作中。<a href='/admin'>進入後台</a>"
 
 
-# --- 編輯產品頁面 (已修正資料對應問題) ---
+# --- 編輯產品頁面 (維持原樣) ---
 @app.route('/admin/edit_product/<int:pid>', methods=['GET','POST'])
 def edit_product(pid):
-    # 使用 DictCursor 確保抓取的資料可以用欄位名稱讀取，避免 p[index] 抓錯
-    conn = get_db_connection()
-    # 這裡假設您使用的是 psycopg2 或類似的庫，若不是請確保 cursor 返回的是字典格式
-    cur = conn.cursor(cursor_factory=lambda cursor: RealDictCursor(cursor)) if 'RealDictCursor' in globals() else conn.cursor()
-    
+    conn = get_db_connection(); cur = conn.cursor()
     if request.method == 'POST':
         try:
             cur.execute("""
@@ -1417,73 +1413,53 @@ def edit_product(pid):
         finally:
             conn.close()
 
-    # 重新獲取資料進行顯示
-    # 如果您的 cursor 不是 DictCursor，請將下方的 p['key'] 改回正確的 p[index]
-    # 但為了準確，建議使用字典模式抓取
     cur.execute("SELECT * FROM products WHERE id=%s", (pid,))
-    product = cur.fetchone()
+    p = cur.fetchone()
     conn.close()
     
-    if not product:
-        return "找不到該產品", 404
+    def v(val): return val if val else "" 
 
-    # 處理 None 值轉換為空字串，避免 HTML 出現 "None"
-    def v(key):
-        # 兼容元組(Tuple)與字典(Dict)取值
-        val = product.get(key) if isinstance(product, dict) else product[list_index_map[key]]
-        return val if val is not None else ""
-
-    # 如果沒辦法用 DictCursor，這裡建立一個手動對應表(請根據您的資料庫結構調整 index)
-    # 假設您的 table 順序是: id(0), name(1), price(2), category(3), image_url(4), is_available(5), custom_options(6), sort_order(7)...
-    list_index_map = {
-        'id': 0, 'name': 1, 'price': 2, 'category': 3, 'image_url': 4, 
-        'custom_options': 6, 'sort_order': 7, 'name_en': 8, 'name_jp': 9, 'name_kr': 10,
-        'custom_options_en': 11, 'custom_options_jp': 12, 'custom_options_kr': 13,
-        'print_category': 14, 'category_en': 15, 'category_jp': 16, 'category_kr': 17
-    }
-
-    # 為了穩定性，這裡直接使用 v('key') 函數來渲染
     return f"""
     <!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width"><link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/milligram/1.4.1/milligram.min.css"></head>
     <body style="padding:20px;">
-        <h3>編輯產品 #{v('id')}</h3>
+        <h3>編輯產品 #{p[0]}</h3>
         <form method="POST">
             <h5>1. 基本資料 & 排序</h5>
             <div class="row">
-                <div class="column"><label>名稱 (中文)</label><input type="text" name="name" value="{v('name')}"></div>
-                <div class="column"><label>價格</label><input type="number" name="price" value="{v('price')}"></div>
-                <div class="column"><label>排序</label><input type="number" name="sort_order" value="{v('sort_order')}"></div>
+                <div class="column"><label>名稱 (中文)</label><input type="text" name="name" value="{v(p[1])}"></div>
+                <div class="column"><label>價格</label><input type="number" name="price" value="{p[2]}"></div>
+                <div class="column"><label>排序</label><input type="number" name="sort_order" value="{p[7]}"></div>
             </div>
             <h5>2. 分類與區域</h5>
             <div class="row">
-                <div class="column"><label>分類 (中文)</label><input type="text" name="category" value="{v('category')}"></div>
-                <div class="column"><label>分類 (EN)</label><input type="text" name="category_en" value="{v('category_en')}"></div>
-                <div class="column"><label>分類 (JP)</label><input type="text" name="category_jp" value="{v('category_jp')}"></div>
-                <div class="column"><label>分類 (KR)</label><input type="text" name="category_kr" value="{v('category_kr')}"></div>
+                <div class="column"><label>分類 (中文)</label><input type="text" name="category" value="{v(p[3])}"></div>
+                <div class="column"><label>分類 (EN)</label><input type="text" name="category_en" value="{v(p[15])}"></div>
+                <div class="column"><label>分類 (JP)</label><input type="text" name="category_jp" value="{v(p[16])}"></div>
+                <div class="column"><label>分類 (KR)</label><input type="text" name="category_kr" value="{v(p[17])}"></div>
             </div>
             <div class="row">
                 <div class="column"><label>出單區域</label>
                     <select name="print_category">
-                        <option value="Noodle" {'selected' if v('print_category')=='Noodle' else ''}>麵區</option>
-                        <option value="Soup" {'selected' if v('print_category')=='Soup' else ''}>湯區</option>
+                        <option value="Noodle" {'selected' if p[14]=='Noodle' else ''}>麵區</option>
+                        <option value="Soup" {'selected' if p[14]=='Soup' else ''}>湯區</option>
                     </select>
                 </div>
-                <div class="column"><label>圖片 URL</label><input type="text" name="image_url" value="{v('image_url')}"></div>
+                <div class="column"><label>圖片 URL</label><input type="text" name="image_url" value="{v(p[4])}"></div>
             </div>
             <hr>
             <h5>🌐 品名多國語言</h5>
             <div class="row">
-                <div class="column"><label>English</label><input type="text" name="name_en" value="{v('name_en')}"></div>
-                <div class="column"><label>日本語</label><input type="text" name="name_jp" value="{v('name_jp')}"></div>
-                <div class="column"><label>韓國語</label><input type="text" name="name_kr" value="{v('name_kr')}"></div>
+                <div class="column"><label>English</label><input type="text" name="name_en" value="{v(p[8])}"></div>
+                <div class="column"><label>日本語</label><input type="text" name="name_jp" value="{v(p[9])}"></div>
+                <div class="column"><label>韓國語</label><input type="text" name="name_kr" value="{v(p[10])}"></div>
             </div>
             <hr>
             <h5>🛠️ 客製化選項翻譯</h5>
-            <label>中文選項</label><input type="text" name="custom_options" value="{v('custom_options')}">
+            <label>中文選項</label><input type="text" name="custom_options" value="{v(p[6])}">
             <div class="row">
-                <div class="column"><label>English</label><input type="text" name="custom_options_en" value="{v('custom_options_en')}"></div>
-                <div class="column"><label>日本語</label><input type="text" name="custom_options_jp" value="{v('custom_options_jp')}"></div>
-                <div class="column"><label>韓國語</label><input type="text" name="custom_options_kr" value="{v('custom_options_kr')}"></div>
+                <div class="column"><label>English</label><input type="text" name="custom_options_en" value="{v(p[11])}"></div>
+                <div class="column"><label>日本語</label><input type="text" name="custom_options_jp" value="{v(p[12])}"></div>
+                <div class="column"><label>韓國語</label><input type="text" name="custom_options_kr" value="{v(p[13])}"></div>
             </div>
             <div style="margin-top:20px;">
                 <button type="submit">💾 儲存</button>
