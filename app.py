@@ -1179,8 +1179,8 @@ def admin_panel():
         rows += f"""<tr data-id='{p[0]}'>
             <td class='handle' style='cursor:move'>☰</td>
             <td>{p[0]}</td>
-            <td>{p[1]}<br><small>{p[3]}</small></td>
-            <td>{p[2]}</td>
+            <td style="word-break: break-all;"><b>{p[1]}</b><br><small style="color:#777;">{p[3]}</small></td>
+            <td>${p[2]}</td>
             <td>{p[5]}</td>
             <td><a href='/admin/toggle_product/{p[0]}' style='color:{status_color}; font-weight:bold;'>[{status_text}]</a></td>
             <td>
@@ -1195,22 +1195,26 @@ def admin_panel():
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/milligram/1.4.1/milligram.min.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.14.0/Sortable.min.js"></script>
     <style>
-        body {{ padding: 15px; background: #f9f9f9; }}
+        body {{ padding: 15px; background: #f9f9f9; font-family: sans-serif; }}
         h2 {{ font-size: 2.2rem; text-align: center; margin-bottom: 20px; }}
         .section-box {{ background: #fff; padding: 15px; border-radius: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); margin-bottom: 20px; }}
         .row {{ margin-bottom: 0; }}
         input[type], select {{ margin-bottom: 1.5rem; }}
         .button {{ width: 100%; margin-bottom: 1rem; }}
-        summary {{ cursor: pointer; font-weight: bold; color: #9b4dca; margin-bottom: 10px; }}
+        summary {{ cursor: pointer; font-weight: bold; color: #9b4dca; margin-bottom: 10px; padding: 5px; background: #f0e6f7; border-radius: 5px; }}
         
-        /* 表格手機版優化：轉為卡片 */
+        /* 表格手機版優化：修正卡片文字重疊 */
         @media (max-width: 600px) {{
             table, thead, tbody, th, td, tr {{ display: block; }}
             thead tr {{ position: absolute; top: -9999px; left: -9999px; }}
-            tr {{ border: 1px solid #ddd; border-radius: 8px; margin-bottom: 10px; background: #fff; position: relative; padding-left: 40%; }}
-            td {{ border: none; position: relative; padding: 8px 10px !important; text-align: left; }}
-            td:before {{ position: absolute; left: 10px; width: 35%; font-weight: bold; white-space: nowrap; color: #606c76; }}
+            tr {{ border: 1px solid #ddd; border-radius: 8px; margin-bottom: 15px; background: #fff; position: relative; padding: 10px 0; }}
+            td {{ border: none; position: relative; padding: 8px 10px 8px 45% !important; text-align: left; min-height: 40px; line-height: 1.4; }}
+            td:before {{ 
+                position: absolute; left: 15px; width: 35%; font-weight: bold; white-space: nowrap; color: #606c76; 
+                text-align: left; content: attr(data-label);
+            }}
             
+            /* 使用 nth-of-type 定義標籤 */
             td:nth-of-type(1):before {{ content: "排序"; }}
             td:nth-of-type(2):before {{ content: "ID"; }}
             td:nth-of-type(3):before {{ content: "品名/分類"; }}
@@ -1219,9 +1223,11 @@ def admin_panel():
             td:nth-of-type(6):before {{ content: "狀態"; }}
             td:nth-of-type(7):before {{ content: "動作"; }}
             
-            .handle {{ font-size: 24px; color: #9b4dca; }}
-            td:nth-of-type(1) {{ background: #f4f7f6; text-align: center; padding-left: 10px !important; }}
-            td:nth-of-type(1):before {{ content: ""; }}
+            .handle {{ font-size: 28px; color: #9b4dca; }}
+            td:nth-of-type(1) {{ 
+                background: #f4f7f6; text-align: center; padding: 10px !important; margin-bottom: 10px; border-bottom: 1px solid #eee;
+            }}
+            td:nth-of-type(1):before {{ content: "拖曳手把"; position: static; display: block; width: 100%; margin-bottom: 5px; }}
         }}
     </style>
     </head><body>
@@ -1254,32 +1260,31 @@ def admin_panel():
             </div>
 
             <details>
-                <summary>🌐 設定多語言名稱</summary>
-                <div class="row">
-                    <div class="column"><label>品名 EN</label><input type="text" name="name_en"></div>
-                    <div class="column"><label>品名 JP</label><input type="text" name="name_jp"></div>
-                    <div class="column"><label>品名 KR</label><input type="text" name="name_kr"></div>
-                </div>
-                <div class="row">
-                    <div class="column"><label>分類 EN</label><input type="text" name="category_en"></div>
-                    <div class="column"><label>分類 JP</label><input type="text" name="category_jp"></div>
-                    <div class="column"><label>分類 KR</label><input type="text" name="category_kr"></div>
+                <summary>🌐 多語言名稱設定</summary>
+                <div style="padding: 10px 0;">
+                    <label>EN 名稱/分類</label>
+                    <input type="text" name="name_en" placeholder="Name EN">
+                    <input type="text" name="category_en" placeholder="Category EN">
+                    <label>JP 名稱/分類</label>
+                    <input type="text" name="name_jp" placeholder="名称 JP">
+                    <input type="text" name="category_jp" placeholder="カテゴリ JP">
+                    <label>KR 名稱/分類</label>
+                    <input type="text" name="name_kr" placeholder="이름 KR">
+                    <input type="text" name="category_kr" placeholder="카테고리 KR">
                 </div>
             </details>
 
             <details style="margin-top:10px;">
-                <summary>⚙️ 設定客製化選項</summary>
-                <div class="row">
-                    <div class="column"><label>選項 (中)</label><input type="text" name="custom_options" placeholder="加麵,去蔥"></div>
-                    <div class="column"><label>選項 EN</label><input type="text" name="custom_options_en"></div>
-                </div>
-                <div class="row">
-                    <div class="column"><label>選項 JP</label><input type="text" name="custom_options_jp"></div>
-                    <div class="column"><label>選項 KR</label><input type="text" name="custom_options_kr"></div>
+                <summary>⚙️ 客製化選項設定</summary>
+                <div style="padding: 10px 0;">
+                    <input type="text" name="custom_options" placeholder="中文 (例如: 加麵,去蔥)">
+                    <input type="text" name="custom_options_en" placeholder="English Options">
+                    <input type="text" name="custom_options_jp" placeholder="日本語オプション">
+                    <input type="text" name="custom_options_kr" placeholder="한국어 옵션">
                 </div>
             </details>
             
-            <button type="submit" style="width:100%; height: 50px; font-size: 1.8rem; margin-top:15px;">🚀 新增產品</button>
+            <button type="submit" style="width:100%; height: 50px; font-size: 1.8rem; margin-top:15px;">🚀 立即新增產品</button>
         </form>
     </div>
 
@@ -1295,9 +1300,12 @@ def admin_panel():
         </div>
     </div>
 
-    <div class="section-box">
-        <table><thead><tr><th>序</th><th>ID</th><th>品名</th><th>價</th><th>分區</th><th>狀態</th><th>操作</th></tr></thead>
-        <tbody id="menu-list">{rows}</tbody></table>
+    <div class="section-box" style="overflow-x: auto;">
+        <h4 style="text-align:center;">📋 產品管理清單</h4>
+        <table style="width:100%;">
+            <thead><tr><th>序</th><th>ID</th><th>品名</th><th>價</th><th>分區</th><th>狀態</th><th>操作</th></tr></thead>
+            <tbody id="menu-list">{rows}</tbody>
+        </table>
     </div>
     
     <script>
@@ -1322,6 +1330,7 @@ def admin_panel():
 @app.route('/')
 def index():
     return "系統運作中。<a href='/admin'>進入後台</a>"
+    
     
 # --- 編輯產品頁面 (維持原樣) ---
 @app.route('/admin/edit_product/<int:pid>', methods=['GET','POST'])
