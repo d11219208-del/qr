@@ -1070,6 +1070,17 @@ def print_order(oid):
     
 # --- 9. 後台管理核心功能 ---
 
+# [新增] 這是用來解決背景發信時 Context 遺失問題的包裝函式
+def async_send_report(app_instance):
+    """在背景執行緒中建立 App Context 並發送郵件"""
+    with app_instance.app_context():
+        try:
+            print("正在後台嘗試發送測試郵件...")
+            send_daily_report() # 呼叫您原本定義好的發信函式
+            print("測試郵件發送程序結束。")
+        except Exception as e:
+            print(f"測試郵件發送失敗 Error: {e}")
+
 @app.route('/admin/reorder_products', methods=['POST'])
 def reorder_products():
     data = request.get_json()
@@ -1141,6 +1152,7 @@ def admin_panel():
     
     if request.method == 'POST':
         action = request.form.get('action')
+        
         if action == 'save_settings':
             cur.execute("UPDATE settings SET value=%s WHERE key='report_email'", (request.form.get('report_email'),))
             cur.execute("UPDATE settings SET value=%s WHERE key='resend_api_key'", (request.form.get('resend_api_key'),))
@@ -1149,9 +1161,16 @@ def admin_panel():
             return redirect(url_for('admin_panel', msg="✅ 設定儲存成功"))
             
         elif action == 'test_email':
-            threading.Thread(target=send_daily_report).start()
-            conn.close()
-            return redirect(url_for('admin_panel', msg="📩 測試郵件已在後台發送，請稍候查收"))
+            # --- 修正重點開始 ---
+            # 獲取真實的 app 實例，而不是 proxy
+            app_instance = current_app._get_current_object()
+            
+            # 將 app 實例傳給執行緒，確保 send_daily_report 執行時有正確的 Context
+            threading.Thread(target=async_send_report, args=(app_instance,)).start()
+            
+            conn.close() # 關閉當前請求的資料庫連線 (執行緒會自己開新的)
+            return redirect(url_for('admin_panel', msg="📩 測試郵件已在後台發送，請檢查收件匣或終端機日誌"))
+            # --- 修正重點結束 ---
             
         elif action == 'add_product':
             cur.execute("""INSERT INTO products (name, price, category, print_category, 
