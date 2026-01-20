@@ -949,43 +949,161 @@ def check_new_orders():
             <div class="items">{items_html}</div><div style="border-top: 1px solid #444; padding-top: 15px;">{btns}</div></div>"""
     return jsonify({'html': html_content, 'max_seq': max_seq_val, 'new_ids': new_order_ids})
 
-# --- 6. 日結報表 ---
+這是一個很實用的功能！我們需要修改 /kitchen/report 的邏輯，讓它：
+
+接收日期參數：檢查網址是否有 ?date=YYYY-MM-DD 參數。
+
+處理時區：使用者選的是「台灣時間」的日期，我們必須轉成「UTC 時間範圍」去資料庫查詢（就像剛剛修復 Email 邏輯一樣）。
+
+增加 UI 介面：在網頁上方加入一個「日期選擇器」，讓使用者點選後自動跳轉。
+
+以下是修改後的完整程式碼：
+
+修改後的 /kitchen/report 程式碼
+請將原本的 daily_report 函式替換為以下內容：
+
+Python
+from datetime import datetime, timedelta, date # 確保有引入這些
+
+# --- 6. 日結報表 (含日期選擇與時區處理) ---
 @app.route('/kitchen/report')
 def daily_report():
+    # 1. 決定要查詢的日期 (台灣時間)
+    target_date_str = request.args.get('date')
+    
+    # 如果沒傳參數，預設為「台灣今天的日期」
+    if not target_date_str:
+        tw_now = datetime.utcnow() + timedelta(hours=8)
+        target_date_str = tw_now.strftime('%Y-%m-%d')
+    
+    # 2. 轉換為 UTC 時間範圍 (用於 SQL 查詢)
+    # 邏輯：選定日期的 TW 00:00 ~ 23:59 -> 轉為 UTC
+    try:
+        # 將字串轉為 datetime 物件 (假設時間為 00:00:00)
+        target_date_obj = datetime.strptime(target_date_str, '%Y-%m-%d')
+        
+        # 台灣當天的開始與結束
+        tw_start = target_date_obj.replace(hour=0, minute=0, second=0)
+        tw_end = target_date_obj.replace(hour=23, minute=59, second=59)
+        
+        # 轉回 UTC (減 8 小時)
+        utc_start = tw_start - timedelta(hours=8)
+        utc_end = tw_end - timedelta(hours=8)
+        
+        # SQL 條件字串
+        time_filter = f"created_at >= '{utc_start}' AND created_at <= '{utc_end}'"
+        
+    except ValueError:
+        return "日期格式錯誤，請使用 YYYY-MM-DD"
+
+    # 3. 執行資料庫查詢 (使用 time_filter)
     conn = get_db_connection(); cur = conn.cursor()
-    cur.execute("SELECT COUNT(*), SUM(total_price) FROM orders WHERE created_at >= CURRENT_DATE AND status != 'Cancelled'")
+    
+    # 查詢有效單
+    cur.execute(f"SELECT COUNT(*), SUM(total_price) FROM orders WHERE {time_filter} AND status != 'Cancelled'")
     valid_count, valid_total = cur.fetchone()
-    cur.execute("SELECT COUNT(*), SUM(total_price) FROM orders WHERE created_at >= CURRENT_DATE AND status = 'Cancelled'")
+    
+    # 查詢作廢單
+    cur.execute(f"SELECT COUNT(*), SUM(total_price) FROM orders WHERE {time_filter} AND status = 'Cancelled'")
     void_count, void_total = cur.fetchone()
-    cur.execute("SELECT content_json FROM orders WHERE created_at >= CURRENT_DATE AND status != 'Cancelled'")
+    
+    # 查詢明細
+    cur.execute(f"SELECT content_json FROM orders WHERE {time_filter} AND status != 'Cancelled'")
     valid_rows = cur.fetchall()
-    cur.execute("SELECT content_json FROM orders WHERE created_at >= CURRENT_DATE AND status = 'Cancelled'")
-    void_rows = cur.fetchall(); conn.close()
+    
+    cur.execute(f"SELECT content_json FROM orders WHERE {time_filter} AND status = 'Cancelled'")
+    void_rows = cur.fetchall()
+    conn.close()
+
+    # 4. 統計品項邏輯 (維持不變)
     def agg_items(rows):
         stats = {}
         for r in rows:
             if not r[0]: continue
             try:
-                items = json.loads(r[0])
+                items = json.loads(r[0]) if isinstance(r[0], str) else r[0] # 增加型別判斷相容性
                 for i in items:
                     name = i.get('name_zh', i.get('name', '未知'))
                     qty = int(i.get('qty', 0))
                     stats[name] = stats.get(name, 0) + qty
             except: pass
         return stats
+
     valid_stats, void_stats = agg_items(valid_rows), agg_items(void_rows)
+
+    # 5. 渲染表格 HTML (維持不變)
     def render_table(stats_dict):
         if not stats_dict: return "<p style='text-align:center; color:#888;'>無資料</p>"
         h = "<table style='width:100%; border-collapse:collapse; font-size:14px; margin-top:5px;'><tr style='border-bottom:1px solid #000;'><th style='text-align:left;'>品項</th><th style='text-align:right;'>數量</th></tr>"
-        for name, qty in sorted(stats_dict.items(), key=lambda x: x[1], reverse=True): h += f"<tr><td style='padding:4px 0;'>{name}</td><td style='text-align:right;'>{qty}</td></tr>"
+        for name, qty in sorted(stats_dict.items(), key=lambda x: x[1], reverse=True): 
+            h += f"<tr><td style='padding:4px 0;'>{name}</td><td style='text-align:right;'>{qty}</td></tr>"
         return h + "</table>"
-    today_str = date.today().strftime('%Y-%m-%d')
-    return f"""
-    <!DOCTYPE html><html><head><meta charset="UTF-8"><title>本日結帳單_{today_str}</title>
-    <style>body {{ font-family: sans-serif; background: #eee; padding: 20px; display: flex; flex-direction: column; align-items: center; }} .ticket {{ background: white; width: 58mm; padding: 15px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }} h2, h3 {{ text-align: center; margin: 10px 0; }} hr {{ border: 0; border-top: 1px dashed #000; margin: 10px 0; }} .summary-box {{ margin-bottom: 15px; font-size: 15px; }} .summary-box b {{ font-size: 18px; color: green; }} .no-print {{ margin-top: 20px; display: flex; gap: 10px; }} .btn {{ padding: 10px 20px; border-radius: 5px; text-decoration: none; color: white; cursor: pointer; border: none; }} @media print {{ .no-print {{ display: none; }} body {{ background: white; padding: 0; }} .ticket {{ box-shadow: none; border: none; width: 100%; }} }}</style>
-    </head><body><div class="ticket"><h2>日結報表</h2><p style="text-align:center; font-size:12px;">日期: {today_str}</p><hr><div class="summary-box"><b>✅ 有效營收</b><br>單量: {valid_count or 0} 筆<br>總額: <b>${valid_total or 0}</b></div>{render_table(valid_stats)}<hr><div class="summary-box" style="color:#822;"><b>❌ 作廢統計</b><br>單量: {void_count or 0} 筆<br>總額: ${void_total or 0}</div>{render_table(void_stats)}<hr><p style="text-align:center; font-size:10px; color:#888;">列印時間: {today_str}</p></div><div class="no-print"><button onclick="window.print()" class="btn" style="background:#28a745;">🖨️ 列印報表</button><a href="/kitchen" class="btn" style="background:#007bff;">🔙 回廚房看板</a></div></body></html>
-    """
 
+    # 6. 回傳完整 HTML (新增日期選擇器)
+    return f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>日結報表_{target_date_str}</title>
+        <style>
+            body {{ font-family: sans-serif; background: #eee; padding: 20px; display: flex; flex-direction: column; align-items: center; }} 
+            .ticket {{ background: white; width: 58mm; padding: 15px; box-shadow: 0 0 10px rgba(0,0,0,0.1); margin-bottom: 20px; }} 
+            h2, h3 {{ text-align: center; margin: 10px 0; }} 
+            hr {{ border: 0; border-top: 1px dashed #000; margin: 10px 0; }} 
+            .summary-box {{ margin-bottom: 15px; font-size: 15px; }} 
+            .summary-box b {{ font-size: 18px; color: green; }} 
+            
+            /* 控制列印與介面區域 */
+            .controls {{ margin-bottom: 20px; display: flex; flex-direction: column; gap: 10px; align-items: center; }}
+            .date-picker {{ padding: 8px; border-radius: 5px; border: 1px solid #ccc; font-size: 16px; }}
+            .btn-group {{ display: flex; gap: 10px; }}
+            .btn {{ padding: 10px 20px; border-radius: 5px; text-decoration: none; color: white; cursor: pointer; border: none; font-size: 14px; }}
+            
+            @media print {{ 
+                .no-print, .controls {{ display: none !important; }} 
+                body {{ background: white; padding: 0; }} 
+                .ticket {{ box-shadow: none; border: none; width: 100%; margin: 0; }} 
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="controls no-print">
+            <form action="/kitchen/report" method="get" style="display:flex; align-items:center; gap:10px;">
+                <label>📅 選擇日期：</label>
+                <input type="date" name="date" class="date-picker" value="{target_date_str}" onchange="this.form.submit()">
+            </form>
+            
+            <div class="btn-group">
+                <button onclick="window.print()" class="btn" style="background:#28a745;">🖨️ 列印報表</button>
+                <a href="/kitchen" class="btn" style="background:#007bff;">🔙 回廚房看板</a>
+            </div>
+        </div>
+
+        <div class="ticket">
+            <h2>日結報表</h2>
+            <p style="text-align:center; font-size:12px;">營業日: {target_date_str}</p>
+            <hr>
+            <div class="summary-box">
+                <b>✅ 有效營收</b><br>
+                單量: {valid_count or 0} 筆<br>
+                總額: <b>${valid_total or 0}</b>
+            </div>
+            {render_table(valid_stats)}
+            <hr>
+            <div class="summary-box" style="color:#822;">
+                <b>❌ 作廢統計</b><br>
+                單量: {void_count or 0} 筆<br>
+                總額: ${void_total or 0}
+            </div>
+            {render_table(void_stats)}
+            <hr>
+            <p style="text-align:center; font-size:10px; color:#888;">列印時間: {datetime.now().strftime('%Y-%m-%d %H:%M')}</p>
+        </div>
+    </body>
+    </html>
+    """
 # --- 7. 狀態變更 ---
 @app.route('/kitchen/complete/<int:oid>')
 def complete_order(oid):
