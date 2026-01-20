@@ -949,21 +949,6 @@ def check_new_orders():
             <div class="items">{items_html}</div><div style="border-top: 1px solid #444; padding-top: 15px;">{btns}</div></div>"""
     return jsonify({'html': html_content, 'max_seq': max_seq_val, 'new_ids': new_order_ids})
 
-這是一個很實用的功能！我們需要修改 /kitchen/report 的邏輯，讓它：
-
-接收日期參數：檢查網址是否有 ?date=YYYY-MM-DD 參數。
-
-處理時區：使用者選的是「台灣時間」的日期，我們必須轉成「UTC 時間範圍」去資料庫查詢（就像剛剛修復 Email 邏輯一樣）。
-
-增加 UI 介面：在網頁上方加入一個「日期選擇器」，讓使用者點選後自動跳轉。
-
-以下是修改後的完整程式碼：
-
-修改後的 /kitchen/report 程式碼
-請將原本的 daily_report 函式替換為以下內容：
-
-Python
-from datetime import datetime, timedelta, date # 確保有引入這些
 
 # --- 6. 日結報表 (含日期選擇與時區處理) ---
 @app.route('/kitchen/report')
@@ -1104,6 +1089,7 @@ def daily_report():
     </body>
     </html>
     """
+    
 # --- 7. 狀態變更 ---
 @app.route('/kitchen/complete/<int:oid>')
 def complete_order(oid):
