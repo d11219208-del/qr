@@ -1383,14 +1383,15 @@ def index():
     return "系統運作中。<a href='/admin'>進入後台</a>"
 
 
-# --- 編輯產品頁面 (根據 init_db 結構優化版) ---
+# --- 編輯產品頁面 (強制欄位順序版) ---
 @app.route('/admin/edit_product/<int:pid>', methods=['GET','POST'])
 def edit_product(pid):
     conn = get_db_connection()
-    cur = conn.cursor()  # 使用標準 cursor，相容性最高
+    cur = conn.cursor()
     
     if request.method == 'POST':
         try:
+            # POST 部分維持不變，因為這裡是指定欄位名稱寫入的，不會有順序問題
             cur.execute("""
                 UPDATE products SET 
                 name=%s, price=%s, category=%s, image_url=%s, custom_options=%s,
@@ -1400,74 +1401,58 @@ def edit_product(pid):
                 category_en=%s, category_jp=%s, category_kr=%s
                 WHERE id=%s
             """, (
-                request.form.get('name'), 
-                request.form.get('price'), 
-                request.form.get('category'),
-                request.form.get('image_url'), 
-                request.form.get('custom_options'),
-                request.form.get('name_en'), 
-                request.form.get('name_jp'), 
-                request.form.get('name_kr'),
-                request.form.get('custom_options_en'), 
-                request.form.get('custom_options_jp'), 
-                request.form.get('custom_options_kr'),
-                request.form.get('print_category'), 
-                request.form.get('sort_order'),
-                request.form.get('category_en'), 
-                request.form.get('category_jp'), 
-                request.form.get('category_kr'),
+                request.form.get('name'), request.form.get('price'), request.form.get('category'),
+                request.form.get('image_url'), request.form.get('custom_options'),
+                request.form.get('name_en'), request.form.get('name_jp'), request.form.get('name_kr'),
+                request.form.get('custom_options_en'), request.form.get('custom_options_jp'), request.form.get('custom_options_kr'),
+                request.form.get('print_category'), request.form.get('sort_order'),
+                request.form.get('category_en'), request.form.get('category_jp'), request.form.get('category_kr'),
                 pid
             ))
             conn.commit()
             return redirect('/admin')
         except Exception as e:
             conn.rollback()
-            return f"資料庫更新失敗: {e}"
+            return f"Update Error: {e}"
         finally:
             conn.close()
 
-    # 獲取產品資料
-    cur.execute("SELECT * FROM products WHERE id=%s", (pid,))
+    # --- 修正重點：明確指定 SELECT 的欄位順序 ---
+    # 不要用 SELECT *，改用明確列出，這樣我們就絕對知道第幾個是誰
+    sql_query = """
+        SELECT 
+            id, name, price, category, image_url, 
+            custom_options, sort_order,
+            name_en, name_jp, name_kr,
+            custom_options_en, custom_options_jp, custom_options_kr,
+            print_category,
+            category_en, category_jp, category_kr
+        FROM products WHERE id=%s
+    """
+    cur.execute(sql_query, (pid,))
     row = cur.fetchone()
     conn.close()
     
     if not row:
-        return "找不到該產品 (ID錯誤)", 404
+        return "找不到該產品", 404
 
-    # --- 關鍵對應：根據您的 init_db SQL 順序建立索引 ---
-    # 資料表順序: id, name, price, category, image_url, is_available, custom_options, sort_order...
+    # --- 建立絕對對應表 (根據上方的 SELECT 順序) ---
+    # 因為 SQL 是我們手寫的，順序絕對固定，不會再錯位
     idx = {
-        'id': 0, 
-        'name': 1, 
-        'price': 2, 
-        'category': 3, 
-        'image_url': 4,
-        # 'is_available': 5, (雖然表單沒用到，但它佔據了第5個位置)
-        'custom_options': 6, 
-        'sort_order': 7, 
-        'name_en': 8, 
-        'name_jp': 9, 
-        'name_kr': 10,
-        'custom_options_en': 11, 
-        'custom_options_jp': 12, 
-        'custom_options_kr': 13,
-        'print_category': 14, 
-        'category_en': 15, 
-        'category_jp': 16, 
-        'category_kr': 17
+        'id': 0, 'name': 1, 'price': 2, 'category': 3, 'image_url': 4,
+        'custom_options': 5, 'sort_order': 6,
+        'name_en': 7, 'name_jp': 8, 'name_kr': 9,
+        'custom_options_en': 10, 'custom_options_jp': 11, 'custom_options_kr': 12,
+        'print_category': 13,
+        'category_en': 14, 'category_jp': 15, 'category_kr': 16
     }
 
-    # 智能取值函式 (相容字典與元組)
+    # 取值函式
     def v(key):
         try:
-            # 如果 row 是字典 (例如使用了 DictCursor)
-            if isinstance(row, dict):
-                val = row.get(key)
-            # 如果 row 是元組 (標準 cursor)
-            else:
-                val = row[idx[key]]
+            val = row[idx[key]]
             return val if val is not None else ""
-        except Exception:
+        except IndexError:
             return ""
 
     return f"""
