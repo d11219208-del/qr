@@ -1227,7 +1227,7 @@ def admin_panel():
             td:nth-of-type(1) {{ 
                 background: #f4f7f6; text-align: center; padding: 10px !important; margin-bottom: 10px; border-bottom: 1px solid #eee;
             }}
-            td:nth-of-type(1):before {{ content: "拖曳手把"; position: static; display: block; width: 100%; margin-bottom: 5px; }}
+            td:nth-of-type(1):before {{ content: ""; position: static; display: block; width: 100%; margin-bottom: 5px; }}
         }}
     </style>
     </head><body>
