@@ -9,7 +9,7 @@ import time
 import io  
 import threading  # 新增：用於非同步發信，解決延遲問題
 import pandas as pd  
-from flask import Flask, request, jsonify, redirect, url_for, Response, send_file 
+from flask import Flask, request, jsonify, redirect, url_for, Response, send_file, current_app
 from datetime import datetime, date, timedelta 
 
 app = Flask(__name__)
@@ -1067,7 +1067,16 @@ def print_order(oid):
     <body onload='window.print(); setTimeout(function(){{ window.close(); }}, 1200);'>{body}</body></html>
     """
 
-    
+
+def async_send_report(app_instance):
+    with app_instance.app_context():
+        try:
+            print("🚀 [背景] 開始發信...")
+            send_daily_report() 
+            print("✅ [背景] 發信成功")
+        except Exception as e:
+            print(f"❌ [背景] 發信失敗: {e}")
+            
 # --- 9. 後台管理核心功能 ---
 
 # [新增] 這是用來解決背景發信時 Context 遺失問題的包裝函式
