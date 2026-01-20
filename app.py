@@ -879,7 +879,7 @@ def kitchen_panel():
         #audio-banner { background: #d32f2f; color: white; text-align: center; padding: 10px; font-weight: bold; cursor: pointer; }
     </style></head><body>
     <div id="audio-banner" onclick="enableAudio()">🔔 點擊此處啟動「新訂單語音」與「自動列印」功能</div>
-    <div class="header-container"><h1>👨‍🍳 廚房出單看板</h1><div><a href="/kitchen/report" class="btn btn-report">📊 當日營收報表</a></div></div>
+    <div class="header-container"><h1>👨‍🍳 廚房出單看板</h1><a href="/admin" class="nav-btn">⚙️ 前往後台</a><div><a href="/kitchen/report" class="btn btn-report">📊 當日營收報表</a></div></div>
     <div id="order-grid" class="grid">正在同步訂單數據...</div>
     <audio id="notice-sound" preload="auto"><source src="https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3" type="audio/mpeg"></audio>
     <script>
@@ -1401,7 +1401,7 @@ def admin_panel():
         }}
     </style>
     </head><body>
-    <h2>🍴 餐廳管理後台</h2>
+    <h2>🍴 餐廳管理後台</h2><a href="/kitchen" class="nav-btn">👨‍🍳 前往廚房看板</a>
     <div id="status-msg" style="color:blue; font-weight:bold; margin-bottom:10px; text-align:center;">{msg}</div>
     
     <div class="section-box" style="background:#f4f7f6;">
