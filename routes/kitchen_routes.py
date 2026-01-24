@@ -34,7 +34,6 @@ def check_new_orders():
     conn = get_db_connection()
     cur = conn.cursor()
     
-    # 使用參數化查詢，確保 created_at 格式正確
     query = """
         SELECT id, table_number, items, total_price, status, created_at, lang, daily_seq, content_json 
         FROM orders 
@@ -75,7 +74,9 @@ def check_new_orders():
         except: 
             items_html = "<div class='item-row'>資料解析錯誤</div>"
 
-        # 這裡的路徑必須與 app.py 註冊的 url_prefix 一致
+        # 【修正重點】所有 URL 前面都必須加上 /kitchen 
+        # 注意：如果您原本的 /print_order 是在 menu_bp (根目錄)，則不用加 /kitchen
+        # 但建議統一由廚房模組處理
         buttons = ""
         if status == 'Pending':
             buttons += f"<button onclick='action(\"/kitchen/complete/{oid}\")' class='btn btn-main'>✅ 出餐 / 付款</button>"
@@ -125,7 +126,6 @@ def daily_report():
     from database import get_db_connection
     conn = get_db_connection(); cur = conn.cursor()
     
-    # 查詢有效單與作廢單
     cur.execute("SELECT content_json, total_price, status FROM orders WHERE created_at >= %s AND created_at <= %s", (utc_start, utc_end))
     rows = cur.fetchall()
     conn.close()
