@@ -5,7 +5,6 @@ from datetime import datetime, timedelta
 kitchen_bp = Blueprint('kitchen', __name__)
 
 def get_tw_time_range(target_date_str=None):
-    """計算台灣時間的 UTC 起始與結束範圍"""
     if target_date_str:
         try:
             target_date_obj = datetime.strptime(target_date_str, '%Y-%m-%d')
@@ -73,9 +72,7 @@ def check_new_orders():
         except: 
             items_html = "<div class='item-row'>資料解析錯誤</div>"
 
-        # 【關鍵修正】加上 /kitchen 前綴以符合 Blueprint 路由
-        # 如果 /print_order 和 /menu 在其他 Blueprint (如 menu_bp)，則不加 /kitchen
-        # 但這裡假設您希望統一由 kitchen 路由管理
+        # 操作連結統一部分前綴
         buttons = ""
         if status == 'Pending':
             buttons += f"<button onclick='action(\"/kitchen/complete/{oid}\")' class='btn btn-main'>✅ 出餐 / 付款</button>"
@@ -99,19 +96,53 @@ def check_new_orders():
         
     return jsonify({'html': html_content, 'max_seq': max_seq_val, 'new_ids': new_order_ids})
 
-# --- 3. 訂單操作 (補上列印路由) ---
+# --- 3. 補印功能 (使用內嵌 HTML 解決 500 錯誤) ---
 @kitchen_bp.route('/print_order/<int:oid>')
 def print_order(oid):
     from database import get_db_connection
     c = get_db_connection()
     cur = c.cursor()
-    cur.execute("SELECT table_number, items, daily_seq, content_json, created_at FROM orders WHERE id=%s", (oid,))
+    cur.execute("SELECT table_number, content_json, daily_seq, created_at FROM orders WHERE id=%s", (oid,))
     order = cur.fetchone()
     c.close()
     if not order: return "訂單不存在", 404
-    # 請確保你有一個 print_template.html 或是直接渲染列印畫面
-    return render_template('print_order.html', order=order)
+    
+    table_num, c_json, seq, created = order
+    tw_time = created + timedelta(hours=8)
+    items = json.loads(c_json) if c_json else []
+    
+    items_html = ""
+    for i in items:
+        name = i.get('name_zh', i.get('name', '商品'))
+        qty = i.get('qty', 1)
+        opts = " / ".join(i.get('options_zh', i.get('options', [])))
+        items_html += f"<tr><td colspan='2' style='padding-top:10px;'><b>{name} x {qty}</b></td></tr>"
+        if opts: items_html += f"<tr><td colspan='2' style='font-size:12px; padding-bottom:5px;'>└ {opts}</td></tr>"
 
+    return f"""
+    <!DOCTYPE html><html><head><meta charset="UTF-8">
+    <style>
+        body {{ width: 80mm; font-family: sans-serif; padding: 10px; }}
+        table {{ width: 100%; border-collapse: collapse; }}
+        .header {{ text-align: center; border-bottom: 2px solid #000; padding-bottom: 10px; }}
+        .footer {{ text-align: center; border-top: 1px solid #000; margin-top: 20px; padding-top: 10px; font-size: 12px; }}
+        @media print {{ .no-print {{ display: none; }} }}
+    </style></head>
+    <body onload="window.print()">
+        <div class="header">
+            <h2># {seq:03d} 補列印</h2>
+            <div style="font-size: 24px; font-weight: bold;">桌號: {table_num}</div>
+            <div>時間: {tw_time.strftime('%Y-%m-%d %H:%M')}</div>
+        </div>
+        <table>{items_html}</table>
+        <div class="footer">請保留此單據作為結帳憑證</div>
+        <div class="no-print" style="margin-top:20px; text-align:center;">
+            <button onclick="window.close()">關閉視窗</button>
+        </div>
+    </body></html>
+    """
+
+# --- 4. 其他訂單操作 ---
 @kitchen_bp.route('/complete/<int:oid>')
 def complete_order(oid):
     from database import get_db_connection
@@ -128,30 +159,23 @@ def cancel_order(oid):
     c.commit(); c.close()
     return "OK"
 
-# --- 4. 日結報表邏輯 ---
+# --- 5. 日結報表邏輯 (這部分維持原本你給的程式碼) ---
 @kitchen_bp.route('/report')
 def daily_report():
     target_date_str = request.args.get('date', (datetime.utcnow() + timedelta(hours=8)).strftime('%Y-%m-%d'))
     utc_start, utc_end = get_tw_time_range(target_date_str)
-
     from database import get_db_connection
     conn = get_db_connection(); cur = conn.cursor()
-    
     cur.execute("SELECT content_json, total_price, status FROM orders WHERE created_at >= %s AND created_at <= %s", (utc_start, utc_end))
     rows = cur.fetchall()
     conn.close()
-
     valid_stats = {}; void_stats = {}
     valid_total = 0; void_total = 0
     valid_count = 0; void_count = 0
-
     for c_json, price, status in rows:
         stats = void_stats if status == 'Cancelled' else valid_stats
-        if status == 'Cancelled':
-            void_total += price; void_count += 1
-        else:
-            valid_total += price; valid_count += 1
-        
+        if status == 'Cancelled': void_total += price; void_count += 1
+        else: valid_total += price; valid_count += 1
         try:
             items = json.loads(c_json) if c_json else []
             for i in items:
@@ -159,49 +183,16 @@ def daily_report():
                 qty = int(i.get('qty', 0))
                 amt = int(i.get('price', 0)) * qty
                 if name not in stats: stats[name] = {'qty': 0, 'amt': 0}
-                stats[name]['qty'] += qty
-                stats[name]['amt'] += amt
+                stats[name]['qty'] += qty; stats[name]['amt'] += amt
         except: continue
-
     def render_table(stats_dict):
         if not stats_dict: return "<p style='text-align:center;color:#888;'>無銷售資料</p>"
         h = "<table style='width:100%;border-collapse:collapse;font-size:14px;'><thead><tr style='background:#f0f0f0;'><th style='text-align:left;padding:6px;'>品項</th><th style='text-align:right;padding:6px;'>量</th><th style='text-align:right;padding:6px;'>金額</th></tr></thead><tbody>"
         for name, data in sorted(stats_dict.items(), key=lambda x: x[1]['qty'], reverse=True):
             h += f"<tr style='border-bottom:1px solid #eee;'><td style='padding:6px;'>{name}</td><td style='text-align:right;padding:6px;'>{data['qty']}</td><td style='text-align:right;padding:6px;'>${data['amt']:,}</td></tr>"
         return h + "</tbody></table>"
-
     return f"""
-    <!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>日結報表_{target_date_str}</title>
-    <style>
-        body {{ font-family: sans-serif; background: #eee; padding: 20px; display: flex; flex-direction: column; align-items: center; }}
-        .ticket {{ background: white; width: 80mm; padding: 20px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); border-radius: 4px; }}
-        .no-print {{ margin-bottom: 20px; background: white; padding: 15px; border-radius: 8px; }}
-        .summary {{ background: #f9f9f9; padding: 10px; border-left: 4px solid #4caf50; margin: 10px 0; }}
-        @media print {{ .no-print {{ display: none; }} body {{ background: white; padding: 0; }} .ticket {{ box-shadow: none; width: 100%; }} }}
-    </style></head>
-    <body>
-        <div class="no-print">
-            <form action="/kitchen/report" method="get">
-                📅 日期：<input type="date" name="date" value="{target_date_str}" onchange="this.form.submit()">
-                <button type="button" onclick="window.print()">🖨️ 列印</button>
-                <a href="/kitchen">🔙 返回</a>
-            </form>
-        </div>
-        <div class="ticket">
-            <h2 style="text-align:center;">日結營收報表</h2>
-            <p style="text-align:center;">{target_date_str}</p>
-            <div class="summary">
-                <b>✅ 有效訂單</b><br>
-                單數：{valid_count} 筆 / 總額：<span style="color:green;font-weight:bold;">${valid_total:,}</span>
-            </div>
-            {render_table(valid_stats)}
-            <div class="summary" style="border-left-color: #f44336; margin-top:20px;">
-                <b>❌ 作廢統計</b><br>
-                單數：{void_count} 筆 / 金額：${void_total:,}
-            </div>
-            {render_table(void_stats)}
-            <p style="text-align:center; font-size:10px; color:#aaa; margin-top:20px;">列印時間: {datetime.now().strftime('%H:%M:%S')}</p>
-        </div>
-    </body></html>
+    <!DOCTYPE html><html><head><meta charset="UTF-8"><title>日結報表_{target_date_str}</title>
+    <style>body {{ font-family: sans-serif; background: #eee; padding: 20px; display: flex; flex-direction: column; align-items: center; }} .ticket {{ background: white; width: 80mm; padding: 20px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); border-radius: 4px; }} .no-print {{ margin-bottom: 20px; background: white; padding: 15px; border-radius: 8px; }} .summary {{ background: #f9f9f9; padding: 10px; border-left: 4px solid #4caf50; margin: 10px 0; }} @media print {{ .no-print {{ display: none; }} body {{ background: white; padding: 0; }} .ticket {{ box-shadow: none; width: 100%; }} }}</style></head>
+    <body><div class="no-print"><form action="/kitchen/report" method="get">📅 日期：<input type="date" name="date" value="{target_date_str}" onchange="this.form.submit()"><button type="button" onclick="window.print()">🖨️ 列印</button><a href="/kitchen">🔙 返回</a></form></div><div class="ticket"><h2 style="text-align:center;">日結營收報表</h2><p style="text-align:center;">{target_date_str}</p><div class="summary"><b>✅ 有效訂單</b><br>單數：{valid_count} 筆 / 總額：<span style="color:green;font-weight:bold;">${valid_total:,}</span></div>{render_table(valid_stats)}<div class="summary" style="border-left-color: #f44336; margin-top:20px;"><b>❌ 作廢統計</b><br>單數：{void_count} 筆 / 金額：${void_total:,}</div>{render_table(void_stats)}</div></body></html>
     """
