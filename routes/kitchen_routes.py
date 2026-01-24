@@ -5,47 +5,52 @@ from datetime import datetime, timedelta
 kitchen_bp = Blueprint('kitchen', __name__)
 
 def get_tw_time_range(target_date_str=None):
+    """計算台灣時間的 UTC 起始與結束範圍"""
     if target_date_str:
-        target_date_obj = datetime.strptime(target_date_str, '%Y-%m-%d')
+        try:
+            target_date_obj = datetime.strptime(target_date_str, '%Y-%m-%d')
+        except:
+            target_date_obj = datetime.utcnow() + timedelta(hours=8)
     else:
         target_date_obj = datetime.utcnow() + timedelta(hours=8)
     
     tw_start = target_date_obj.replace(hour=0, minute=0, second=0, microsecond=0)
     tw_end = target_date_obj.replace(hour=23, minute=59, second=59, microsecond=999999)
+    # 轉為 UTC 時間供 SQL 查詢
     return tw_start - timedelta(hours=8), tw_end - timedelta(hours=8)
 
-# --- 路由開始 ---
-
-# 1. 廚房看板主頁 (現在對應到 /kitchen)
+# --- 1. 廚房看板主頁 ---
 @kitchen_bp.route('/')
 def kitchen_panel():
     return render_template('kitchen.html')
 
-# 2. 檢查新訂單 API (現在對應到 /kitchen/check_new_orders)
+# --- 2. 檢查新訂單 API ---
 @kitchen_bp.route('/check_new_orders')
 def check_new_orders():
     current_max = request.args.get('current_seq', 0, type=int)
     utc_start, utc_end = get_tw_time_range()
-    time_filter = f"created_at >= '{utc_start}' AND created_at <= '{utc_end}'"
 
     from database import get_db_connection 
     conn = get_db_connection()
     cur = conn.cursor()
     
-    cur.execute(f"""
+    # 使用參數化查詢，確保 created_at 格式正確
+    query = """
         SELECT id, table_number, items, total_price, status, created_at, lang, daily_seq, content_json 
-        FROM orders WHERE {time_filter} 
+        FROM orders 
+        WHERE created_at >= %s AND created_at <= %s
         ORDER BY CASE WHEN status = 'Pending' THEN 0 ELSE 1 END, daily_seq DESC
-    """)
+    """
+    cur.execute(query, (utc_start, utc_end))
     orders = cur.fetchall()
     
-    cur.execute(f"SELECT MAX(daily_seq) FROM orders WHERE {time_filter}")
+    cur.execute("SELECT MAX(daily_seq) FROM orders WHERE created_at >= %s AND created_at <= %s", (utc_start, utc_end))
     res_max = cur.fetchone()
     max_seq_val = res_max[0] if res_max and res_max[0] else 0
     
     new_order_ids = []
     if current_max > 0:
-        cur.execute(f"SELECT id FROM orders WHERE daily_seq > %s AND {time_filter} ORDER BY daily_seq ASC", (current_max,))
+        cur.execute("SELECT id FROM orders WHERE daily_seq > %s AND created_at >= %s", (current_max, utc_start))
         new_order_ids = [r[0] for r in cur.fetchall()]
     conn.close()
 
@@ -67,15 +72,20 @@ def check_new_orders():
                 options = item.get('options_zh', item.get('options', []))
                 opts_html = f"<div class='item-opts'>└ {' / '.join(options)}</div>" if options else ""
                 items_html += f"<div class='item-row'><div class='item-name'><span>{name}</span><span class='item-qty'>x{qty}</span></div>{opts_html}</div>"
-        except: items_html = "資料解析錯誤"
+        except: 
+            items_html = "<div class='item-row'>資料解析錯誤</div>"
 
-        # 注意：此處 URL 需配合 Blueprint 結構
-        buttons = f"<button onclick='action(\"/kitchen/complete/{oid}\")' class='btn btn-main'>✅ 出餐 / 付款</button>" if status == 'Pending' else ""
-        buttons += f"""<div class="btn-group">
-            <a href='/print_order/{oid}' target='_blank' class='btn btn-print'>🖨️ 補印</a>
-            <a href='/menu?edit_oid={oid}&lang=zh' target='_blank' class='btn btn-edit'>✏️ 修改</a>
-            <button onclick='if(confirm(\"⚠️ 作廢？\")) action(\"/kitchen/cancel/{oid}\")' class='btn btn-void'>🗑️</button>
-        </div>"""
+        # 這裡的路徑必須與 app.py 註冊的 url_prefix 一致
+        buttons = ""
+        if status == 'Pending':
+            buttons += f"<button onclick='action(\"/kitchen/complete/{oid}\")' class='btn btn-main'>✅ 出餐 / 付款</button>"
+            buttons += f"""<div class="btn-group">
+                <a href='/print_order/{oid}' target='_blank' class='btn btn-print'>🖨️ 補印</a>
+                <a href='/menu?edit_oid={oid}&lang=zh' target='_blank' class='btn btn-edit'>✏️ 修改</a>
+                <button onclick='if(confirm(\"⚠️ 作廢？\")) action(\"/kitchen/cancel/{oid}\")' class='btn btn-void'>🗑️</button>
+            </div>"""
+        else:
+            buttons += f"<div class='btn-group'><a href='/print_order/{oid}' target='_blank' class='btn btn-print' style='width:100%'>🖨️ 補印單據</a></div>"
 
         html_content += f"""
         <div class="card {status_cls}">
@@ -89,25 +99,98 @@ def check_new_orders():
         
     return jsonify({'html': html_content, 'max_seq': max_seq_val, 'new_ids': new_order_ids})
 
-# 3. 完成訂單
+# --- 3. 訂單操作 ---
 @kitchen_bp.route('/complete/<int:oid>')
 def complete_order(oid):
     from database import get_db_connection
-    c=get_db_connection(); c.cursor().execute("UPDATE orders SET status='Completed' WHERE id=%s",(oid,)); c.commit(); c.close()
-    return redirect(url_for('kitchen.kitchen_panel'))
+    c=get_db_connection(); cur=c.cursor()
+    cur.execute("UPDATE orders SET status='Completed' WHERE id=%s",(oid,))
+    c.commit(); c.close()
+    return "OK"
 
-# 4. 作廢訂單 (改為 /kitchen/cancel)
 @kitchen_bp.route('/cancel/<int:oid>')
 def cancel_order(oid):
     from database import get_db_connection
-    c=get_db_connection(); c.cursor().execute("UPDATE orders SET status='Cancelled' WHERE id=%s",(oid,)); c.commit(); c.close()
-    return redirect(url_for('kitchen.kitchen_panel'))
+    c=get_db_connection(); cur=c.cursor()
+    cur.execute("UPDATE orders SET status='Cancelled' WHERE id=%s",(oid,))
+    c.commit(); c.close()
+    return "OK"
 
-# 5. 報表頁面 (對應 /kitchen/report)
+# --- 4. 日結報表邏輯 ---
 @kitchen_bp.route('/report')
 def daily_report():
-    # 這裡放入您原本完整的報表邏輯，包括 render_table 函式與返回的 HTML 字串
-    # 由於代碼很長，建議這裡實作與您之前提供的邏輯相同即可
     target_date_str = request.args.get('date', (datetime.utcnow() + timedelta(hours=8)).strftime('%Y-%m-%d'))
-    # ... (中間省略，請填入您之前的報表 SQL 與 HTML 生成邏輯) ...
-    return "報表頁面生成內容"
+    utc_start, utc_end = get_tw_time_range(target_date_str)
+
+    from database import get_db_connection
+    conn = get_db_connection(); cur = conn.cursor()
+    
+    # 查詢有效單與作廢單
+    cur.execute("SELECT content_json, total_price, status FROM orders WHERE created_at >= %s AND created_at <= %s", (utc_start, utc_end))
+    rows = cur.fetchall()
+    conn.close()
+
+    valid_stats = {}; void_stats = {}
+    valid_total = 0; void_total = 0
+    valid_count = 0; void_count = 0
+
+    for c_json, price, status in rows:
+        stats = void_stats if status == 'Cancelled' else valid_stats
+        if status == 'Cancelled':
+            void_total += price; void_count += 1
+        else:
+            valid_total += price; valid_count += 1
+        
+        try:
+            items = json.loads(c_json) if c_json else []
+            for i in items:
+                name = i.get('name_zh', i.get('name', '未知'))
+                qty = int(i.get('qty', 0))
+                amt = int(i.get('price', 0)) * qty
+                if name not in stats: stats[name] = {'qty': 0, 'amt': 0}
+                stats[name]['qty'] += qty
+                stats[name]['amt'] += amt
+        except: continue
+
+    def render_table(stats_dict):
+        if not stats_dict: return "<p style='text-align:center;color:#888;'>無銷售資料</p>"
+        h = "<table style='width:100%;border-collapse:collapse;font-size:14px;'><thead><tr style='background:#f0f0f0;'><th style='text-align:left;padding:6px;'>品項</th><th style='text-align:right;padding:6px;'>量</th><th style='text-align:right;padding:6px;'>金額</th></tr></thead><tbody>"
+        for name, data in sorted(stats_dict.items(), key=lambda x: x[1]['qty'], reverse=True):
+            h += f"<tr style='border-bottom:1px solid #eee;'><td style='padding:6px;'>{name}</td><td style='text-align:right;padding:6px;'>{data['qty']}</td><td style='text-align:right;padding:6px;'>${data['amt']:,}</td></tr>"
+        return h + "</tbody></table>"
+
+    return f"""
+    <!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>日結報表_{target_date_str}</title>
+    <style>
+        body {{ font-family: sans-serif; background: #eee; padding: 20px; display: flex; flex-direction: column; align-items: center; }}
+        .ticket {{ background: white; width: 80mm; padding: 20px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); border-radius: 4px; }}
+        .no-print {{ margin-bottom: 20px; background: white; padding: 15px; border-radius: 8px; }}
+        .summary {{ background: #f9f9f9; padding: 10px; border-left: 4px solid #4caf50; margin: 10px 0; }}
+        @media print {{ .no-print {{ display: none; }} body {{ background: white; padding: 0; }} .ticket {{ box-shadow: none; width: 100%; }} }}
+    </style></head>
+    <body>
+        <div class="no-print">
+            <form action="/kitchen/report" method="get">
+                📅 日期：<input type="date" name="date" value="{target_date_str}" onchange="this.form.submit()">
+                <button type="button" onclick="window.print()">🖨️ 列印</button>
+                <a href="/kitchen">🔙 返回</a>
+            </form>
+        </div>
+        <div class="ticket">
+            <h2 style="text-align:center;">日結營收報表</h2>
+            <p style="text-align:center;">{target_date_str}</p>
+            <div class="summary">
+                <b>✅ 有效訂單</b><br>
+                單數：{valid_count} 筆 / 總額：<span style="color:green;font-weight:bold;">${valid_total:,}</span>
+            </div>
+            {render_table(valid_stats)}
+            <div class="summary" style="border-left-color: #f44336; margin-top:20px;">
+                <b>❌ 作廢統計</b><br>
+                單數：{void_count} 筆 / 金額：${void_total:,}
+            </div>
+            {render_table(void_stats)}
+            <p style="text-align:center; font-size:10px; color:#aaa; margin-top:20px;">列印時間: {datetime.now().strftime('%H:%M:%S')}</p>
+        </div>
+    </body></html>
+    """
