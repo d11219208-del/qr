@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="{{ lang }}">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ texts.title }}</title>
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+    <style>
+        :root { --primary: #e67e22; --bg: #f4f4f9; }
+        body { font-family: sans-serif; background: var(--bg); margin: 0; padding-bottom: 80px; }
+        .header { background: white; padding: 15px; text-align: center; box-shadow: 0 2px 5px rgba(0,0,0,0.1); sticky; top: 0; z-index: 100; }
+        .category-nav { display: flex; overflow-x: auto; background: white; padding: 10px; gap: 10px; sticky; top: 60px; z-index: 99; }
+        .cat-btn { padding: 8px 15px; border-radius: 20px; border: 1px solid #ddd; background: white; white-space: nowrap; cursor: pointer; }
+        .cat-btn.active { background: var(--primary); color: white; border-color: var(--primary); }
+        
+        .product-grid { padding: 15px; display: grid; grid-template-columns: 1fr 1fr; gap: 15px; }
+        .product-card { background: white; border-radius: 10px; overflow: hidden; box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
+        .product-img { width: 100%; height: 120px; object-fit: cover; background: #eee; }
+        .product-info { padding: 10px; }
+        .product-name { font-size: 1rem; font-weight: bold; margin-bottom: 5px; }
+        .product-price { color: var(--primary); font-weight: bold; }
+        
+        .cart-bar { position: fixed; bottom: 0; width: 100%; background: white; padding: 15px; box-sizing: border-box; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 -2px 10px rgba(0,0,0,0.1); }
+        .checkout-btn { background: var(--primary); color: white; padding: 10px 20px; border-radius: 25px; border: none; font-size: 1rem; }
+        
+        /* 彈窗樣式省略，建議延用你原本 app.py 內的 CSS */
+    </style>
+</head>
+<body>
+
+<div class="header">
+    <h2>{{ texts.welcome }}</h2>
+    <input type="text" id="table_number" placeholder="{{ texts.table_placeholder }}" value="{{ table_num }}" style="width: 80%; padding: 8px; border-radius: 5px; border: 1px solid #ddd;">
+</div>
+
+<div class="category-nav">
+    {% for cat in categories %}
+    <button class="cat-btn" onclick="filterCategory('{{ cat }}')">{{ cat }}</button>
+    {% endfor %}
+</div>
+
+<div class="product-grid">
+    {% for p in products %}
+    <div class="product-card" data-category="{{ p.category }}">
+        {% if p.image_url %}
+        <img src="{{ p.image_url }}" class="product-img" alt="{{ p.name }}">
+        {% endif %}
+        <div class="product-info">
+            <div class="product-name">{{ p.name }}</div>
+            <div class="product-price">${{ p.price }}</div>
+            <button onclick="openModal({{ p | tojson }})" class="checkout-btn" style="width:100%; margin-top:10px; padding:5px;">{{ texts.add }}</button>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+<div class="cart-bar">
+    <div>{{ texts.total }}: $<span id="cart-total">0</span></div>
+    <button class="checkout-btn" onclick="submitOrder()">{{ texts.checkout }}</button>
+</div>
+
+<script>
+    let cart = [];
+    let currentLang = "{{ lang }}";
+    const texts = {{ texts | tojson }};
+
+    function openModal(product) {
+        // 這裡實作你的客製化彈窗邏輯
+        // 建議使用 Swal.fire (SweetAlert2) 或自定義 Modal
+        addToCart(product, 1, "");
+    }
+
+    function addToCart(product, qty, note) {
+        cart.push({ ...product, qty, note });
+        updateCartUI();
+    }
+
+    function updateCartUI() {
+        let total = cart.reduce((sum, item) => sum + (item.price * item.qty), 0);
+        document.getElementById('cart-total').innerText = total;
+    }
+
+    async function submitOrder() {
+        const table = document.getElementById('table_number').value;
+        if (!table) return Swal.fire(texts.table_placeholder);
+        if (cart.length === 0) return Swal.fire(texts.empty_cart);
+
+        const response = await fetch('/submit_order', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                table_number: table,
+                items: cart,
+                total_price: parseInt(document.getElementById('cart-total').innerText),
+                lang: currentLang
+            })
+        });
+
+        const result = await response.json();
+        if (result.success) {
+            Swal.fire(texts.order_success, texts.daily_seq_prefix + ": " + result.daily_seq, 'success')
+                .then(() => location.reload());
+        }
+    }
+
+    function filterCategory(cat) {
+        document.querySelectorAll('.product-card').forEach(card => {
+            card.style.display = (card.dataset.category === cat || cat === 'All') ? 'block' : 'none';
+        });
+    }
+</script>
+
+</body>
+</html>

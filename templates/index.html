@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>線上點餐系統 | Select Language</title>
+    <style>
+        :root {
+            --primary-color: #e67e22;
+            --bg-color: #f8f9fa;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-color);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+        }
+        .container {
+            text-align: center;
+            background: white;
+            padding: 2rem;
+            border-radius: 15px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            width: 90%;
+            max-width: 400px;
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 2rem;
+            font-size: 1.5rem;
+        }
+        .lang-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+        }
+        .lang-btn {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            background: #fff;
+            border: 2px solid #eee;
+            border-radius: 12px;
+            text-decoration: none;
+            color: #333;
+            transition: all 0.2s;
+        }
+        .lang-btn:hover {
+            border-color: var(--primary-color);
+            background-color: #fffaf5;
+            transform: translateY(-2px);
+        }
+        .flag {
+            font-size: 2rem;
+            margin-bottom: 8px;
+        }
+        .label {
+            font-weight: bold;
+            font-size: 1rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Welcome / 歡迎點餐</h1>
+        <div class="lang-grid">
+            <a href="/menu?lang=zh" class="lang-btn">
+                <span class="flag">🇹🇼</span>
+                <span class="label">繁體中文</span>
+            </a>
+            <a href="/menu?lang=en" class="lang-btn">
+                <span class="flag">🇺🇸</span>
+                <span class="label">English</span>
+            </a>
+            <a href="/menu?lang=jp" class="lang-btn">
+                <span class="flag">🇯🇵</span>
+                <span class="label">日本語</span>
+            </a>
+            <a href="/menu?lang=kr" class="lang-btn">
+                <span class="flag">🇰🇷</span>
+                <span class="label">한국어</span>
+            </a>
+        </div>
+    </div>
+</body>
+</html>

@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>廚房看板 (KDS)</title>
+    <style>
+        body { font-family: sans-serif; background: #2c3e50; color: white; margin: 0; padding: 20px; }
+        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; border-bottom: 2px solid #34495e; padding-bottom: 10px; }
+        .order-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 20px; }
+        .order-card { background: #ecf0f1; color: #333; border-radius: 10px; overflow: hidden; display: flex; flex-direction: column; }
+        .order-header { background: #f39c12; color: white; padding: 10px; display: flex; justify-content: space-between; font-weight: bold; }
+        .order-body { padding: 15px; flex-grow: 1; font-size: 1.2rem; }
+        .order-footer { padding: 10px; background: #ddd; display: flex; gap: 10px; }
+        
+        .btn { flex: 1; padding: 10px; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; color: white; }
+        .btn-prep { background: #3498db; }
+        .btn-done { background: #27ae60; }
+        .receipt-badge { background: #e74c3c; color: white; padding: 2px 6px; border-radius: 4px; font-size: 0.8rem; }
+        .wait-time { font-size: 0.9rem; color: #666; }
+    </style>
+</head>
+<body>
+
+<div class="header">
+    <h1>👨‍🍳 廚房備餐看板</h1>
+    <div id="clock">正在初始化...</div>
+</div>
+
+<div class="order-grid" id="order-container">
+    </div>
+
+<script>
+    // 更新時鐘
+    function updateClock() {
+        document.getElementById('clock').innerText = new Date().toLocaleTimeString();
+    }
+    setInterval(updateClock, 1000);
+
+    // 抓取訂單資料
+    async function fetchOrders() {
+        try {
+            const response = await fetch('/kitchen/orders');
+            const orders = await response.json();
+            renderOrders(orders);
+        } catch (error) {
+            console.error('抓取訂單失敗:', error);
+        }
+    }
+
+    // 將訂單渲染到畫面上
+    function renderOrders(orders) {
+        const container = document.getElementById('order-container');
+        container.innerHTML = '';
+
+        if (orders.length === 0) {
+            container.innerHTML = '<div style="font-size: 1.5rem; color: #bdc3c7;">目前沒有待處理訂單</div>';
+            return;
+        }
+
+        orders.forEach(order => {
+            const card = document.createElement('div');
+            card.className = 'order-card';
+            
+            // 處理收據標籤
+            const receiptTag = order.need_receipt ? '<span class="receipt-badge">需收據</span>' : '';
+            
+            card.innerHTML = `
+                <div class="order-header" style="background: ${order.status === 'Preparing' ? '#3498db' : '#f39c12'}">
+                    <span>#${order.daily_seq} - 桌號: ${order.table_number}</span>
+                    ${receiptTag}
+                </div>
+                <div class="order-body">
+                    <div style="white-space: pre-wrap;">${order.items}</div>
+                    <hr>
+                    <div class="wait-time">等待時間: ${order.wait_time} 分鐘</div>
+                </div>
+                <div class="order-footer">
+                    ${order.status === 'Pending' 
+                        ? `<button class="btn btn-prep" onclick="updateStatus(${order.id}, 'Preparing')">開始製作</button>` 
+                        : `<button class="btn btn-done" onclick="updateStatus(${order.id}, 'Completed')">完成出餐</button>`
+                    }
+                </div>
+            `;
+            container.appendChild(card);
+        });
+    }
+
+    // 更新訂單狀態
+    async function updateStatus(orderId, newStatus) {
+        try {
+            const response = await fetch(`/kitchen/update_status/${orderId}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ status: newStatus })
+            });
+            const result = await response.json();
+            if (result.success) {
+                fetchOrders(); // 立即重新整理
+            }
+        } catch (error) {
+            alert('更新失敗');
+        }
+    }
+
+    // 每 5 秒自動更新一次訂單
+    fetchOrders();
+    setInterval(fetchOrders, 5000);
+</script>
+
+</body>
+</html>
