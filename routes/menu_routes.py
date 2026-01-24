@@ -1,11 +1,12 @@
 from flask import Blueprint, render_template, request, jsonify, redirect, url_for
 from database import get_db_connection
 from translations import load_translations
+from datetime import timedelta
 import json
 
 menu_bp = Blueprint('menu', __name__)
 
-# --- 語言選擇首頁 (維持現狀) ---
+# --- 語言選擇首頁 ---
 @menu_bp.route('/')
 def index():
     table_num = request.args.get('table', '')
@@ -21,7 +22,6 @@ def menu():
     conn = get_db_connection()
     cur = conn.cursor()
 
-    # --- 處理 POST 提交訂單 ---
     if request.method == 'POST':
         try:
             table_number = request.form.get('table_number')
@@ -30,26 +30,22 @@ def menu():
             final_lang = request.form.get('lang_input', 'zh')
             old_order_id = request.form.get('old_order_id')
 
-            if not cart_json or cart_json == '[]': 
-                return "Empty Cart", 400
+            if not cart_json or cart_json == '[]': return "Empty Cart", 400
 
             cart_items = json.loads(cart_json)
             total_price = 0
             display_list = []
 
-            # 如果是編輯訂單，鎖定原始語言
             if old_order_id:
                 cur.execute("SELECT lang FROM orders WHERE id=%s", (old_order_id,))
                 orig_res = cur.fetchone()
                 if orig_res: final_lang = orig_res[0] 
 
-            # 解析購物車內容並計算總價
             for item in cart_items:
                 price = int(float(item['unit_price']))
                 qty = int(float(item['qty']))
                 total_price += (price * qty)
                 
-                # 根據語系產生顯示字串
                 name_key = f"name_{final_lang}"
                 n_display = item.get(name_key, item.get('name_zh'))
                 opt_key = f"options_{final_lang}"
@@ -59,7 +55,6 @@ def menu():
 
             items_str = " + ".join(display_list)
 
-            # 插入資料庫 (自動計算今日序號)
             cur.execute("""
                 INSERT INTO orders (table_number, items, total_price, lang, daily_seq, content_json, need_receipt)
                 VALUES (%s, %s, %s, %s, (SELECT COALESCE(MAX(daily_seq), 0) + 1 FROM orders WHERE created_at >= CURRENT_DATE), %s, %s) 
@@ -67,18 +62,14 @@ def menu():
             """, (table_number, items_str, total_price, final_lang, cart_json, need_receipt))
 
             oid = cur.fetchone()[0]
-
-            # 如果是編輯舊訂單，將舊單作廢
             if old_order_id:
                 cur.execute("UPDATE orders SET status='Cancelled' WHERE id=%s", (old_order_id,))
             
             conn.commit()
             
             if old_order_id: 
-                # 編輯模式成功後的 JS 回饋
                 return f"<script>localStorage.removeItem('cart_cache'); alert('Order #{old_order_id} Updated'); if(window.opener) window.opener.location.reload(); window.close();</script>"
             
-            # 一般點餐成功，跳轉至成功頁面
             return redirect(url_for('menu.order_success', order_id=oid, lang=final_lang))
         except Exception as e:
             conn.rollback()
@@ -86,13 +77,12 @@ def menu():
         finally:
             cur.close(); conn.close()
 
-    # --- 處理 GET 載入頁面 ---
+    # GET 邏輯... (省略部分重複代碼，確保 products 抓取與轉換格式正確)
     url_table = request.args.get('table', '')
     edit_oid = request.args.get('edit_oid')
     preload_cart = "null" 
     order_lang = display_lang 
 
-    # 如果是編輯模式，先抓取舊訂單資料
     if edit_oid:
         cur.execute("SELECT table_number, content_json, lang FROM orders WHERE id=%s", (edit_oid,))
         old_data = cur.fetchone()
@@ -101,7 +91,6 @@ def menu():
             preload_cart = old_data[1] 
             order_lang = old_data[2] if old_data[2] else 'zh'
 
-    # 抓取產品清單
     cur.execute("""
         SELECT id, name, price, category, image_url, is_available, custom_options, sort_order,
                name_en, name_jp, name_kr, custom_options_en, custom_options_jp, custom_options_kr, 
@@ -111,7 +100,6 @@ def menu():
     products = cur.fetchall()
     cur.close(); conn.close()
 
-    # 轉換產品格式
     p_list = []
     for p in products:
         p_list.append({
@@ -125,20 +113,93 @@ def menu():
             'print_category': p[14] or 'Noodle'
         })
     
-    # 回傳給前端渲染
-    return render_template('menu.html', 
-                           products=p_list, 
-                           texts=t, 
-                           table_num=url_table, 
-                           display_lang=display_lang, 
-                           order_lang=order_lang, 
-                           preload_cart=preload_cart, 
-                           edit_oid=edit_oid)
+    return render_template('menu.html', products=p_list, texts=t, table_num=url_table, 
+                           display_lang=display_lang, order_lang=order_lang, 
+                           preload_cart=preload_cart, edit_oid=edit_oid)
 
-# --- 訂單成功頁面 ---
+# --- 4. 下單成功 (滿版優化版) ---
 @menu_bp.route('/success')
 def order_success():
-    order_id = request.args.get('order_id')
+    oid = request.args.get('order_id')
     lang = request.args.get('lang', 'zh')
-    # ... 渲染成功頁面的邏輯 ...
-    return f"Order #{order_id} Success! (Language: {lang})"
+    translations = load_translations()
+    t = translations.get(lang, translations['zh'])
+    
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT daily_seq, content_json, total_price, created_at FROM orders WHERE id=%s", (oid,))
+    row = cur.fetchone()
+    cur.close(); conn.close()
+    
+    if not row: return "Order Not Found", 404
+    
+    seq, json_str, total, created_at = row
+    # 轉換為台灣時間
+    tw_time = created_at + timedelta(hours=8)
+    time_str = tw_time.strftime('%Y-%m-%d %H:%M:%S')
+    items = json.loads(json_str) if json_str else []
+    
+    items_html = ""
+    for i in items:
+        # 根據當前語言選擇正確的產品名稱與選項
+        d_name = i.get(f'name_{lang}', i.get('name_zh', 'Product'))
+        ops = i.get(f'options_{lang}', i.get('options_zh', []))
+        opt_str = f"<br><small style='color:#777; font-size:0.9em;'>└ {', '.join(ops)}</small>" if ops else ""
+        
+        items_html += f"""
+        <div style='display:flex; justify-content:space-between; align-items: flex-start; border-bottom:1px solid #eee; padding:15px 0;'>
+            <div style="text-align: left; padding-right: 10px;">
+                <div style="font-size:1.1em; font-weight:bold; color:#333;">{d_name} <span style="color:#888; font-weight:normal;">x{i['qty']}</span></div>
+                {opt_str}
+            </div>
+            <div style="font-weight:bold; font-size:1.1em; white-space:nowrap;">${i['unit_price'] * i['qty']}</div>
+        </div>
+        """
+
+    return f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+        <title>Order Success</title>
+        <style>
+            body {{ margin: 0; padding: 0; background: #fdfdfd; font-family: 'Microsoft JhengHei', -apple-system, sans-serif; }}
+            .container {{ min-height: 100vh; display: flex; flex-direction: column; padding: 20px; box-sizing: border-box; }}
+            .card {{ background: #fff; flex-grow: 1; border-radius: 20px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); padding: 30px 20px; text-align: center; display: flex; flex-direction: column; }}
+            .success-icon {{ font-size: 60px; margin-bottom: 10px; }}
+            .status-title {{ color: #28a745; margin: 0 0 20px 0; font-size: 1.8em; }}
+            .seq-box {{ background: #fff5f8; border-radius: 15px; padding: 20px; margin-bottom: 25px; border: 2px solid #ffeef2; }}
+            .seq-label {{ font-size: 1em; color: #e91e63; font-weight: bold; margin-bottom: 8px; letter-spacing: 1px; }}
+            .seq-number {{ font-size: 5em; font-weight: 900; color: #e91e63; line-height: 1; }}
+            .notice-box {{ background: #fdf6e3; padding: 18px; border-left: 6px solid #ff9800; border-radius: 8px; margin-bottom: 30px; text-align: left; }}
+            .details-area {{ text-align: left; margin-bottom: 30px; }}
+            .total-row {{ text-align: right; font-weight: 900; font-size: 1.8em; margin-top: 20px; color: #d32f2f; border-top: 2px solid #333; padding-top: 15px; }}
+            .home-btn {{ display: block; padding: 18px; background: #007bff; color: white !important; text-decoration: none; border-radius: 12px; font-weight: bold; font-size: 1.2em; margin-top: auto; box-shadow: 0 4px 10px rgba(0,123,255,0.3); }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="card">
+                <div class="success-icon">✅</div>
+                <h1 class="status-title">{t['order_success']}</h1>
+                <div class="seq-box">
+                    <div class="seq-label">取餐單號 / ORDER NO.</div>
+                    <div class="seq-number">#{seq:03d}</div>
+                </div>
+                <div class="notice-box">
+                    <div style="font-weight:bold; color:#856404; font-size:1.3em; margin-bottom:5px;">⚠️ {t.get('pay_at_counter', '請至櫃檯結帳')}</div>
+                    <div style="color:#856404; font-size:1em; line-height:1.4;">{t['kitchen_prep']}</div>
+                </div>
+                <div class="details-area">
+                    <h3 style="border-bottom:2px solid #eee; padding-bottom:10px; margin-bottom:10px; color:#444;">🧾 {t.get('order_details', '訂單明細')}</h3>
+                    {items_html}
+                    <div class="total-row">{t['total']}: ${total}</div>
+                </div>
+                <p style="color:#999; font-size:0.85em; margin: 20px 0;">下單時間: {time_str}</p>
+                <a href="{url_for('menu.index')}?lang={lang}" class="home-btn">回首頁 / Back to Menu</a>
+            </div>
+        </div>
+    </body>
+    </html>
+    """
