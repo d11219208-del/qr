@@ -3,119 +3,153 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>👨‍🍳 廚房出單看板</title>
-    <link href="https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@400;700&family=Noto+Sans+TC:wght@400;700&display=swap" rel="stylesheet">
+    <title>廚房出餐看板</title>
     <style>
         :root {
-            --bg-color: #121212; --card-bg: #1e1e1e; --text-main: #e0e0e0;
-            --accent-orange: #ff9800; --accent-green: #4caf50; --accent-red: #f44336; --accent-blue: #2196f3;
+            --pending: #fff4e5;
+            --completed: #e8f5e9;
+            --cancelled: #ffebee;
+            --main-text: #333;
         }
-        body { background: var(--bg-color); color: var(--text-main); font-family: 'Noto Sans TC', sans-serif; margin: 0; padding-bottom: 50px; }
-        .header-container { 
+        body { font-family: "Microsoft JhengHei", sans-serif; background: #f0f2f5; margin: 0; padding: 15px; }
+        
+        header { 
             display: flex; justify-content: space-between; align-items: center; 
-            padding: 10px 20px; background: #252526; border-bottom: 2px solid #333;
-            position: sticky; top: 0; z-index: 100; box-shadow: 0 2px 10px rgba(0,0,0,0.5);
+            background: #fff; padding: 10px 20px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
         }
-        h1 { color: var(--accent-orange); margin: 0; font-size: 1.5rem; display: flex; align-items: center; gap: 10px; }
-        .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 20px; padding: 20px; }
+
+        .order-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 20px;
+        }
+
         .card { 
-            background: var(--card-bg); border-radius: 8px; overflow: hidden; border-top: 5px solid var(--accent-orange);
-            box-shadow: 0 4px 15px rgba(0,0,0,0.5); position: relative;
+            background: white; border-radius: 12px; border: 1px solid #ddd;
+            display: flex; flex-direction: column; overflow: hidden;
+            transition: transform 0.2s;
         }
-        .card.completed { border-top-color: var(--accent-green); background: #1b261b; opacity: 0.6; }
-        .card.cancelled { border-top-color: var(--accent-red); background: #261b1b; opacity: 0.5; }
-        .card-header { padding: 15px; background: rgba(255,255,255,0.03); border-bottom: 2px dashed #444; display: flex; justify-content: space-between; align-items: center; }
-        .seq-num { font-size: 2rem; font-family: 'Roboto Mono'; font-weight: bold; color: var(--accent-orange); }
-        .table-num { font-size: 1.4rem; background: #333; padding: 4px 12px; border-radius: 4px; font-weight: bold; }
-        .items { padding: 15px; font-size: 1.2rem; line-height: 1.5; }
-        .item-qty { color: var(--accent-orange); font-size: 1.3rem; margin-left: 10px; }
-        .item-opts { font-size: 0.95rem; color: #aaa; padding-left: 10px; border-left: 2px solid #555; }
-        .actions { padding: 10px; background: rgba(0,0,0,0.2); display: flex; flex-direction: column; gap: 8px; }
-        .btn { border: none; border-radius: 6px; padding: 10px; color: white; font-weight: bold; cursor: pointer; text-align: center; font-size: 1rem; }
-        .btn-main { background: var(--accent-green); font-size: 1.2rem; padding: 15px; width: 100%; }
-        .btn-print { background: var(--accent-blue); flex: 1; }
-        .btn-edit { background: #607d8b; flex: 1; }
-        .btn-void { background: #d32f2f; width: 40px; }
-        #status-banner { 
-            background: var(--accent-red); color: white; text-align: center; padding: 12px; 
-            cursor: pointer; position: sticky; top: 60px; z-index: 99;
+        .card:hover { transform: translateY(-3px); box-shadow: 0 5px 15px rgba(0,0,0,0.1); }
+
+        /* 狀態顏色 */
+        .card.pending { border-left: 8px solid #ff9800; background: var(--pending); }
+        .card.completed { border-left: 8px solid #4caf50; background: var(--completed); opacity: 0.8; }
+        .card.cancelled { border-left: 8px solid #f44336; background: var(--cancelled); opacity: 0.6; }
+
+        .card-header { 
+            padding: 12px; border-bottom: 1px dashed #ccc; 
+            display: flex; justify-content: space-between; align-items: flex-start;
         }
-        .pulse { animation: pulse 2s infinite; }
-        @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.8; } 100% { opacity: 1; } }
+        .seq-num { font-size: 24px; font-weight: bold; color: #d32f2f; }
+        .table-num { font-size: 20px; font-weight: bold; background: #333; color: white; padding: 4px 8px; border-radius: 4px; }
+        .time-stamp { font-size: 12px; color: #666; }
+
+        .items { padding: 12px; flex-grow: 1; }
+        .item-row { margin-bottom: 8px; border-bottom: 1px solid rgba(0,0,0,0.05); padding-bottom: 4px; }
+        .item-name { display: flex; justify-content: space-between; font-size: 18px; font-weight: 600; }
+        .item-qty { color: #d32f2f; font-weight: bold; }
+        .item-opts { font-size: 14px; color: #666; padding-left: 10px; margin-top: 2px; }
+
+        .actions { padding: 10px; background: rgba(255,255,255,0.5); display: flex; flex-direction: column; gap: 8px; }
+        .btn { 
+            padding: 10px; border: none; border-radius: 6px; cursor: pointer; 
+            font-size: 16px; font-weight: bold; text-align: center; text-decoration: none;
+        }
+        .btn-main { background: #4caf50; color: white; width: 100%; }
+        .btn-group { display: flex; gap: 5px; }
+        .btn-print { background: #2196f3; color: white; flex: 2; }
+        .btn-edit { background: #ff9800; color: white; flex: 2; }
+        .btn-void { background: #f44336; color: white; flex: 1; }
+
+        .status-tag { padding: 2px 6px; border-radius: 4px; font-size: 12px; color: white; }
+        
+        #loading-msg { text-align: center; padding: 50px; font-size: 1.5em; color: #666; }
     </style>
 </head>
 <body>
-    <div class="header-container">
-        <h1>👨‍🍳 廚房出單 <span id="clock" style="font-size:0.8em; color:#888;"></span></h1>
-        <div>
-            <a href="/admin" style="color:white; text-decoration:none; margin-right:15px;">⚙️ 後台</a>
-            <a href="/kitchen/report" style="color:white; text-decoration:none;">📊 報表</a>
-        </div>
+
+<header>
+    <div>
+        <h1 style="margin:0;">🍳 廚房出餐看板</h1>
+        <span id="update-time" style="font-size:12px; color:#888;">正在連線中...</span>
     </div>
-
-    <div id="status-banner" class="pulse" onclick="enableAudio()">
-        🔊 點擊此處啟用「自動列印」與「音效通知」
+    <div class="nav-links">
+        <a href="/kitchen/report" class="btn btn-print" style="padding: 8px 15px;">📊 日結報表</a>
+        <button onclick="refreshOrders()" class="btn btn-edit" style="padding: 8px 15px;">🔄 立即整理</button>
     </div>
-    
-    <div id="order-grid" class="grid">
-        <div style="grid-column:1/-1; text-align:center; padding:50px; color:#666;">載入中...</div>
-    </div>
+</header>
 
-    <audio id="notice-sound" preload="auto">
-        <source src="https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3" type="audio/mpeg">
-    </audio>
-    <div id="print-frame-container" style="display:none;"></div>
+<div id="order-grid" class="order-grid">
+    <div id="loading-msg">🍽️ 正在載入訂單...</div>
+</div>
 
-    <script>
-        let lastMaxSeq = 0, isFirstLoad = true, audioUnlocked = false, printQueue = [], isPrinting = false;
+<audio id="newOrderSound" src="https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3" preload="auto"></audio>
 
-        function updateClock() { document.getElementById('clock').innerText = new Date().toLocaleTimeString('zh-TW', {hour12:false}); }
-        setInterval(updateClock, 1000);
+<script>
+    let lastMaxSeq = 0;
+    const grid = document.getElementById('order-grid');
+    const updateTimeText = document.getElementById('update-time');
+    const audio = document.getElementById('newOrderSound');
 
-        function enableAudio() { 
-            audioUnlocked = true; 
-            const banner = document.getElementById('status-banner');
-            banner.style.background = '#4caf50';
-            banner.innerText = '✅ 自動功能已啟用';
-            banner.classList.remove('pulse');
-        }
-
-        function action(url) { fetch(url).then(() => refreshOrders()); }
-
-        async function printOrderUrl(url) {
-            return new Promise(resolve => {
-                const iframe = document.createElement('iframe');
-                iframe.src = url;
-                document.getElementById('print-frame-container').appendChild(iframe);
-                iframe.onload = () => {
-                    iframe.contentWindow.print();
-                    setTimeout(() => { iframe.remove(); resolve(); }, 5000);
-                };
-            });
-        }
-
-        async function processPrintQueue() {
-            if (isPrinting || printQueue.length === 0) return;
-            isPrinting = true;
-            await printOrderUrl('/print_order/' + printQueue.shift());
-            setTimeout(() => { isPrinting = false; processPrintQueue(); }, 1000);
-        }
-
-        function refreshOrders() {
-            fetch('/check_new_orders?current_seq=' + lastMaxSeq)
-            .then(res => res.json())
+    function refreshOrders() {
+        // 重要：路徑必須加上 /kitchen，對應 app.py 的 url_prefix
+        fetch('/kitchen/check_new_orders?current_seq=' + lastMaxSeq)
+            .then(response => {
+                if (!response.ok) throw new Error('HTTP 錯誤: ' + response.status);
+                return response.json();
+            })
             .then(data => {
-                if (data.html) document.getElementById('order-grid').innerHTML = data.html;
-                if (!isFirstLoad && data.new_ids?.length > 0 && audioUnlocked) {
-                    document.getElementById('notice-sound').play();
-                    data.new_ids.forEach(id => { if(!printQueue.includes(id)) printQueue.push(id); });
-                    processPrintQueue();
+                // 更新訂單列表
+                if (data.html) {
+                    grid.innerHTML = data.html;
                 }
-                if (data.max_seq > 0) lastMaxSeq = data.max_seq;
-                isFirstLoad = false;
+
+                // 檢查是否有新訂單 ID (用於播放聲音)
+                if (data.new_ids && data.new_ids.length > 0) {
+                    playNotification();
+                    console.log("發現新訂單:", data.new_ids);
+                }
+
+                lastMaxSeq = data.max_seq;
+                updateTimeText.innerText = '最後更新: ' + new Date().toLocaleTimeString();
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                updateTimeText.innerText = '連線失敗，請檢查網路';
             });
+    }
+
+    function action(url) {
+        // 點擊按鈕後執行後端操作
+        fetch(url)
+            .then(res => {
+                if (res.ok) {
+                    refreshOrders(); // 成功後立即整理頁面
+                } else {
+                    alert('操作失敗，請重試');
+                }
+            })
+            .catch(err => alert('連線發生錯誤'));
+    }
+
+    function playNotification() {
+        // 播放音效並觸發語音 (部分瀏覽器需使用者先互動過一次才能播放)
+        audio.play().catch(e => console.log("音效自動播放受阻"));
+        
+        if ('speechSynthesis' in window) {
+            let msg = new SpeechSynthesisUtterance("您有新訂單");
+            msg.lang = 'zh-TW';
+            window.speechSynthesis.speak(msg);
         }
-        setInterval(refreshOrders, 5000); refreshOrders();
-    </script>
+    }
+
+    // 每 15 秒自動檢查一次新訂單
+    setInterval(refreshOrders, 15000);
+
+    // 頁面開啟時立即執行一次
+    refreshOrders();
+</script>
+
 </body>
 </html>
