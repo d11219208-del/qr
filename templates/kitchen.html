@@ -3,236 +3,119 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>👨‍🍳 廚房出單看板 (KDS)</title>
+    <title>👨‍🍳 廚房出單看板</title>
     <link href="https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@400;700&family=Noto+Sans+TC:wght@400;700&display=swap" rel="stylesheet">
     <style>
         :root {
-            --bg-color: #121212;
-            --card-bg: #1e1e1e;
-            --text-main: #e0e0e0;
-            --accent-orange: #ff9800;
-            --accent-green: #4caf50;
-            --accent-red: #f44336;
-            --accent-blue: #2196f3;
+            --bg-color: #121212; --card-bg: #1e1e1e; --text-main: #e0e0e0;
+            --accent-orange: #ff9800; --accent-green: #4caf50; --accent-red: #f44336; --accent-blue: #2196f3;
         }
         body { background: var(--bg-color); color: var(--text-main); font-family: 'Noto Sans TC', sans-serif; margin: 0; padding-bottom: 50px; }
-        
-        /* 頂部導覽列 */
         .header-container { 
             display: flex; justify-content: space-between; align-items: center; 
             padding: 10px 20px; background: #252526; border-bottom: 2px solid #333;
             position: sticky; top: 0; z-index: 100; box-shadow: 0 2px 10px rgba(0,0,0,0.5);
         }
         h1 { color: var(--accent-orange); margin: 0; font-size: 1.5rem; display: flex; align-items: center; gap: 10px; }
-        .header-btns { display: flex; gap: 10px; }
-        
-        /* 網格佈局 */
-        .grid { 
-            display: grid; 
-            grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); 
-            gap: 20px; padding: 20px; 
-        }
-
-        /* 卡片設計 */
+        .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 20px; padding: 20px; }
         .card { 
-            background: var(--card-bg); border-radius: 8px; overflow: hidden;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.5); 
-            display: flex; flex-direction: column;
-            border-top: 5px solid var(--accent-orange);
-            transition: transform 0.2s, opacity 0.3s;
-            position: relative;
+            background: var(--card-bg); border-radius: 8px; overflow: hidden; border-top: 5px solid var(--accent-orange);
+            box-shadow: 0 4px 15px rgba(0,0,0,0.5); position: relative;
         }
-        
-        .card.preparing { border-top-color: var(--accent-blue); }
-        .card.completed { border-top-color: var(--accent-green); opacity: 0.6; }
-
-        .card-header {
-            padding: 15px; background: rgba(255,255,255,0.03);
-            display: flex; justify-content: space-between; align-items: center;
-            border-bottom: 2px dashed #444;
-        }
-        .seq-num { font-size: 2rem; font-family: 'Roboto Mono', monospace; font-weight: bold; color: var(--accent-orange); }
+        .card.completed { border-top-color: var(--accent-green); background: #1b261b; opacity: 0.6; }
+        .card.cancelled { border-top-color: var(--accent-red); background: #261b1b; opacity: 0.5; }
+        .card-header { padding: 15px; background: rgba(255,255,255,0.03); border-bottom: 2px dashed #444; display: flex; justify-content: space-between; align-items: center; }
+        .seq-num { font-size: 2rem; font-family: 'Roboto Mono'; font-weight: bold; color: var(--accent-orange); }
         .table-num { font-size: 1.4rem; background: #333; padding: 4px 12px; border-radius: 4px; font-weight: bold; }
-        .wait-time { font-size: 0.85rem; color: #888; margin-top: 4px; }
-
-        .items { padding: 15px; flex-grow: 1; font-size: 1.2rem; line-height: 1.5; white-space: pre-wrap; }
-        
+        .items { padding: 15px; font-size: 1.2rem; line-height: 1.5; }
+        .item-qty { color: var(--accent-orange); font-size: 1.3rem; margin-left: 10px; }
+        .item-opts { font-size: 0.95rem; color: #aaa; padding-left: 10px; border-left: 2px solid #555; }
         .actions { padding: 10px; background: rgba(0,0,0,0.2); display: flex; flex-direction: column; gap: 8px; }
-        .btn { 
-            border: none; border-radius: 6px; padding: 12px; 
-            color: white; font-weight: bold; cursor: pointer;
-            text-align: center; display: flex; justify-content: center; align-items: center;
-            transition: filter 0.2s; font-size: 1.1rem;
-        }
-        .btn-prep { background: var(--accent-blue); }
-        .btn-done { background: var(--accent-green); }
-        .btn-print { background: #555; font-size: 0.9rem; }
-        .nav-btn { background: #444; color: #fff; padding: 8px 15px; border-radius: 4px; text-decoration: none; font-size: 0.9rem; }
-
-        .receipt-badge { background: var(--accent-red); color: white; padding: 2px 6px; border-radius: 4px; font-size: 0.8rem; margin-left: 5px; }
-
-        /* 狀態橫幅 */
+        .btn { border: none; border-radius: 6px; padding: 10px; color: white; font-weight: bold; cursor: pointer; text-align: center; font-size: 1rem; }
+        .btn-main { background: var(--accent-green); font-size: 1.2rem; padding: 15px; width: 100%; }
+        .btn-print { background: var(--accent-blue); flex: 1; }
+        .btn-edit { background: #607d8b; flex: 1; }
+        .btn-void { background: #d32f2f; width: 40px; }
         #status-banner { 
-            background: var(--accent-red); color: white; text-align: center; 
-            padding: 12px; font-weight: bold; cursor: pointer; 
-            position: sticky; top: 60px; z-index: 99;
-            display: flex; justify-content: center; align-items: center; gap: 10px;
-            border-bottom: 1px solid #000;
+            background: var(--accent-red); color: white; text-align: center; padding: 12px; 
+            cursor: pointer; position: sticky; top: 60px; z-index: 99;
         }
         .pulse { animation: pulse 2s infinite; }
         @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.8; } 100% { opacity: 1; } }
-        
-        #print-frame-container { display: none; }
     </style>
 </head>
 <body>
-
-<div class="header-container">
-    <h1>👨‍🍳 廚房備餐 <span id="clock" style="font-size:0.8em; color:#888; margin-left:10px;"></span></h1>
-    <div class="header-btns">
-        <a href="/admin" class="nav-btn">⚙️ 後台</a>
-        <a href="/kitchen/report" class="nav-btn" style="background:#673ab7;">📊 報表</a>
+    <div class="header-container">
+        <h1>👨‍🍳 廚房出單 <span id="clock" style="font-size:0.8em; color:#888;"></span></h1>
+        <div>
+            <a href="/admin" style="color:white; text-decoration:none; margin-right:15px;">⚙️ 後台</a>
+            <a href="/kitchen/report" style="color:white; text-decoration:none;">📊 報表</a>
+        </div>
     </div>
-</div>
 
-<div id="status-banner" class="pulse" onclick="enableAudio()">
-    🔊 點擊此處啟用「自動列印」與「音效通知」
-</div>
+    <div id="status-banner" class="pulse" onclick="enableAudio()">
+        🔊 點擊此處啟用「自動列印」與「音效通知」
+    </div>
+    
+    <div id="order-grid" class="grid">
+        <div style="grid-column:1/-1; text-align:center; padding:50px; color:#666;">載入中...</div>
+    </div>
 
-<div id="order-grid" class="grid">
-    <div style="grid-column:1/-1; text-align:center; padding:50px; color:#666;">載入中...</div>
-</div>
+    <audio id="notice-sound" preload="auto">
+        <source src="https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3" type="audio/mpeg">
+    </audio>
+    <div id="print-frame-container" style="display:none;"></div>
 
-<audio id="notice-sound" preload="auto">
-    <source src="https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3" type="audio/mpeg">
-</audio>
+    <script>
+        let lastMaxSeq = 0, isFirstLoad = true, audioUnlocked = false, printQueue = [], isPrinting = false;
 
-<div id="print-frame-container"></div>
+        function updateClock() { document.getElementById('clock').innerText = new Date().toLocaleTimeString('zh-TW', {hour12:false}); }
+        setInterval(updateClock, 1000);
 
-<script>
-    let lastMaxSeq = 0;
-    let isFirstLoad = true;
-    let audioUnlocked = false;
-    let printQueue = [];
-    let isPrinting = false;
+        function enableAudio() { 
+            audioUnlocked = true; 
+            const banner = document.getElementById('status-banner');
+            banner.style.background = '#4caf50';
+            banner.innerText = '✅ 自動功能已啟用';
+            banner.classList.remove('pulse');
+        }
 
-    // 更新時鐘
-    function updateClock() {
-        document.getElementById('clock').innerText = new Date().toLocaleTimeString('zh-TW', {hour12:false});
-    }
-    setInterval(updateClock, 1000); updateClock();
+        function action(url) { fetch(url).then(() => refreshOrders()); }
 
-    // 啟用音效與列印
-    function enableAudio() { 
-        audioUnlocked = true; 
-        const banner = document.getElementById('status-banner');
-        banner.style.background = '#4caf50';
-        banner.innerText = '✅ 自動列印與音效已啟用 (請勿關閉此頁)';
-        banner.classList.remove('pulse');
-        
-        const audio = document.getElementById('notice-sound'); 
-        audio.play().then(() => { audio.pause(); audio.currentTime = 0; });
-    }
-
-    // 更新狀態
-    async function updateStatus(orderId, newStatus) {
-        try {
-            await fetch(`/kitchen/update_status/${orderId}`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ status: newStatus })
+        async function printOrderUrl(url) {
+            return new Promise(resolve => {
+                const iframe = document.createElement('iframe');
+                iframe.src = url;
+                document.getElementById('print-frame-container').appendChild(iframe);
+                iframe.onload = () => {
+                    iframe.contentWindow.print();
+                    setTimeout(() => { iframe.remove(); resolve(); }, 5000);
+                };
             });
-            refreshOrders();
-        } catch (error) { console.error('更新失敗:', error); }
-    }
+        }
 
-    // 列印功能 (透過 iframe)
-    function printOrder(orderId) {
-        return new Promise((resolve) => {
-            const iframe = document.createElement('iframe');
-            iframe.src = `/print_order/${orderId}`;
-            document.getElementById('print-frame-container').appendChild(iframe);
-            iframe.onload = () => {
-                iframe.contentWindow.focus();
-                iframe.contentWindow.print();
-                setTimeout(() => {
-                    document.getElementById('print-frame-container').removeChild(iframe);
-                    resolve();
-                }, 5000);
-            };
-        });
-    }
+        async function processPrintQueue() {
+            if (isPrinting || printQueue.length === 0) return;
+            isPrinting = true;
+            await printOrderUrl('/print_order/' + printQueue.shift());
+            setTimeout(() => { isPrinting = false; processPrintQueue(); }, 1000);
+        }
 
-    async function processPrintQueue() {
-        if (isPrinting || printQueue.length === 0) return;
-        isPrinting = true;
-        const orderId = printQueue.shift();
-        await printOrder(orderId);
-        setTimeout(() => { isPrinting = false; processPrintQueue(); }, 1000);
-    }
-
-    // 抓取訂單並渲染
-    async function refreshOrders() {
-        try {
-            const response = await fetch('/kitchen/orders');
-            const orders = await response.json();
-            
-            const container = document.getElementById('order-grid');
-            container.innerHTML = '';
-
-            let currentMax = 0;
-            let newOrderIds = [];
-
-            if (orders.length === 0) {
-                container.innerHTML = '<div style="grid-column:1/-1; text-align:center; padding:50px; color:#666;">目前沒有待處理訂單</div>';
-            }
-
-            orders.forEach(order => {
-                if (order.daily_seq > lastMaxSeq) {
-                    newOrderIds.push(order.id);
-                    if (order.daily_seq > currentMax) currentMax = order.daily_seq;
+        function refreshOrders() {
+            fetch('/check_new_orders?current_seq=' + lastMaxSeq)
+            .then(res => res.json())
+            .then(data => {
+                if (data.html) document.getElementById('order-grid').innerHTML = data.html;
+                if (!isFirstLoad && data.new_ids?.length > 0 && audioUnlocked) {
+                    document.getElementById('notice-sound').play();
+                    data.new_ids.forEach(id => { if(!printQueue.includes(id)) printQueue.push(id); });
+                    processPrintQueue();
                 }
-
-                const card = document.createElement('div');
-                card.className = `card ${order.status.toLowerCase()}`;
-                
-                card.innerHTML = `
-                    <div class="card-header">
-                        <span class="seq-num">#${order.daily_seq}</span>
-                        <div style="text-align:right">
-                            <span class="table-num">桌號: ${order.table_number}</span>
-                            ${order.need_receipt ? '<span class="receipt-badge">需收據</span>' : ''}
-                            <div class="wait-time">等待: ${order.wait_time} 分鐘</div>
-                        </div>
-                    </div>
-                    <div class="items">${order.items}</div>
-                    <div class="actions">
-                        ${order.status === 'Pending' 
-                            ? `<button class="btn btn-prep" onclick="updateStatus(${order.id}, 'Preparing')">開始製作</button>` 
-                            : `<button class="btn btn-done" onclick="updateStatus(${order.id}, 'Completed')">完成出餐</button>`
-                        }
-                        <button class="btn btn-print" onclick="printOrder(${order.id})">🖨️ 手動重印</button>
-                    </div>
-                `;
-                container.appendChild(card);
+                if (data.max_seq > 0) lastMaxSeq = data.max_seq;
+                isFirstLoad = false;
             });
-
-            // 處理新訂單通知與自動列印
-            if (!isFirstLoad && newOrderIds.length > 0 && audioUnlocked) {
-                document.getElementById('notice-sound').play();
-                newOrderIds.forEach(id => printQueue.push(id));
-                processPrintQueue();
-            }
-
-            if (currentMax > lastMaxSeq) lastMaxSeq = currentMax;
-            isFirstLoad = false;
-
-        } catch (error) { console.error('Polling error:', error); }
-    }
-
-    setInterval(refreshOrders, 5000);
-    refreshOrders();
-</script>
-
+        }
+        setInterval(refreshOrders, 5000); refreshOrders();
+    </script>
 </body>
 </html>
