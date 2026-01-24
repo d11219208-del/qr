@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 kitchen_bp = Blueprint('kitchen', __name__)
 
 def get_tw_time_range(target_date_str=None):
+    """計算台灣時間的 UTC 起始與結束範圍"""
     if target_date_str:
         try:
             target_date_obj = datetime.strptime(target_date_str, '%Y-%m-%d')
@@ -72,7 +73,6 @@ def check_new_orders():
         except: 
             items_html = "<div class='item-row'>資料解析錯誤</div>"
 
-        # 操作連結統一部分前綴
         buttons = ""
         if status == 'Pending':
             buttons += f"<button onclick='action(\"/kitchen/complete/{oid}\")' class='btn btn-main'>✅ 出餐 / 付款</button>"
@@ -96,53 +96,83 @@ def check_new_orders():
         
     return jsonify({'html': html_content, 'max_seq': max_seq_val, 'new_ids': new_order_ids})
 
-# --- 3. 補印功能 (使用內嵌 HTML 解決 500 錯誤) ---
+# --- 3. 補印功能 (整合專業分頁與工單邏輯) ---
 @kitchen_bp.route('/print_order/<int:oid>')
 def print_order(oid):
     from database import get_db_connection
-    c = get_db_connection()
-    cur = c.cursor()
-    cur.execute("SELECT table_number, content_json, daily_seq, created_at FROM orders WHERE id=%s", (oid,))
-    order = cur.fetchone()
-    c.close()
-    if not order: return "訂單不存在", 404
-    
-    table_num, c_json, seq, created = order
-    tw_time = created + timedelta(hours=8)
-    items = json.loads(c_json) if c_json else []
-    
-    items_html = ""
-    for i in items:
-        name = i.get('name_zh', i.get('name', '商品'))
-        qty = i.get('qty', 1)
-        opts = " / ".join(i.get('options_zh', i.get('options', [])))
-        items_html += f"<tr><td colspan='2' style='padding-top:10px;'><b>{name} x {qty}</b></td></tr>"
-        if opts: items_html += f"<tr><td colspan='2' style='font-size:12px; padding-bottom:5px;'>└ {opts}</td></tr>"
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT id, table_number, items, total_price, status, created_at, daily_seq, content_json, lang 
+        FROM orders WHERE id=%s
+    """, (oid,))
+    o = cur.fetchone()
+    conn.close()
+    if not o: return "No Data", 404
+
+    oid_db, table_num, raw_items, total_val, status, created_at, daily_seq, c_json, order_lang = o
+    seq = f"{daily_seq:03d}"
+    items = []
+    try:
+        items = json.loads(c_json) if c_json else []
+    except: return "解析失敗", 500
+
+    is_void = (status == 'Cancelled')
+    tw_time = created_at + timedelta(hours=8)
+    time_str = tw_time.strftime('%Y-%m-%d %H:%M:%S')
+    title = "❌ 作廢單 (VOID)" if is_void else "補印-結帳單 (Receipt)"
+    style = "text-decoration: line-through; color:red;" if is_void else ""
+
+    def get_display_name(item):
+        n_zh = item.get('name_zh', '商品')
+        if order_lang == 'zh': return n_zh
+        n_foreign = item.get(f'name_{order_lang}', item.get('name', n_zh))
+        return f"{n_foreign}<br><small>({n_zh})</small>"
+
+    def mk_ticket(t_name, item_list, show_total=False, is_kitchen=False):
+        if not item_list and not show_total: return ""
+        h = f"<div class='ticket' style='{style}'><div class='head'><h2>{t_name}</h2><h1>#{seq}</h1><p>Table: {table_num}</p><small>{time_str}</small></div><hr>"
+        for i in item_list:
+            qty = i.get('qty', 1)
+            u_p = i.get('unit_price', 0)
+            d_name = i.get('name_zh', '商品') if is_kitchen else get_display_name(i)
+            ops = i.get('options_zh', []) if is_kitchen else i.get(f'options_{order_lang}', i.get('options', []))
+            if isinstance(ops, str): ops = [ops]
+            h += f"<div class='row'><span>{qty} x {d_name}</span><span>${u_p * qty}</span></div>"
+            if ops: h += f"<div class='opt'>└ {', '.join(ops)}</div>"
+        if show_total: h += f"<hr><div style='text-align:right;font-size:1.2em;font-weight:bold;'>Total: ${total_val}</div>"
+        return h + "</div><div class='break'></div>"
+
+    body = mk_ticket(title, items, show_total=True)
+    if not is_void:
+        noodles = [i for i in items if i.get('print_category', 'Noodle') == 'Noodle']
+        soups = [i for i in items if i.get('print_category') == 'Soup']
+        if noodles: body += mk_ticket("🍜 補印-麵區工單", noodles, is_kitchen=True)
+        if soups: body += mk_ticket("🍲 補印-湯區工單", soups, is_kitchen=True)
 
     return f"""
-    <!DOCTYPE html><html><head><meta charset="UTF-8">
+    <html><head><meta charset="UTF-8">
     <style>
-        body {{ width: 80mm; font-family: sans-serif; padding: 10px; }}
-        table {{ width: 100%; border-collapse: collapse; }}
-        .header {{ text-align: center; border-bottom: 2px solid #000; padding-bottom: 10px; }}
-        .footer {{ text-align: center; border-top: 1px solid #000; margin-top: 20px; padding-top: 10px; font-size: 12px; }}
-        @media print {{ .no-print {{ display: none; }} }}
+        @page {{ size: auto; margin: 0; }}
+        html, body {{
+            margin: 0; padding: 0; background: #fff;
+            font-family: 'Microsoft JhengHei', sans-serif;
+            font-size: 14px; width: auto;
+        }}
+        .ticket {{ padding: 4mm; box-sizing: border-box; page-break-inside: avoid; overflow: visible; }} 
+        .head {{ text-align: center; }} 
+        .row {{ display: flex; justify-content: space-between; margin-top: 8px; font-weight: bold; gap: 10px; }} 
+        .opt {{ font-size: 12px; color: #444; margin-left: 15px; }} 
+        .break {{ page-break-after: always; }} 
+        h1 {{ margin: 5px 0; font-size: 2.5em; }}
+        h2 {{ margin: 5px 0; font-size: 1.5em; }}
+        hr {{ border: none; border-top: 1px dashed #000; }}
+        @media print {{ body {{ width: auto; }} .ticket {{ border: none; }} }}
     </style></head>
-    <body onload="window.print()">
-        <div class="header">
-            <h2># {seq:03d} 補列印</h2>
-            <div style="font-size: 24px; font-weight: bold;">桌號: {table_num}</div>
-            <div>時間: {tw_time.strftime('%Y-%m-%d %H:%M')}</div>
-        </div>
-        <table>{items_html}</table>
-        <div class="footer">請保留此單據作為結帳憑證</div>
-        <div class="no-print" style="margin-top:20px; text-align:center;">
-            <button onclick="window.close()">關閉視窗</button>
-        </div>
-    </body></html>
+    <body onload='window.print(); setTimeout(function(){{ window.close(); }}, 1200);'>{body}</body></html>
     """
 
-# --- 4. 其他訂單操作 ---
+# --- 4. 訂單狀態變更 ---
 @kitchen_bp.route('/complete/<int:oid>')
 def complete_order(oid):
     from database import get_db_connection
@@ -159,7 +189,7 @@ def cancel_order(oid):
     c.commit(); c.close()
     return "OK"
 
-# --- 5. 日結報表邏輯 (這部分維持原本你給的程式碼) ---
+# --- 5. 日結報表 ---
 @kitchen_bp.route('/report')
 def daily_report():
     target_date_str = request.args.get('date', (datetime.utcnow() + timedelta(hours=8)).strftime('%Y-%m-%d'))
