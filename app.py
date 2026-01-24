@@ -1,4 +1,3 @@
-
 import os
 import psycopg2
 import json
@@ -6,7 +5,9 @@ import threading
 import urllib.request
 import urllib.error
 import time  
-import io  
+import io
+import resend
+import ssl
 import threading  # 新增：用於非同步發信，解決延遲問題
 import pandas as pd  
 from flask import Flask, request, jsonify, redirect, url_for, Response, send_file, current_app
@@ -863,72 +864,282 @@ def kitchen_panel():
     return """
     <!DOCTYPE html>
     <html lang="zh-TW">
-    <head><meta charset="UTF-8"><title>👨‍🍳 廚房出單看板</title>
-    <style>
-        body { background: #1a1a1a; color: #eee; font-family: "Microsoft JhengHei", sans-serif; padding: 0; margin: 0; }
-        .header-container { display: flex; justify-content: space-between; align-items: center; padding: 15px 25px; background: #222; border-bottom: 3px solid #ff9800; }
-        h1 { color: #ff9800; margin: 0; font-size: 28px; }
-        .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(350px, 1fr)); gap: 20px; padding: 25px; }
-        .card { background: #2d2d2d; border-radius: 12px; padding: 20px; box-shadow: 0 6px 20px rgba(0,0,0,0.4); border-top: 10px solid #ff9800; position: relative; transition: transform 0.2s; }
-        .card.completed { border-top-color: #28a745; opacity: 0.6; }
-        .card.cancelled { border-top-color: #dc3545; opacity: 0.5; text-decoration: line-through; }
-        .tag { position: absolute; top: 12px; right: 15px; font-weight: bold; font-size: 1.1em; }
-        .items { background: #383838; padding: 18px; border-radius: 8px; margin: 15px 0; font-size: 1.3em; line-height: 1.6; border: 1px solid #444; }
-        .btn { display: inline-block; padding: 12px 18px; border-radius: 8px; text-decoration: none; color: white; margin-right: 8px; font-size: 1em; border: none; cursor: pointer; font-weight: bold; }
-        .btn-report { background: #6f42c1; } .btn-complete { background: #28a745; } .btn-print { background: #17a2b8; } .btn-void { background: #822; } .btn-edit { background: #555; }
-        #audio-banner { background: #d32f2f; color: white; text-align: center; padding: 10px; font-weight: bold; cursor: pointer; }
-        .nav-btn { background: #6c757d; color: white; padding: 10px 15px; text-decoration: none; border-radius: 5px; font-weight: bold; margin-right: 10px; }
-    </style></head><body>
-    <div id="audio-banner" onclick="enableAudio()">🔔 點擊此處啟動「新訂單語音」與「自動列印」功能</div>
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>👨‍🍳 廚房出單看板</title>
+        <link href="https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@400;700&family=Noto+Sans+TC:wght@400;700&display=swap" rel="stylesheet">
+        <style>
+            :root {
+                --bg-color: #121212;
+                --card-bg: #1e1e1e;
+                --text-main: #e0e0e0;
+                --accent-orange: #ff9800;
+                --accent-green: #4caf50;
+                --accent-red: #f44336;
+                --accent-blue: #2196f3;
+            }
+            body { background: var(--bg-color); color: var(--text-main); font-family: 'Noto Sans TC', sans-serif; margin: 0; padding-bottom: 50px; }
+            
+            /* 頂部導航列 */
+            .header-container { 
+                display: flex; justify-content: space-between; align-items: center; 
+                padding: 10px 20px; background: #252526; border-bottom: 2px solid #333;
+                position: sticky; top: 0; z-index: 100; box-shadow: 0 2px 10px rgba(0,0,0,0.5);
+            }
+            h1 { color: var(--accent-orange); margin: 0; font-size: 1.5rem; display: flex; align-items: center; gap: 10px; }
+            .header-btns { display: flex; gap: 10px; }
+            
+            /* 網格佈局 */
+            .grid { 
+                display: grid; 
+                grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); 
+                gap: 20px; padding: 20px; 
+            }
+
+            /* 卡片設計 */
+            .card { 
+                background: var(--card-bg); border-radius: 8px; overflow: hidden;
+                box-shadow: 0 4px 15px rgba(0,0,0,0.5); 
+                display: flex; flex-direction: column;
+                border-top: 5px solid var(--accent-orange);
+                transition: transform 0.2s, opacity 0.3s;
+                position: relative;
+            }
+            
+            .card.completed { border-top-color: var(--accent-green); background: #1b261b; opacity: 0.6; filter: grayscale(0.3); }
+            .card.cancelled { border-top-color: var(--accent-red); background: #261b1b; opacity: 0.5; }
+            .card.cancelled .items { text-decoration: line-through; opacity: 0.7; }
+
+            .card-header {
+                padding: 15px; background: rgba(255,255,255,0.03);
+                display: flex; justify-content: space-between; align-items: center;
+                border-bottom: 2px dashed #444;
+            }
+            .seq-num { font-size: 2rem; font-family: 'Roboto Mono', monospace; font-weight: bold; color: var(--accent-orange); }
+            .table-num { font-size: 1.4rem; background: #333; padding: 4px 12px; border-radius: 4px; font-weight: bold; }
+            .time-stamp { font-size: 0.85rem; color: #888; margin-top: 4px; }
+
+            .items { padding: 15px; flex-grow: 1; font-size: 1.2rem; line-height: 1.5; }
+            .item-row { margin-bottom: 12px; border-bottom: 1px solid #333; padding-bottom: 8px; }
+            .item-row:last-child { border-bottom: none; }
+            .item-name { font-weight: bold; display: flex; justify-content: space-between; }
+            .item-qty { color: var(--accent-orange); font-family: 'Roboto Mono'; font-size: 1.3rem; margin-left: 10px; }
+            .item-opts { font-size: 0.95rem; color: #aaa; margin-top: 4px; padding-left: 10px; border-left: 2px solid #555; }
+
+            .actions { padding: 10px; background: rgba(0,0,0,0.2); display: flex; flex-direction: column; gap: 8px; }
+            .btn-group { display: flex; gap: 8px; }
+            .btn { 
+                border: none; border-radius: 6px; padding: 10px; 
+                color: white; font-weight: bold; cursor: pointer; text-decoration: none;
+                text-align: center; display: flex; justify-content: center; align-items: center;
+                transition: filter 0.2s; font-size: 1rem;
+            }
+            .btn:hover { filter: brightness(1.1); }
+            .btn:active { transform: scale(0.98); }
+
+            .btn-main { background: var(--accent-green); font-size: 1.2rem; padding: 15px; width: 100%; box-sizing: border-box; }
+            .btn-print { background: var(--accent-blue); flex: 1; }
+            .btn-edit { background: #607d8b; flex: 1; }
+            .btn-void { background: #d32f2f; width: 40px; } 
+            .nav-btn { background: #444; color: #fff; padding: 8px 15px; border-radius: 4px; text-decoration: none; font-size: 0.9rem; }
+
+            /* 音效與狀態橫幅 */
+            #status-banner { 
+                background: #333; color: white; text-align: center; 
+                padding: 12px; font-weight: bold; cursor: pointer; 
+                position: sticky; top: 60px; z-index: 99;
+                display: flex; justify-content: center; align-items: center; gap: 10px;
+                border-bottom: 1px solid #000;
+            }
+            .pulse { animation: pulse 2s infinite; }
+            @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.8; } 100% { opacity: 1; } }
+            
+            /* 隱藏的 iframe 用於列印 */
+            #print-frame-container { display: none; }
+        </style>
+    </head>
+    <body>
+    
     <div class="header-container">
-        <h1>👨‍🍳 廚房出單看板</h1>
-        <div>
-            <a href="/admin" class="nav-btn">⚙️ 前往後台</a>
-            <a href="/kitchen/report" class="btn btn-report">📊 當日營收報表</a>
+        <h1>👨‍🍳 廚房出單 <span id="clock" style="font-size:0.8em; color:#888; margin-left:10px;"></span></h1>
+        <div class="header-btns">
+            <a href="/admin" class="nav-btn">⚙️ 後台</a>
+            <a href="/kitchen/report" class="nav-btn" style="background:#673ab7;">📊 報表</a>
         </div>
     </div>
-    <div id="order-grid" class="grid">正在同步訂單數據...</div>
-    <audio id="notice-sound" preload="auto"><source src="https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3" type="audio/mpeg"></audio>
+
+    <div id="status-banner" class="pulse" onclick="enableAudio()" style="background: var(--accent-red);">
+        🔊 點擊此處啟用「自動列印」與「音效通知」
+    </div>
+    
+    <div id="order-grid" class="grid">
+        <div style="grid-column:1/-1; text-align:center; padding:50px; color:#666;">
+            載入中...
+        </div>
+    </div>
+
+    <audio id="notice-sound" preload="auto">
+        <source src="https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3" type="audio/mpeg">
+    </audio>
+
+    <div id="print-frame-container"></div>
+
     <script>
-        let lastMaxSeq = 0, isFirstLoad = true, audioUnlocked = false;
-        function enableAudio() { audioUnlocked = true; document.getElementById('audio-banner').style.display = 'none'; const audio = document.getElementById('notice-sound'); audio.play().then(() => { audio.pause(); audio.currentTime = 0; }); alert("功能已啟動！"); }
-        function action(url) { fetch(url).then(() => { refreshOrders(); }); }
-        function refreshOrders() {
-            fetch('/check_new_orders?current_seq=' + lastMaxSeq).then(res => res.json()).then(data => {
-                if (data.html) document.getElementById('order-grid').innerHTML = data.html;
-                if (!isFirstLoad && data.new_ids && data.new_ids.length > 0) {
-                    if (audioUnlocked) { document.getElementById('notice-sound').play(); data.new_ids.forEach(id => { window.open('/print_order/' + id, '_blank'); }); }
-                }
-                lastMaxSeq = data.max_seq; isFirstLoad = false;
+        let lastMaxSeq = 0;
+        let isFirstLoad = true;
+        let audioUnlocked = false;
+        
+        // --- 列印排隊系統 ---
+        let printQueue = [];
+        let isPrinting = false;
+
+        function updateClock() {
+            const now = new Date();
+            document.getElementById('clock').innerText = now.toLocaleTimeString('zh-TW', {hour12:false, hour:'2-digit', minute:'2-digit'});
+        }
+        setInterval(updateClock, 1000); updateClock();
+
+        function enableAudio() { 
+            audioUnlocked = true; 
+            const banner = document.getElementById('status-banner');
+            banner.style.background = '#4caf50'; // 轉為綠色
+            banner.innerText = '✅ 自動列印與音效已啟用 (請勿關閉此頁)';
+            banner.classList.remove('pulse');
+            
+            // 嘗試播放一次聲音以解鎖瀏覽器限制
+            const audio = document.getElementById('notice-sound'); 
+            audio.play().then(() => { 
+                audio.pause(); 
+                audio.currentTime = 0; 
+            }).catch(e => console.log("Audio permission still needed"));
+        }
+
+        function action(url) { 
+            fetch(url).then(() => { refreshOrders(); }); 
+        }
+
+        // --- 核心修改：使用隱藏 iframe 進行列印 (繞過彈窗攔截) ---
+        function printOrderUrl(url) {
+            return new Promise((resolve, reject) => {
+                console.log("🖨️ 準備列印:", url);
+                
+                // 創建一個隱藏的 iframe
+                const iframe = document.createElement('iframe');
+                iframe.style.position = 'fixed';
+                iframe.style.right = '0';
+                iframe.style.bottom = '0';
+                iframe.style.width = '0px';
+                iframe.style.height = '0px';
+                iframe.style.border = '0';
+                
+                // 設定來源
+                iframe.src = url;
+                
+                // 加到 DOM
+                document.getElementById('print-frame-container').appendChild(iframe);
+                
+                // 監聽載入完成
+                iframe.onload = function() {
+                    try {
+                        // 重點：呼叫 iframe 內部的 print
+                        iframe.contentWindow.focus(); // 取得焦點
+                        iframe.contentWindow.print(); // 執行列印
+                        
+                        // 給予緩衝時間後移除 iframe
+                        setTimeout(() => {
+                            if (iframe.parentNode) {
+                                iframe.parentNode.removeChild(iframe);
+                            }
+                            resolve(); // 完成
+                        }, 5000); // 5秒後移除，確保訊號傳送到印表機
+                    } catch (e) {
+                        console.error("列印失敗:", e);
+                        resolve(); // 就算失敗也繼續下一個，避免卡死
+                    }
+                };
             });
         }
-        setInterval(refreshOrders, 5000); refreshOrders();
-    </script></body></html>
+
+        async function processPrintQueue() {
+            if (isPrinting || printQueue.length === 0) return;
+
+            isPrinting = true;
+            const orderId = printQueue.shift();
+            
+            // 使用新版列印函數
+            await printOrderUrl('/print_order/' + orderId);
+            
+            // 處理完畢，休息 1 秒再印下一張 (避免印表機緩衝區塞車)
+            setTimeout(() => {
+                isPrinting = false;
+                processPrintQueue(); 
+            }, 1000);
+        }
+
+        function refreshOrders() {
+            fetch('/check_new_orders?current_seq=' + lastMaxSeq)
+            .then(res => res.json())
+            .then(data => {
+                if (data.html) document.getElementById('order-grid').innerHTML = data.html;
+                
+                if (!isFirstLoad && data.new_ids && data.new_ids.length > 0) {
+                    
+                    if (audioUnlocked) { 
+                        // 1. 播放音效
+                        const audio = document.getElementById('notice-sound');
+                        audio.currentTime = 0; 
+                        audio.play().catch(e => console.log("Audio play failed", e)); 
+
+                        // 2. 加入列印排程
+                        console.log("📥 收到新訂單:", data.new_ids);
+                        data.new_ids.forEach(id => {
+                            if(!printQueue.includes(id)) {
+                                printQueue.push(id);
+                            }
+                        });
+
+                        // 3. 啟動處理
+                        processPrintQueue();
+                    } else {
+                        console.log("⚠️ 收到新訂單但尚未啟用音效/列印權限");
+                    }
+                }
+                
+                if (data.max_seq > 0) {
+                    lastMaxSeq = data.max_seq; 
+                }
+                isFirstLoad = false;
+            })
+            .catch(err => console.error("Polling error:", err));
+        }
+        
+        setInterval(refreshOrders, 5000); 
+        refreshOrders();
+    </script>
+    </body>
+    </html>
     """
 
-# --- 5. 廚房看板 API (精準鎖定當日) ---
+# --- 5. 廚房看板 API (保持原樣，僅為了完整性提供) ---
 @app.route('/check_new_orders')
 def check_new_orders():
     current_max = request.args.get('current_seq', 0, type=int)
     
-    # 1. 計算台灣時間的「今天」對應的 UTC 時間範圍
-    # 這樣可以無視資料庫主機位置，精準只抓取台灣這一天內的訂單
+    # 1. 時間範圍計算 (鎖定台灣時間當日)
     utc_now = datetime.utcnow()
     tw_now = utc_now + timedelta(hours=8)
-    
     tw_start = tw_now.replace(hour=0, minute=0, second=0, microsecond=0)
     tw_end = tw_now.replace(hour=23, minute=59, second=59, microsecond=999999)
-    
-    # 轉回 UTC 供資料庫查詢 (減8小時)
     utc_start_query = tw_start - timedelta(hours=8)
     utc_end_query = tw_end - timedelta(hours=8)
-    
-    # 建立時間篩選字串
     time_filter = f"created_at >= '{utc_start_query}' AND created_at <= '{utc_end_query}'"
 
-    conn = get_db_connection(); cur = conn.cursor()
+    # 請確保此處有正確的 db 連線函數
+    conn = get_db_connection()
+    cur = conn.cursor()
     
-    # 2. 抓取訂單 (套用時間篩選)
+    # 2. 抓取訂單
     cur.execute(f"""
         SELECT id, table_number, items, total_price, status, created_at, lang, daily_seq, content_json 
         FROM orders WHERE {time_filter} 
@@ -936,67 +1147,67 @@ def check_new_orders():
     """)
     orders = cur.fetchall()
     
-    # 3. 抓取最大序號 (套用時間篩選)
+    # 3. 抓取當日最大序號
     cur.execute(f"SELECT MAX(daily_seq) FROM orders WHERE {time_filter}")
-    max_seq_val = cur.fetchone()[0] or 0
+    res_max = cur.fetchone()
+    max_seq_val = res_max[0] if res_max and res_max[0] else 0
     
-    # 4. 判斷是否有新訂單 (套用時間篩選)
+    # 4. 判斷新訂單
     new_order_ids = []
     if current_max > 0:
-        cur.execute(f"SELECT id FROM orders WHERE daily_seq > %s AND {time_filter}", (current_max,))
+        cur.execute(f"SELECT id FROM orders WHERE daily_seq > %s AND {time_filter} ORDER BY daily_seq ASC", (current_max,))
         new_order_ids = [r[0] for r in cur.fetchall()]
         
     conn.close()
 
-    # 5. 生成 HTML
+    # 5. 生成 HTML (簡化版，邏輯與您原本的一致)
     html_content = ""
     if not orders: 
-        html_content = "<div style='grid-column:1/-1;text-align:center;padding:100px;font-size:1.5em;color:#666;'>目前無新訂單</div>"
+        html_content = "<div style='grid-column:1/-1;text-align:center;padding:100px;font-size:1.5em;color:#666;'>🍽️ 目前沒有訂單，廚房休息中</div>"
     
     for o in orders:
         oid, table, raw_items, total, status, created, order_lang, seq_num, c_json = o
-        cls, seq = status.lower(), f"{seq_num:03d}"
-        
-        # 顯示時間轉為台灣時間
+        status_cls = status.lower()
+        seq_str = f"#{seq_num:03d}"
         tw_time = created + timedelta(hours=8)
-        time_str = tw_time.strftime('%H:%M:%S')
+        time_str = tw_time.strftime('%H:%M')
         
         items_html = ""
         try:
             if c_json:
                 cart = json.loads(c_json)
                 for item in cart:
-                    n = item.get('name_zh', item.get('name', '商品'))
-                    ops = item.get('options_zh', item.get('options', []))
-                    ops_str = f"<br><small style='color:#aaa'>└ {', '.join(ops)}</small>" if ops else ""
-                    items_html += f"<div>● {n} <span style='color:#ff9800'>x{item['qty']}</span> {ops_str}</div>"
+                    name = item.get('name_zh', item.get('name', '商品'))
+                    qty = item.get('qty', 1)
+                    options = item.get('options_zh', item.get('options', []))
+                    opts_html = f"<div class='item-opts'>└ {' / '.join(options)}</div>" if options else ""
+                    items_html += f"<div class='item-row'><div class='item-name'><span>{name}</span><span class='item-qty'>x{qty}</span></div>{opts_html}</div>"
             else: 
-                items_html = raw_items.replace("+", "<br>● ")
+                clean_items = raw_items.replace("+", "<br>").replace("undefined", "")
+                items_html = f"<div class='item-row'>{clean_items}</div>"
         except: 
-            items_html = f"解析錯誤: {raw_items}"
+            items_html = f"<div style='color:red'>資料解析錯誤</div>"
             
-        tag = "已完成" if status == 'Completed' else "已作廢" if status == 'Cancelled' else "● 新訂單"
-        
-        btns = ""
+        buttons_html = ""
         if status == 'Pending': 
-            btns += f"<button onclick='action(\"/kitchen/complete/{oid}\")' class='btn btn-complete'>✔️ 付款完成</button>"
-        
-        if status != 'Cancelled':
-            btns += f"<a href='/menu?edit_oid={oid}&lang=zh' target='_blank' class='btn btn-edit'>✏️ 單據修改</a>"
-            btns += f"<button onclick='if(confirm(\"確定作廢？\")) action(\"/order/cancel/{oid}\")' class='btn btn-void'>🗑️ 單據作廢</button>"
-        
-        btns += f"<a href='/print_order/{oid}' target='_blank' class='btn btn-print'>🖨️ 列印 ({order_lang})</a>"
+            buttons_html += f"""
+            <button onclick='action("/kitchen/complete/{oid}")' class='btn btn-main'>✅ 出餐 / 付款</button>
+            <div class="btn-group">
+                <a href='/print_order/{oid}' target='_blank' class='btn btn-print'>🖨️ 補印</a>
+                <a href='/menu?edit_oid={oid}&lang=zh' target='_blank' class='btn btn-edit'>✏️ 修改</a>
+                <button onclick='if(confirm("⚠️ 作廢？")) action("/order/cancel/{oid}")' class='btn btn-void'>🗑️</button>
+            </div>"""
+        else:
+            buttons_html += f"<div class='btn-group'><a href='/print_order/{oid}' target='_blank' class='btn btn-print' style='width:100%'>🖨️ 補印單據</a></div>"
         
         html_content += f"""
-        <div class="card {cls}">
-            <div class="tag" style="color:{'#28a745' if status=='Completed' else '#ff9800'}">{tag}</div>
-            <div style="font-size:0.9em; color:#888;">{time_str} (TPE) | 原始語系: <b>{order_lang}</b></div>
-            <div style="margin: 10px 0;">
-                <span style="font-size:2.5em; color:#ff9800; font-weight:bold; margin-right:10px;">#{seq}</span>
-                <span style="font-size:1.8em; background:#444; padding:2px 12px; border-radius:6px;">桌: {table}</span>
+        <div class="card {status_cls}">
+            <div class="card-header">
+                <div><div class="seq-num">{seq_str}</div><div class="time-stamp">{time_str} ({order_lang})</div></div>
+                <div class="table-num">桌號 {table}</div>
             </div>
             <div class="items">{items_html}</div>
-            <div style="border-top: 1px solid #444; padding-top: 15px;">{btns}</div>
+            <div class="actions">{buttons_html}</div>
         </div>"""
         
     return jsonify({'html': html_content, 'max_seq': max_seq_val, 'new_ids': new_order_ids})
@@ -1005,7 +1216,7 @@ def check_new_orders():
 # --- 6. 日結報表 (含日期選擇與時區處理) ---
 @app.route('/kitchen/report')
 def daily_report():
-    # 1. 決定要查詢的日期 (台灣時間)
+    # 1. 決定要查詢的日期 (接收前端傳來的 ?date=YYYY-MM-DD)
     target_date_str = request.args.get('date')
     
     # 如果沒傳參數，預設為「台灣今天的日期」
@@ -1014,9 +1225,7 @@ def daily_report():
         target_date_str = tw_now.strftime('%Y-%m-%d')
     
     # 2. 轉換為 UTC 時間範圍 (用於 SQL 查詢)
-    # 邏輯：選定日期的 TW 00:00 ~ 23:59 -> 轉為 UTC
     try:
-        # 將字串轉為 datetime 物件 (假設時間為 00:00:00)
         target_date_obj = datetime.strptime(target_date_str, '%Y-%m-%d')
         
         # 台灣當天的開始與結束
@@ -1033,50 +1242,142 @@ def daily_report():
     except ValueError:
         return "日期格式錯誤，請使用 YYYY-MM-DD"
 
-    # 3. 執行資料庫查詢 (使用 time_filter)
-    conn = get_db_connection(); cur = conn.cursor()
+    # 3. 執行資料庫查詢
+    conn = get_db_connection()
+    cur = conn.cursor()
     
-    # 查詢有效單
+    # 3-1. 查詢有效單 (排除 Cancelled)
     cur.execute(f"SELECT COUNT(*), SUM(total_price) FROM orders WHERE {time_filter} AND status != 'Cancelled'")
     valid_count, valid_total = cur.fetchone()
     
-    # 查詢作廢單
-    cur.execute(f"SELECT COUNT(*), SUM(total_price) FROM orders WHERE {time_filter} AND status = 'Cancelled'")
-    void_count, void_total = cur.fetchone()
-    
-    # 查詢明細
+    # 獲取詳細內容
     cur.execute(f"SELECT content_json FROM orders WHERE {time_filter} AND status != 'Cancelled'")
     valid_rows = cur.fetchall()
     
+    # 3-2. 查詢作廢單
+    cur.execute(f"SELECT COUNT(*), SUM(total_price) FROM orders WHERE {time_filter} AND status = 'Cancelled'")
+    void_count, void_total = cur.fetchone()
+    
     cur.execute(f"SELECT content_json FROM orders WHERE {time_filter} AND status = 'Cancelled'")
     void_rows = cur.fetchall()
+    
     conn.close()
 
-    # 4. 統計品項邏輯 (維持不變)
-    def agg_items(rows):
+    # ==========================================
+    # 4. 統計品項邏輯 (強力偵測版)
+    # ==========================================
+    def agg_items(rows, label="有效單"):
         stats = {}
+        # 用來控制只印出一次 Debug 訊息，避免洗版
+        debug_printed = False 
+
         for r in rows:
             if not r[0]: continue
+            
             try:
-                items = json.loads(r[0]) if isinstance(r[0], str) else r[0] # 增加型別判斷相容性
+                # 解析 JSON
+                items = json.loads(r[0]) if isinstance(r[0], str) else r[0]
+                if isinstance(items, dict): items = [items]
+                
+                # --- [DEBUG] 印出第一筆資料的結構到終端機 ---
+                if not debug_printed and len(items) > 0:
+                    print(f"\n======== [DEBUG: {label}] JSON 結構檢查 ========")
+                    print(f"原始資料: {items[0]}")
+                    print(f"包含 Key: {items[0].keys()}")
+                    print("================================================\n")
+                    debug_printed = True
+                # ------------------------------------------------
+
                 for i in items:
-                    name = i.get('name_zh', i.get('name', '未知'))
-                    qty = int(i.get('qty', 0))
-                    stats[name] = stats.get(name, 0) + qty
-            except: pass
+                    name = i.get('name_zh', i.get('name', '未知品項'))
+                    
+                    # 1. 取得數量
+                    try:
+                        qty = int(float(i.get('qty', 0)))
+                    except:
+                        qty = 0
+
+                    # 2. 取得金額 (暴力搜尋所有可能的 Key)
+                    line_total = 0
+                    
+                    # 優先找「單價」
+                    # 常見 Key: price, unit_price, cost, amount
+                    raw_price = i.get('price') or i.get('unit_price') or i.get('cost') or i.get('amount')
+                    
+                    # 其次找「該行總額」(有些系統直接存總額)
+                    # 常見 Key: total, subtotal, item_total
+                    raw_line_total = i.get('total') or i.get('subtotal') or i.get('item_total')
+
+                    try:
+                        # 邏輯 A: 如果有單價，用 單價 * 數量
+                        if raw_price is not None:
+                            unit_price = float(raw_price)
+                            line_total = int(unit_price * qty)
+                        
+                        # 邏輯 B: 如果沒單價但有總額，直接用總額
+                        elif raw_line_total is not None:
+                            line_total = int(float(raw_line_total))
+                            
+                        # 邏輯 C: 如果都沒有，金額就是 0 (這代表 JSON 裡真的沒存錢)
+                        else:
+                            line_total = 0
+                    except:
+                        line_total = 0
+
+                    # 累加統計
+                    if name not in stats:
+                        stats[name] = {'qty': 0, 'total_amt': 0}
+                    
+                    stats[name]['qty'] += qty
+                    stats[name]['total_amt'] += line_total
+                    
+            except Exception as e:
+                print(f"解析錯誤: {e}")
+                pass
+                
         return stats
 
-    valid_stats, void_stats = agg_items(valid_rows), agg_items(void_rows)
+    # 執行統計
+    valid_stats = agg_items(valid_rows, "有效單")
+    void_stats = agg_items(void_rows, "作廢單")
 
-    # 5. 渲染表格 HTML (維持不變)
+    # 5. 渲染表格 HTML
     def render_table(stats_dict):
-        if not stats_dict: return "<p style='text-align:center; color:#888;'>無資料</p>"
-        h = "<table style='width:100%; border-collapse:collapse; font-size:14px; margin-top:5px;'><tr style='border-bottom:1px solid #000;'><th style='text-align:left;'>品項</th><th style='text-align:right;'>數量</th></tr>"
-        for name, qty in sorted(stats_dict.items(), key=lambda x: x[1], reverse=True): 
-            h += f"<tr><td style='padding:4px 0;'>{name}</td><td style='text-align:right;'>{qty}</td></tr>"
-        return h + "</table>"
+        if not stats_dict: 
+            return "<p style='text-align:center; color:#888; padding:10px;'>無銷售資料 (或 JSON 中缺少 price 欄位)</p>"
+        
+        h = """
+        <table style='width:100%; border-collapse:collapse; font-size:14px; margin-top:5px;'>
+            <thead>
+                <tr style='border-bottom:2px solid #444; background-color: #f0f0f0;'>
+                    <th style='text-align:left; width:50%; padding: 6px;'>品項名稱</th>
+                    <th style='text-align:right; width:20%; padding: 6px;'>銷售數量</th>
+                    <th style='text-align:right; width:30%; padding: 6px;'>銷售金額</th>
+                </tr>
+            </thead>
+            <tbody>
+        """
+        
+        sorted_items = sorted(stats_dict.items(), key=lambda x: x[1]['qty'], reverse=True)
+        
+        for name, data in sorted_items: 
+            fmt_amt = "{:,}".format(data['total_amt'])
+            
+            # 如果金額是 0，顯示紅色警告，提示使用者檢查
+            color_style = "color:red;" if data['total_amt'] == 0 else "font-family:monospace;"
+            
+            h += f"""
+            <tr style='border-bottom: 1px dotted #ccc;'>
+                <td style='padding:8px 4px; vertical-align: middle;'>{name}</td>
+                <td style='text-align:right; padding:8px 4px; vertical-align: middle;'>{data['qty']}</td>
+                <td style='text-align:right; padding:8px 4px; vertical-align: middle; {color_style}'>${fmt_amt}</td>
+            </tr>
+            """
+        
+        h += "</tbody></table>"
+        return h
 
-    # 6. 回傳完整 HTML (新增日期選擇器)
+    # 6. 回傳完整 HTML
     return f"""
     <!DOCTYPE html>
     <html>
@@ -1085,58 +1386,84 @@ def daily_report():
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>日結報表_{target_date_str}</title>
         <style>
-            body {{ font-family: sans-serif; background: #eee; padding: 20px; display: flex; flex-direction: column; align-items: center; }} 
-            .ticket {{ background: white; width: 58mm; padding: 15px; box-shadow: 0 0 10px rgba(0,0,0,0.1); margin-bottom: 20px; }} 
-            h2, h3 {{ text-align: center; margin: 10px 0; }} 
-            hr {{ border: 0; border-top: 1px dashed #000; margin: 10px 0; }} 
-            .summary-box {{ margin-bottom: 15px; font-size: 15px; }} 
-            .summary-box b {{ font-size: 18px; color: green; }} 
+            body {{ font-family: 'Microsoft JhengHei', sans-serif; background: #eee; padding: 20px; display: flex; flex-direction: column; align-items: center; color: #333; }} 
+            .ticket {{ background: white; width: 80mm; min-height: 100mm; padding: 20px; box-shadow: 0 4px 15px rgba(0,0,0,0.15); margin-bottom: 20px; border-radius: 4px; }} 
+            h2 {{ text-align: center; margin: 5px 0 10px 0; border-bottom: 2px solid #333; padding-bottom: 10px; }} 
             
-            /* 控制列印與介面區域 */
-            .controls {{ margin-bottom: 20px; display: flex; flex-direction: column; gap: 10px; align-items: center; }}
-            .date-picker {{ padding: 8px; border-radius: 5px; border: 1px solid #ccc; font-size: 16px; }}
+            .summary-box {{ margin-bottom: 20px; font-size: 15px; background: #f8f9fa; padding: 15px; border-radius: 8px; border-left: 5px solid #28a745; }} 
+            .summary-item {{ display: flex; justify-content: space-between; margin-bottom: 5px; }}
+            .total-price {{ font-size: 20px; color: #28a745; font-weight: bold; }}
+            
+            .void-box {{ border-left-color: #dc3545; background: #fff5f5; color: #a00; }}
+            .section-title {{ font-weight: bold; font-size: 16px; margin-bottom: 8px; display: block; }}
+
+            .controls {{ margin-bottom: 20px; display: flex; flex-direction: column; gap: 15px; align-items: center; background: white; padding: 15px; border-radius: 8px; }}
+            .date-picker {{ padding: 8px; border-radius: 5px; border: 1px solid #ccc; font-size: 16px; outline: none; }}
             .btn-group {{ display: flex; gap: 10px; }}
-            .btn {{ padding: 10px 20px; border-radius: 5px; text-decoration: none; color: white; cursor: pointer; border: none; font-size: 14px; }}
+            .btn {{ padding: 10px 20px; border-radius: 5px; text-decoration: none; color: white; cursor: pointer; border: none; font-size: 14px; transition: opacity 0.2s; }}
+            .btn:hover {{ opacity: 0.9; }}
             
             @media print {{ 
                 .no-print, .controls {{ display: none !important; }} 
-                body {{ background: white; padding: 0; }} 
-                .ticket {{ box-shadow: none; border: none; width: 100%; margin: 0; }} 
+                body {{ background: white; padding: 0; margin: 0; }} 
+                .ticket {{ box-shadow: none; border: none; width: 100%; margin: 0; padding: 0; }} 
+                table, tr, td, th {{ -webkit-print-color-adjust: exact; }}
             }}
         </style>
     </head>
     <body>
         <div class="controls no-print">
             <form action="/kitchen/report" method="get" style="display:flex; align-items:center; gap:10px;">
-                <label>📅 選擇日期：</label>
+                <label style="font-weight:bold;">📅 選擇日期：</label>
                 <input type="date" name="date" class="date-picker" value="{target_date_str}" onchange="this.form.submit()">
             </form>
             
             <div class="btn-group">
                 <button onclick="window.print()" class="btn" style="background:#28a745;">🖨️ 列印報表</button>
-                <a href="/kitchen" class="btn" style="background:#007bff;">🔙 回廚房看板</a>
+                <a href="/kitchen" class="btn" style="background:#6c757d;">🔙 回廚房看板</a>
             </div>
         </div>
 
         <div class="ticket">
-            <h2>日結報表</h2>
-            <p style="text-align:center; font-size:12px;">營業日: {target_date_str}</p>
-            <hr>
+            <h2>日結營收報表</h2>
+            <p style="text-align:center; font-size:14px; margin-bottom: 20px;">
+                營業日: <b>{target_date_str}</b>
+            </p>
+            
             <div class="summary-box">
-                <b>✅ 有效營收</b><br>
-                單量: {valid_count or 0} 筆<br>
-                總額: <b>${valid_total or 0}</b>
+                <span class="section-title">✅ 有效訂單統計</span>
+                <div class="summary-item">
+                    <span>總單量:</span>
+                    <span>{valid_count or 0} 筆</span>
+                </div>
+                <div class="summary-item">
+                    <span>總營業額 (SQL):</span>
+                    <span class="total-price">${"{:,}".format(valid_total or 0)}</span>
+                </div>
             </div>
+            
+            <span class="section-title">[ 商品銷售明細 ]</span>
             {render_table(valid_stats)}
+            
             <hr>
-            <div class="summary-box" style="color:#822;">
-                <b>❌ 作廢統計</b><br>
-                單量: {void_count or 0} 筆<br>
-                總額: ${void_total or 0}
+            
+            <div class="summary-box void-box">
+                <span class="section-title">❌ 作廢/取消統計</span>
+                <div class="summary-item">
+                    <span>取消單量:</span>
+                    <span>{void_count or 0} 筆</span>
+                </div>
+                <div class="summary-item">
+                    <span>取消金額:</span>
+                    <span>${"{:,}".format(void_total or 0)}</span>
+                </div>
             </div>
             {render_table(void_stats)}
+            
             <hr>
-            <p style="text-align:center; font-size:10px; color:#888;">列印時間: {datetime.now().strftime('%Y-%m-%d %H:%M')}</p>
+            <p style="text-align:center; font-size:12px; color:#aaa; margin-top: 20px;">
+                製表時間: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+            </p>
         </div>
     </body>
     </html>
@@ -1260,454 +1587,477 @@ def async_send_report(app_instance):
             
 # --- 9. 後台管理核心功能 ---
 
-# [新增] 這是用來解決背景發信時 Context 遺失問題的包裝函式
-def async_send_report(app_instance):
-    """在背景執行緒中建立 App Context 並發送郵件"""
+# 發信邏輯：支援傳入 manual_config (測試用) 與 is_test (測試信內容用)
+def send_daily_report(manual_config=None, is_test=False):
+    print(">>> 準備執行郵件發送程序...")
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        if manual_config:
+            print("🔧 使用手動輸入的設定進行測試 (不讀取 DB 設定)")
+            api_key = manual_config.get('resend_api_key', '').strip()
+            to_email = manual_config.get('report_email', '').strip()
+            sender_email = manual_config.get('sender_email', '').strip()
+        else:
+            print("📂 讀取資料庫設定進行發送")
+            cur.execute("SELECT key, value FROM settings")
+            rows = cur.fetchall()
+            config = dict(rows) if rows else {}
+            api_key = config.get('resend_api_key', '').strip()
+            to_email = config.get('report_email', '').strip()
+            sender_email = config.get('sender_email', '').strip()
+
+        if not sender_email: sender_email = 'onboarding@resend.dev'
+        if not api_key:
+            print("❌ 發信失敗：未設定 Resend API Key")
+            return
+        if not to_email:
+            print("❌ 發信失敗：未設定收件人 Email")
+            return
+
+        # 準備郵件內容
+        utc_now = datetime.utcnow()
+        tw_now = utc_now + timedelta(hours=8)
+        today_str = tw_now.strftime('%Y-%m-%d')
+        
+        if is_test:
+            subject = f"【連線測試】Resend API 設定確認 ({today_str})"
+            email_content = "✅ Resend API 連線成功！\n此為測試信件。"
+            print("🧪 模式：僅發送測試內容")
+        else:
+            tw_start = tw_now.replace(hour=0, minute=0, second=0, microsecond=0)
+            tw_end = tw_now.replace(hour=23, minute=59, second=59, microsecond=999999)
+            utc_start = tw_start - timedelta(hours=8)
+            utc_end = tw_end - timedelta(hours=8)
+            time_filter = f"created_at >= '{utc_start}' AND created_at <= '{utc_end}'"
+
+            cur.execute(f"SELECT COUNT(*), SUM(total_price) FROM orders WHERE {time_filter} AND status != 'Cancelled'")
+            v_res = cur.fetchone()
+            v_count = v_res[0] if v_res and v_res[0] else 0
+            v_total = v_res[1] if v_res and v_res[1] else 0
+            
+            cur.execute(f"SELECT COUNT(*), SUM(total_price) FROM orders WHERE {time_filter} AND status = 'Cancelled'")
+            x_res = cur.fetchone()
+            x_count = x_res[0] if x_res and x_res[0] else 0
+            x_total = x_res[1] if x_res and x_res[1] else 0
+
+            cur.execute(f"SELECT content_json FROM orders WHERE {time_filter} AND status != 'Cancelled'")
+            valid_rows = cur.fetchall()
+            
+            item_detail_text = ""
+            if valid_rows:
+                stats = {}
+                for r in valid_rows:
+                    if not r[0]: continue
+                    try:
+                        items = json.loads(r[0]) if isinstance(r[0], str) else r[0]
+                        if isinstance(items, dict): items = [items]
+                        for i in items:
+                            name = i.get('name_zh', i.get('name', '未知'))
+                            try: qty = int(float(i.get('qty', 0)))
+                            except: qty = 0
+                            try: price = int(float(i.get('price', 0) or i.get('unit_price', 0) or 0))
+                            except: price = 0
+                            
+                            if name not in stats: stats[name] = {'qty': 0, 'subtotal': 0}
+                            stats[name]['qty'] += qty
+                            stats[name]['subtotal'] += (qty * price)
+                    except: pass
+                
+                if stats:
+                    item_detail_text = "\n【品項銷量統計】\n"
+                    for name, data in sorted(stats.items(), key=lambda x: x[1]['qty'], reverse=True):
+                        item_detail_text += f"• {name}: {data['qty']} 份 (${data['subtotal']})\n"
+
+            subject = f"【日結單】{today_str} 營業統計報告"
+            email_content = f"""
+🍴 餐廳日結報表 ({today_str})
+---------------------------------
+✅ 【有效營收】
+單量：{v_count} 筆
+總額：${v_total}
+{item_detail_text}
+---------------------------------
+❌ 【作廢統計】
+單量：{x_count} 筆
+總額：${x_total}
+---------------------------------
+報告產出時間：{tw_now.strftime('%Y-%m-%d %H:%M:%S')} (TW)
+"""
+
+        payload = {
+            "from": sender_email,
+            "to": [to_email],
+            "subject": subject,
+            "text": email_content
+        }
+        
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+
+        req = urllib.request.Request(
+            "https://api.resend.com/emails", 
+            data=json.dumps(payload).encode('utf-8'),
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}, 
+            method='POST'
+        )
+        with urllib.request.urlopen(req, timeout=20, context=ctx) as res:
+            print(f"✅ 發送成功！Status Code: {res.status}")
+
+    except Exception as e:
+        print(f"❌ 發送錯誤: {e}")
+    finally:
+        cur.close()
+        conn.close()
+
+def async_send_report(app_instance, manual_config=None, is_test=False):
     with app_instance.app_context():
-        try:
-            print("正在後台嘗試發送測試郵件...")
-            send_daily_report() # 呼叫您原本定義好的發信函式
-            print("測試郵件發送程序結束。")
-        except Exception as e:
-            print(f"測試郵件發送失敗 Error: {e}")
+        send_daily_report(manual_config, is_test)
 
-@app.route('/admin/reorder_products', methods=['POST'])
-def reorder_products():
-    data = request.get_json()
-    conn = get_db_connection(); cur = conn.cursor()
-    for index, pid in enumerate(data.get('order', [])):
-        cur.execute("UPDATE products SET sort_order = %s WHERE id = %s", (index + 1, pid))
-    conn.commit(); cur.close(); conn.close()
-    return jsonify({'status': 'success'})
-
-@app.route('/admin/toggle_product/<int:pid>', methods=['POST'])
-def toggle_product(pid):
-    conn = get_db_connection(); cur = conn.cursor()
-    cur.execute("UPDATE products SET is_available = NOT is_available WHERE id = %s", (pid,))
-    cur.execute("SELECT is_available FROM products WHERE id = %s", (pid,))
-    new_status = cur.fetchone()[0]
-    conn.commit(); conn.close()
-    return jsonify({'status': 'success', 'is_available': new_status})
-
-@app.route('/admin/delete_product/<int:pid>')
-def delete_product(pid):
-    conn = get_db_connection(); cur = conn.cursor()
-    cur.execute("DELETE FROM products WHERE id = %s", (pid,))
-    conn.commit(); conn.close()
-    return redirect('/admin')
+# --- 路由功能 (匯出/匯入/重置/產品管理) ---
 
 @app.route('/admin/export_menu')
 def export_menu():
-    conn = get_db_connection()
-    df = pd.read_sql("SELECT * FROM products ORDER BY sort_order ASC", conn)
-    conn.close()
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df.to_excel(writer, index=False)
-    output.seek(0)
-    return send_file(output, mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", as_attachment=True, download_name="menu_export.xlsx")
+    """匯出菜單為 Excel"""
+    try:
+        conn = get_db_connection()
+        # 使用 pandas 读取 SQL
+        df = pd.read_sql("SELECT * FROM products ORDER BY sort_order ASC", conn)
+        conn.close()
+        
+        output = io.BytesIO()
+        # 需要 openpyxl 庫
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            df.to_excel(writer, index=False)
+        output.seek(0)
+        
+        return send_file(
+            output, 
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", 
+            as_attachment=True, 
+            download_name="menu_export.xlsx"
+        )
+    except Exception as e:
+         return redirect(url_for('admin_panel', msg=f"❌ 匯出失敗: {e}"))
 
 @app.route('/admin/import_menu', methods=['POST'])
 def import_menu():
-    file = request.files.get('menu_file')
-    if not file: return "無檔案", 400
-    df = pd.read_excel(file)
-    df = df.where(pd.notnull(df), None)
-    conn = get_db_connection(); cur = conn.cursor()
-    for _, p in df.iterrows():
-        cur.execute("""INSERT INTO products (name, price, category, print_category, sort_order, is_available, name_en, name_jp, name_kr) 
-                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)""", 
-                    (p.get('name'), p.get('price'), p.get('category'), p.get('print_category','Noodle'), p.get('sort_order',99), p.get('is_available',True), p.get('name_en'), p.get('name_jp'), p.get('name_kr')))
-    conn.commit(); conn.close()
-    return redirect('/admin')
+    """匯入 Excel 菜單"""
+    try:
+        file = request.files.get('menu_file')
+        if not file: return redirect(url_for('admin_panel', msg="❌ 無檔案"))
+        
+        df = pd.read_excel(file, engine='openpyxl')
+        # 將 NaN 轉為 None 以便 SQL 處理
+        df = df.where(pd.notnull(df), None)
+        conn = get_db_connection()
+        cur = conn.cursor()
+        
+        cnt = 0
+        for _, p in df.iterrows():
+            if not p.get('name'): continue
+            # 這裡就是關鍵的 INSERT 語法，必須包在 execute 字串內
+            cur.execute("""
+                INSERT INTO products (
+                    name, price, category, print_category, sort_order, is_available, image_url,
+                    name_en, name_jp, name_kr, category_en, category_jp, category_kr,
+                    custom_options, custom_options_en, custom_options_jp, custom_options_kr
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """, (
+                str(p.get('name')), p.get('price', 0), p.get('category'), p.get('print_category','Noodle'), 
+                p.get('sort_order', 99), bool(p.get('is_available', True)), p.get('image_url'),
+                p.get('name_en'), p.get('name_jp'), p.get('name_kr'),
+                p.get('category_en'), p.get('category_jp'), p.get('category_kr'),
+                p.get('custom_options'), p.get('custom_options_en'), p.get('custom_options_jp'), p.get('custom_options_kr')
+            ))
+            cnt += 1
+        conn.commit()
+        cur.close()
+        conn.close()
+        return redirect(url_for('admin_panel', msg=f"✅ 匯入 {cnt} 筆成功"))
+    except Exception as e:
+        return redirect(url_for('admin_panel', msg=f"❌ 匯入失敗: {e}"))
 
 @app.route('/admin/reset_menu')
 def reset_menu():
-    conn = get_db_connection(); cur = conn.cursor()
+    conn = get_db_connection()
+    cur = conn.cursor()
     cur.execute("TRUNCATE TABLE products RESTART IDENTITY CASCADE")
-    conn.commit(); conn.close()
+    conn.commit()
+    conn.close()
     return redirect('/admin')
 
 @app.route('/admin/reset_orders')
 def reset_orders():
-    conn = get_db_connection(); cur = conn.cursor()
+    conn = get_db_connection()
+    cur = conn.cursor()
     cur.execute("TRUNCATE TABLE orders RESTART IDENTITY CASCADE")
-    conn.commit(); conn.close()
+    conn.commit()
+    conn.close()
     return redirect('/admin')
+
+@app.route('/admin/toggle_product/<int:pid>', methods=['POST'])
+def toggle_product(pid):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT is_available FROM products WHERE id = %s", (pid,))
+    row = cur.fetchone()
+    if row:
+        new_s = not row[0]
+        # 注意：這裡的 SQL 必須在引號內
+        cur.execute("UPDATE products SET is_available = %s WHERE id = %s", (new_s, pid))
+        conn.commit()
+        conn.close()
+        return jsonify({'status': 'success', 'is_available': new_s})
+    conn.close()
+    return jsonify({'status': 'error'}), 404
+
+@app.route('/admin/delete_product/<int:pid>')
+def delete_product(pid):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM products WHERE id = %s", (pid,))
+    conn.commit()
+    conn.close()
+    return redirect(url_for('admin_panel', msg=f"🗑️ 產品 ID:{pid} 已刪除"))
+
+@app.route('/admin/reorder_products', methods=['POST'])
+def reorder_products():
+    data = request.json
+    conn = get_db_connection()
+    cur = conn.cursor()
+    order_list = data.get('order', [])
+    for idx, pid in enumerate(order_list):
+        # 注意：這裡的 SQL 必須在引號內
+        cur.execute("UPDATE products SET sort_order = %s WHERE id = %s", (idx, pid))
+    conn.commit()
+    conn.close()
+    return jsonify({'status': 'success'})
+
+@app.route('/admin/edit_product/<int:pid>', methods=['GET', 'POST'])
+def edit_product(pid):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    
+    if request.method == 'POST':
+        cur.execute("""
+            UPDATE products SET 
+            name=%s, price=%s, category=%s, print_category=%s, image_url=%s,
+            name_en=%s, name_jp=%s, name_kr=%s,
+            category_en=%s, category_jp=%s, category_kr=%s,
+            custom_options=%s, custom_options_en=%s, custom_options_jp=%s, custom_options_kr=%s
+            WHERE id=%s
+        """, (
+            request.form.get('name'), request.form.get('price'), request.form.get('category'), 
+            request.form.get('print_category'), request.form.get('image_url'),
+            request.form.get('name_en'), request.form.get('name_jp'), request.form.get('name_kr'),
+            request.form.get('category_en'), request.form.get('category_jp'), request.form.get('category_kr'),
+            request.form.get('custom_options'), request.form.get('custom_options_en'), 
+            request.form.get('custom_options_jp'), request.form.get('custom_options_kr'),
+            pid
+        ))
+        conn.commit()
+        conn.close()
+        return redirect(url_for('admin_panel', msg="✅ 產品已更新"))
+
+    cur.execute("SELECT * FROM products WHERE id = %s", (pid,))
+    # 使用 DictCursor 比較方便，這裡手動轉 dict
+    columns = [desc[0] for desc in cur.description]
+    row = cur.fetchone()
+    conn.close()
+    
+    if not row: return "Product not found"
+    p = dict(zip(columns, row))
+    
+    # 簡單的編輯表單 HTML
+    return f"""
+    <!DOCTYPE html>
+    <html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/milligram/1.4.1/milligram.min.css">
+    <style>.container {{ max-width: 800px; padding: 20px; }}</style></head>
+    <body><div class="container">
+        <h3>✏️ 編輯產品: {p.get('name')}</h3>
+        <form method="POST">
+            <div class="row"><div class="column"><label>名稱</label><input type="text" name="name" value="{p.get('name','')}"></div>
+            <div class="column"><label>價格</label><input type="number" name="price" value="{p.get('price','')}"></div></div>
+            <div class="row"><div class="column"><label>分類</label><input type="text" name="category" value="{p.get('category','')}"></div>
+            <div class="column"><label>出單區</label><select name="print_category">
+                <option value="Noodle" {'selected' if p.get('print_category')=='Noodle' else ''}>🍜 麵台</option>
+                <option value="Soup" {'selected' if p.get('print_category')=='Soup' else ''}>🍲 湯台</option>
+            </select></div></div>
+            <label>圖片網址</label><input type="text" name="image_url" value="{p.get('image_url','') or ''}">
+            
+            <details open><summary>多國語言與選項</summary>
+                <div class="row"><div class="column"><input type="text" name="name_en" value="{p.get('name_en','') or ''}" placeholder="Name EN"></div>
+                <div class="column"><input type="text" name="name_jp" value="{p.get('name_jp','') or ''}" placeholder="Name JP"></div></div>
+                <label>選項 (中文)</label><input type="text" name="custom_options" value="{p.get('custom_options','') or ''}">
+            </details>
+            <br>
+            <button type="submit">💾 儲存更新</button> <a href="/admin" class="button button-outline">取消</a>
+        </form>
+    </div></body></html>
+    """
+
+# --- Admin Panel 主頁面 ---
 
 @app.route('/admin', methods=['GET', 'POST'])
 def admin_panel():
-    conn = get_db_connection(); cur = conn.cursor()
+    conn = get_db_connection()
+    cur = conn.cursor()
     msg = request.args.get('msg', '') 
     
     if request.method == 'POST':
         action = request.form.get('action')
-        
         if action == 'save_settings':
-            cur.execute("UPDATE settings SET value=%s WHERE key='report_email'", (request.form.get('report_email'),))
-            cur.execute("UPDATE settings SET value=%s WHERE key='resend_api_key'", (request.form.get('resend_api_key'),))
+            # 使用 Upsert (PostgreSQL 特有語法: ON CONFLICT)
+            cur.execute("INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", ('report_email', request.form.get('report_email')))
+            cur.execute("INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", ('sender_email', request.form.get('sender_email')))
+            cur.execute("INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", ('resend_api_key', request.form.get('resend_api_key')))
             conn.commit()
             conn.close()
-            return redirect(url_for('admin_panel', msg="✅ 設定儲存成功"))
-            
+            return redirect(url_for('admin_panel', msg="✅ 設定已儲存"))
         elif action == 'test_email':
-            app_instance = current_app._get_current_object()
-            threading.Thread(target=async_send_report, args=(app_instance,)).start()
+            temp_config = {
+                'report_email': request.form.get('report_email'),
+                'sender_email': request.form.get('sender_email'),
+                'resend_api_key': request.form.get('resend_api_key')
+            }
             conn.close()
-            return redirect(url_for('admin_panel', msg="📩 測試郵件已在後台發送"))
-            
+            threading.Thread(target=async_send_report, args=(current_app._get_current_object(), temp_config, True)).start()
+            return redirect(url_for('admin_panel', msg="🧪 測試信發送中"))
+        elif action == 'send_report_now':
+            conn.close()
+            threading.Thread(target=async_send_report, args=(current_app._get_current_object(), None, False)).start()
+            return redirect(url_for('admin_panel', msg="📊 報表發送中"))
         elif action == 'add_product':
-            cur.execute("""INSERT INTO products (name, price, category, print_category, 
-                           name_en, name_jp, name_kr, 
-                           category_en, category_jp, category_kr,
-                           custom_options, custom_options_en, custom_options_jp, custom_options_kr) 
-                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""", 
-                       (request.form.get('name'), request.form.get('price'), request.form.get('category'), 
-                        request.form.get('print_category'), request.form.get('name_en'), request.form.get('name_jp'), 
-                        request.form.get('name_kr'), request.form.get('category_en'), request.form.get('category_jp'), 
-                        request.form.get('category_kr'), request.form.get('custom_options'),
-                        request.form.get('custom_options_en'), request.form.get('custom_options_jp'), request.form.get('custom_options_kr')))
+            cur.execute("""INSERT INTO products (name, price, category, print_category, image_url, name_en, name_jp, name_kr, category_en, category_jp, category_kr, custom_options, custom_options_en, custom_options_jp, custom_options_kr) 
+                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""", 
+                       (request.form.get('name'), request.form.get('price'), request.form.get('category'), request.form.get('print_category'), request.form.get('image_url'),
+                        request.form.get('name_en'), request.form.get('name_jp'), request.form.get('name_kr'), request.form.get('category_en'), request.form.get('category_jp'), request.form.get('category_kr'),
+                        request.form.get('custom_options'), request.form.get('custom_options_en'), request.form.get('custom_options_jp'), request.form.get('custom_options_kr')))
             conn.commit()
             conn.close()
-            return redirect(url_for('admin_panel', msg="✅ 產品新增成功"))
+            return redirect(url_for('admin_panel', msg="✅ 新增成功"))
 
     cur.execute("SELECT key, value FROM settings")
     config = dict(cur.fetchall())
-    cur.execute("SELECT id, name, price, category, is_available, print_category, sort_order FROM products ORDER BY sort_order ASC, id DESC")
+    cur.execute("SELECT id, name, price, category, is_available, print_category, sort_order, image_url FROM products ORDER BY sort_order ASC, id DESC")
     prods = cur.fetchall()
     conn.close()
 
     rows = ""
     for p in prods:
-        status_text = "上架中" if p[4] else "已下架"
-        status_class = "status-on" if p[4] else "status-off"
-        
+        status_cls = "status-on" if p[4] else "status-off"
+        status_txt = "上架中" if p[4] else "已下架"
+        img_icon = "🖼️" if p[7] else ""
         rows += f"""<tr data-id='{p[0]}' class='product-row'>
-            <td class='handle'>☰</td>
-            <td data-label="ID">{p[0]}</td>
-            <td data-label="品名" class='search-key'>
-                <div class="prod-name">{p[1]}</div>
-                <div class="prod-cat">{p[3]} / {p[5]}</div>
-            </td>
+            <td class='handle'>☰</td><td data-label="ID">{p[0]}</td>
+            <td data-label="品名" class='search-key'><div class="prod-name">{p[1]} {img_icon}</div><div class="prod-cat">{p[3]} / {p[5]}</div></td>
             <td data-label="價格"><b>${p[2]}</b></td>
-            <td data-label="狀態">
-                <button onclick='toggleProduct({p[0]}, this)' id='status-{p[0]}' class='btn-sm {status_class}'>
-                    {status_text}
-                </button>
-            </td>
+            <td data-label="狀態"><button onclick='toggleProduct({p[0]}, this)' class='btn-sm {status_cls}'>{status_txt}</button></td>
             <td data-label="操作" class="actions">
-                <a href='/admin/edit_product/{p[0]}' class="btn-icon edit" title="編輯">✎</a>
-                <a href='/admin/delete_product/{p[0]}' class="btn-icon del" title="刪除" onclick='return confirm("確定要刪除 ID:{p[0]} 嗎？")'>✖</a>
-            </td>
-        </tr>"""
+                <a href='/admin/edit_product/{p[0]}' class="btn-icon edit">✎</a>
+                <a href='/admin/delete_product/{p[0]}' class="btn-icon del" onclick='return confirm("確定刪除?")'>✖</a>
+            </td></tr>"""
 
     return f"""
     <!DOCTYPE html>
     <html lang="zh-TW">
-    <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>餐廳管理後台</title>
+    <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>後台</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/milligram/1.4.1/milligram.min.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.14.0/Sortable.min.js"></script>
     <style>
-        :root {{ --primary: #9b4dca; --bg: #f4f5f7; --card-bg: #ffffff; --text: #333; }}
-        body {{ background: var(--bg); color: var(--text); font-family: 'Segoe UI', system-ui, sans-serif; padding-bottom: 50px; }}
-        
-        /* 佈局容器 */
+        :root {{ --primary: #9b4dca; }}
+        body {{ background: #f4f5f7; padding-bottom: 50px; }}
         .container {{ max-width: 1000px; margin: 0 auto; padding: 20px; }}
-        
-        /* 頂部導航 */
-        .header {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px; flex-wrap: wrap; gap: 10px; }}
-        .header h2 {{ margin: 0; font-size: 2.4rem; color: var(--primary); font-weight: bold; }}
-        .nav-btn {{ background: #606c76; border-color: #606c76; padding: 0 20px; height: 38px; line-height: 38px; font-size: 1.4rem; text-transform: none; }}
-        
-        /* 卡片樣式 */
-        .card {{ background: var(--card-bg); border-radius: 12px; padding: 25px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); margin-bottom: 25px; border: 1px solid #eee; }}
-        .card h4 {{ border-bottom: 2px solid #f0f0f0; padding-bottom: 15px; margin-bottom: 20px; color: #555; font-size: 1.8rem; font-weight: 600; }}
-
-        /* 表單優化 */
-        label {{ font-size: 1.3rem; color: #666; margin-bottom: 5px; }}
-        input[type="text"], input[type="number"], input[type="email"], input[type="password"], select {{ 
-            border: 1px solid #ddd; border-radius: 6px; height: 42px; background: #fff; 
-        }}
-        input:focus, select:focus {{ border-color: var(--primary); outline: none; }}
-        
-        /* 詳細資訊折疊面板 */
-        details {{ background: #fafafa; border: 1px solid #eee; border-radius: 8px; padding: 10px; margin-top: 15px; transition: 0.2s; }}
-        details[open] {{ background: #fff; border-color: #ddd; box-shadow: 0 2px 5px rgba(0,0,0,0.05); }}
-        summary {{ cursor: pointer; font-weight: bold; color: #666; padding: 5px; outline: none; list-style: none; }}
-        summary::-webkit-details-marker {{ display: none; }}
-        summary:after {{ content: "+"; float: right; font-weight: bold; }}
-        details[open] summary:after {{ content: "-"; }}
-        .lang-group {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; padding-top: 15px; }}
-
-        /* 按鈕優化 */
-        .btn-full {{ width: 100%; font-size: 1.6rem; height: 45px; }}
-        .btn-group {{ display: flex; gap: 10px; flex-wrap: wrap; margin-top: 10px; }}
-        .btn-outline {{ background: transparent; color: #606c76; border: 1px solid #bbb; }}
-        .btn-danger {{ background: #ff4d4f; border-color: #ff4d4f; color: white; }}
-        
-        /* 列表與搜尋 */
-        .sticky-search {{ position: sticky; top: 0; z-index: 99; background: var(--card-bg); padding: 15px 0; border-bottom: 1px solid #eee; margin-bottom: 0; }}
-        table {{ width: 100%; border-collapse: collapse; margin-top: 10px; }}
-        thead th {{ border-bottom: 2px solid #eee; color: #888; font-size: 1.3rem; }}
-        td {{ padding: 12px 10px; vertical-align: middle; border-bottom: 1px solid #f5f5f5; }}
-        
-        /* 列表元件 */
-        .handle {{ cursor: move; color: #ccc; font-size: 20px; user-select: none; width: 30px; }}
-        .handle:hover {{ color: var(--primary); }}
-        .prod-name {{ font-weight: bold; font-size: 1.5rem; color: #333; }}
-        .prod-cat {{ font-size: 1.2rem; color: #888; }}
-        
-        /* 狀態按鈕 */
-        .btn-sm {{ padding: 0 10px; height: 28px; line-height: 26px; font-size: 1.2rem; border-radius: 4px; border: 1px solid transparent; cursor: pointer; display: inline-block; }}
+        .card {{ background: #fff; border-radius: 12px; padding: 25px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); margin-bottom: 25px; }}
+        .btn-full {{ width: 100%; }} .btn-sm {{ padding: 0 10px; height: 28px; line-height: 26px; }}
         .status-on {{ background: #e6ffed; color: #28a745; border-color: #b7eb8f; }}
         .status-off {{ background: #fff1f0; color: #f5222d; border-color: #ffa39e; }}
-        
-        /* 操作圖示 */
-        .btn-icon {{ text-decoration: none; font-size: 1.6rem; padding: 5px; margin: 0 2px; transition: 0.2s; }}
-        .edit {{ color: #1890ff; }}
-        .del {{ color: #ff4d4f; }}
-        .btn-icon:hover {{ transform: scale(1.2); }}
-
-        /* 訊息提示 */
-        .alert {{ padding: 12px; background: #e6f7ff; border: 1px solid #91d5ff; border-radius: 6px; color: #0050b3; text-align: center; margin-bottom: 20px; display: none; }}
-
-        /* RWD 手機版優化 */
-        @media (max-width: 600px) {{
-            .header {{ flex-direction: column; align-items: stretch; text-align: center; }}
-            .nav-btn {{ margin-top: 10px; width: 100%; }}
-            
-            /* 表格變卡片 */
-            table, thead, tbody, th, td, tr {{ display: block; }}
-            thead tr {{ position: absolute; top: -9999px; left: -9999px; }}
-            tr {{ background: #fff; border: 1px solid #eee; border-radius: 8px; margin-bottom: 15px; padding: 15px; position: relative; box-shadow: 0 2px 5px rgba(0,0,0,0.03); }}
-            
-            td {{ padding: 5px 0; border: none; display: flex; justify-content: space-between; align-items: center; }}
-            td:before {{ content: attr(data-label); font-weight: bold; color: #999; font-size: 1.2rem; margin-right: 15px; }}
-            
-            .handle {{ position: absolute; top: 10px; right: 10px; width: auto; font-size: 24px; }}
-            .prod-name {{ font-size: 1.6rem; }}
-            
-            /* 隱藏不需要標籤的欄位 */
-            td.handle:before, td.search-key:before {{ display: none; }}
-            td.search-key {{ display: block; margin-bottom: 10px; padding-right: 30px; }}
-            td.actions {{ justify-content: flex-end; margin-top: 10px; border-top: 1px solid #eee; padding-top: 10px; }}
+        .alert {{ padding: 12px; background: #e6f7ff; color: #0050b3; display: none; margin-bottom: 20px; border-radius: 6px; }}
+        table {{ width: 100%; margin-top: 10px; }}
+        @media (max-width: 600px) {{ 
+            table, thead, tbody, th, td, tr {{ display: block; }} thead tr {{ position: absolute; top: -9999px; }}
+            tr {{ margin-bottom: 15px; padding: 15px; background: #fff; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); }}
+            td {{ border: none; position: relative; padding-left: 0; }}
         }}
     </style>
-    </head>
-    <body>
-
+    </head><body>
     <div class="container">
-        <div class="header">
-            <h2>🍴 餐廳後台管理</h2>
-            <a href="/kitchen" class="button nav-btn">👨‍🍳 前往廚房看板</a>
-        </div>
-        
+        <h2>🍴 餐廳後台</h2><a href="/kitchen" class="button">👨‍🍳 廚房看板</a>
         <div id="status-msg" class="alert">{msg}</div>
-
         <div class="card">
-            <h4>⚙️ 系統設定</h4>
+            <h4>⚙️ 設定</h4>
             <form method="POST">
-                <input type="hidden" name="action" value="save_settings">
-                <div class="row">
-                    <div class="column">
-                        <label>日結報表 Email</label>
-                        <input type="email" name="report_email" value="{config.get('report_email','')}" placeholder="接收通知的信箱">
-                    </div>
-                    <div class="column">
-                        <label>Resend API Key</label>
-                        <input type="password" name="resend_api_key" value="{config.get('resend_api_key','')}" placeholder="API 金鑰">
-                    </div>
-                </div>
-                <div class="btn-group">
-                    <button type="submit" class="button">💾 儲存設定</button>
-                    <button type="submit" formaction="/admin?action=test_email" formmethod="POST" name="action" value="test_email" class="button btn-outline">🧪 測試發信</button>
-                </div>
+                <input type="email" name="report_email" value="{config.get('report_email','')}" placeholder="To Email">
+                <input type="email" name="sender_email" value="{config.get('sender_email','')}" placeholder="From Email">
+                <input type="password" name="resend_api_key" value="{config.get('resend_api_key','')}" placeholder="API Key">
+                <button type="submit" name="action" value="save_settings">💾 儲存</button>
+                <button type="submit" name="action" value="test_email" class="button button-outline">🧪 測試</button>
             </form>
+            <hr>
+            <form method="POST"><button type="submit" name="action" value="send_report_now">📊 發送報表</button></form>
         </div>
-
         <div class="card">
-            <h4>➕ 新增產品項目</h4>
+            <h4>➕ 新增產品</h4>
             <form method="POST">
                 <input type="hidden" name="action" value="add_product">
-                
-                <div class="row">
-                    <div class="column column-60">
-                        <label>產品名稱 (中文)</label>
-                        <input type="text" name="name" required placeholder="例如：牛肉麵">
-                    </div>
-                    <div class="column column-20">
-                        <label>價格</label>
-                        <input type="number" name="price" required placeholder="150">
-                    </div>
-                    <div class="column column-20">
-                        <label>出單區</label>
-                        <select name="print_category">
-                            <option value="Noodle">🍜 麵台</option>
-                            <option value="Soup">🍲 湯台</option>
-                        </select>
-                    </div>
-                </div>
-                
-                <div class="row">
-                    <div class="column">
-                        <label>前台分類 (中文)</label>
-                        <input type="text" name="category" placeholder="例如：主廚推薦">
-                    </div>
-                </div>
-
-                <details>
-                    <summary>🌐 多國語言設定 (點擊展開)</summary>
-                    <div class="lang-group">
-                        <div>
-                            <label>🇺🇸 English Name</label>
-                            <input type="text" name="name_en">
-                            <input type="text" name="category_en" placeholder="Category EN">
-                        </div>
-                        <div>
-                            <label>🇯🇵 日本語 名称</label>
-                            <input type="text" name="name_jp">
-                            <input type="text" name="category_jp" placeholder="カテゴリ JP">
-                        </div>
-                        <div>
-                            <label>🇰🇷 한국어 이름</label>
-                            <input type="text" name="name_kr">
-                            <input type="text" name="category_kr" placeholder="카테고리 KR">
-                        </div>
-                    </div>
+                <div class="row"><div class="column"><input type="text" name="name" required placeholder="名稱"></div><div class="column"><input type="number" name="price" required placeholder="價格"></div></div>
+                <input type="text" name="category" placeholder="分類">
+                <input type="text" name="image_url" placeholder="圖片網址">
+                <details><summary>多國語言 / 選項</summary>
+                    <input type="text" name="name_en" placeholder="Name EN"><input type="text" name="name_jp" placeholder="Name JP">
+                    <input type="text" name="custom_options" placeholder="選項 (如: 加辣)">
                 </details>
-
-                <details>
-                    <summary>🔧 客製化選項 (點擊展開)</summary>
-                    <div class="lang-group">
-                        <div>
-                            <label>中文選項 (逗號分隔)</label>
-                            <input type="text" name="custom_options" placeholder="如: 加麵,不蔥">
-                        </div>
-                        <div>
-                            <label>🇺🇸 Options</label>
-                            <input type="text" name="custom_options_en">
-                        </div>
-                        <div>
-                            <label>🇯🇵 オプション</label>
-                            <input type="text" name="custom_options_jp">
-                        </div>
-                        <div>
-                            <label>🇰🇷 옵션</label>
-                            <input type="text" name="custom_options_kr">
-                        </div>
-                    </div>
-                </details>
-
-                <button type="submit" class="button btn-full" style="margin-top:20px;">🚀 新增產品</button>
+                <button type="submit" class="button btn-full">🚀 新增</button>
             </form>
         </div>
-
         <div class="card">
-            <h4>📋 菜單管理與排序</h4>
-            
-            <div class="sticky-search">
-                <input type="text" id="productSearch" placeholder="🔍 輸入關鍵字搜尋產品..." style="margin-bottom:0; width:100%;">
-            </div>
-
-            <div style="overflow-x: auto;">
-                <table id="menu-table">
-                    <thead>
-                        <tr>
-                            <th style="width:50px;">排序</th>
-                            <th style="width:50px;">ID</th>
-                            <th>品項資訊</th>
-                            <th>價格</th>
-                            <th>狀態</th>
-                            <th style="text-align:right;">操作</th>
-                        </tr>
-                    </thead>
-                    <tbody id="menu-list">
-                        {rows}
-                    </tbody>
-                </table>
-            </div>
-            
+            <h4>📋 菜單管理</h4>
+            <input type="text" id="productSearch" placeholder="搜尋...">
+            <table>
+                <thead><tr><th width="50">排序</th><th width="50">ID</th><th>品項</th><th>價格</th><th>狀態</th><th>操作</th></tr></thead>
+                <tbody id="menu-list">{rows}</tbody>
+            </table>
             <hr>
-            
-            <h4>📦 資料庫操作</h4>
-            <div class="btn-group">
-                <a href="/admin/export_menu" class="button btn-outline">📤 匯出 Excel</a>
-                
-                <form action="/admin/import_menu" method="POST" enctype="multipart/form-data" style="display:inline-flex; gap:5px; align-items:center;">
-                    <input type="file" name="menu_file" required style="width:200px; height:38px; padding:5px;">
-                    <button type="submit" class="button btn-outline">📥 匯入</button>
-                </form>
-
-                <div style="flex-grow:1; text-align:right;">
-                    <a href="/admin/reset_menu" class="button btn-danger" onclick="return confirm('⚠️ 警告：這將刪除所有菜單品項，確定嗎？')">🗑️ 清空菜單</a>
-                    <a href="/admin/reset_orders" class="button btn-danger" onclick="return confirm('⚠️ 警告：這將刪除所有訂單紀錄，確定嗎？')">💥 清空訂單</a>
-                </div>
+            <a href="/admin/export_menu" class="button button-outline">📤 匯出</a>
+            <form action="/admin/import_menu" method="POST" enctype="multipart/form-data" style="display:inline;">
+                <input type="file" name="menu_file" required> <button class="button button-outline">📥 匯入</button>
+            </form>
+            <div style="float:right;">
+                <a href="/admin/reset_menu" class="button" style="background:red;" onclick="return confirm('確定清空菜單?')">🗑️ 清菜單</a>
+                <a href="/admin/reset_orders" class="button" style="background:red;" onclick="return confirm('確定清空訂單?')">💥 清訂單</a>
             </div>
         </div>
-
     </div>
-
     <script>
-    // 顯示訊息動畫
-    const msgDiv = document.getElementById('status-msg');
-    if (msgDiv && msgDiv.innerText.trim() !== '') {{
-        msgDiv.style.display = 'block';
-        setTimeout(() => {{ msgDiv.style.opacity = '0'; }}, 3000);
-    }}
-
-    // AJAX 切換狀態
-    function toggleProduct(pid, btn) {{
-        fetch('/admin/toggle_product/' + pid, {{ method: 'POST' }})
-        .then(res => res.json())
-        .then(data => {{
-            if(data.status === 'success') {{
-                if(data.is_available) {{
-                    btn.innerText = '上架中';
-                    btn.className = 'btn-sm status-on';
-                }} else {{
-                    btn.innerText = '已下架';
-                    btn.className = 'btn-sm status-off';
-                }}
-            }}
-        }});
-    }}
-
-    // 搜尋過濾
-    document.getElementById('productSearch').addEventListener('input', function(e) {{
-        let filter = e.target.value.toLowerCase();
-        document.querySelectorAll('.product-row').forEach(row => {{
-            let text = row.querySelector('.search-key').innerText.toLowerCase();
-            row.style.display = text.includes(filter) ? "" : "none";
-        }});
-    }});
-
-    // 拖曳排序
-    Sortable.create(document.getElementById('menu-list'), {{
-        handle: '.handle', 
-        animation: 150,
-        ghostClass: 'blue-background-class',
-        onEnd: function() {{
-            let order = Array.from(document.querySelectorAll('#menu-list tr')).map(r => r.getAttribute('data-id'));
-            fetch('/admin/reorder_products', {{
-                method: 'POST', 
-                headers: {{'Content-Type':'application/json'}}, 
-                body: JSON.stringify({{order: order}})
+        const msg = document.getElementById('status-msg');
+        if(msg.innerText) {{ msg.style.display='block'; setTimeout(()=>msg.style.display='none',3000); }}
+        
+        function toggleProduct(pid, btn) {{
+            fetch('/admin/toggle_product/'+pid, {{method:'POST'}}).then(r=>r.json()).then(d=>{{
+                if(d.status==='success') {{ btn.className = d.is_available?'btn-sm status-on':'btn-sm status-off'; btn.innerText = d.is_available?'上架中':'已下架'; }}
             }});
         }}
-    }});
-    </script>
-    </body>
-    </html>
+        document.getElementById('productSearch').addEventListener('input', e=>{{
+            let v = e.target.value.toLowerCase();
+            document.querySelectorAll('.product-row').forEach(r=>r.style.display=r.innerText.toLowerCase().includes(v)?'':'none');
+        }});
+        Sortable.create(document.getElementById('menu-list'), {{
+            handle: '.handle', onEnd: function() {{
+                let order = Array.from(document.querySelectorAll('#menu-list tr')).map(r=>r.getAttribute('data-id'));
+                fetch('/admin/reorder_products', {{method:'POST', headers:{{'Content-Type':'application/json'}}, body:JSON.stringify({{order:order}})}});
+            }}
+        }});
+    </script></body></html>
     """
 
 @app.route('/')
 def index():
     return "系統運作中。<a href='/admin'>進入後台</a>"
 
-
+    
 # --- 編輯產品頁面 (強制欄位順序版) ---
 @app.route('/admin/edit_product/<int:pid>', methods=['GET','POST'])
 def edit_product(pid):
@@ -1853,13 +2203,40 @@ def edit_product(pid):
     
 
     
-# --- 防休眠 ---
-def keep_alive():
+# --- 背景維護工作 (防休眠 + 監控日誌) ---
+def run_maintenance_tasks():
+    print("🚀 背景維護執行緒已啟動 (Maintenance Thread Started)")
+    
     while True:
-        try: urllib.request.urlopen("https://qr-mbdv.onrender.com")
-        except: pass
-        time.sleep(800)
-threading.Thread(target=keep_alive, daemon=True).start()
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S") # 取得當前時間
+        
+        # 1. 防止 Render 休眠 (Ping 網址)
+        try:
+            # 設定 timeout 避免卡住
+            urllib.request.urlopen("https://qr-mbdv.onrender.com", timeout=10)
+            print(f"[{now}] ✅ Web Ping 成功 (Render is alive)")
+        except Exception as e:
+            print(f"[{now}] ❌ Web Ping 失敗: {e}")
+
+        # 2. 防止 Aiven 資料庫休眠 (Ping 資料庫)
+        try:
+            conn = get_db_connection()
+            cur = conn.cursor()
+            cur.execute("SELECT 1") # 最輕量的查詢
+            cur.close()
+            conn.close()
+            print(f"[{now}] 💓 DB Heartbeat 成功 (Aiven is alive)")
+        except Exception as e:
+            print(f"[{now}] ⚠️ DB 連線失敗: {e}")
+
+        # 為了避免 Log 太多太亂，可以把這行分隔線拿掉，看個人喜好
+        print("-" * 30)
+
+        # 休息 5 分鐘 (300秒)
+        time.sleep(300)
+
+# 啟動背景執行緒
+threading.Thread(target=run_maintenance_tasks, daemon=True).start()
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=10000)
