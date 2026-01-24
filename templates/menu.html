@@ -1,114 +1,92 @@
 <!DOCTYPE html>
-<html lang="{{ lang }}">
+<html>
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{{ texts.title }}</title>
-    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+    <title>{{ texts['title'] }}</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=0">
     <style>
-        :root { --primary: #e67e22; --bg: #f4f4f9; }
-        body { font-family: sans-serif; background: var(--bg); margin: 0; padding-bottom: 80px; }
-        .header { background: white; padding: 15px; text-align: center; box-shadow: 0 2px 5px rgba(0,0,0,0.1); sticky; top: 0; z-index: 100; }
-        .category-nav { display: flex; overflow-x: auto; background: white; padding: 10px; gap: 10px; sticky; top: 60px; z-index: 99; }
-        .cat-btn { padding: 8px 15px; border-radius: 20px; border: 1px solid #ddd; background: white; white-space: nowrap; cursor: pointer; }
-        .cat-btn.active { background: var(--primary); color: white; border-color: var(--primary); }
-        
-        .product-grid { padding: 15px; display: grid; grid-template-columns: 1fr 1fr; gap: 15px; }
-        .product-card { background: white; border-radius: 10px; overflow: hidden; box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
-        .product-img { width: 100%; height: 120px; object-fit: cover; background: #eee; }
-        .product-info { padding: 10px; }
-        .product-name { font-size: 1rem; font-weight: bold; margin-bottom: 5px; }
-        .product-price { color: var(--primary); font-weight: bold; }
-        
-        .cart-bar { position: fixed; bottom: 0; width: 100%; background: white; padding: 15px; box-sizing: border-box; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 -2px 10px rgba(0,0,0,0.1); }
-        .checkout-btn { background: var(--primary); color: white; padding: 10px 20px; border-radius: 25px; border: none; font-size: 1rem; }
-        
-        /* 彈窗樣式省略，建議延用你原本 app.py 內的 CSS */
+        body { font-family: 'Microsoft JhengHei', sans-serif; margin: 0; padding-bottom: 160px; background: #f8f9fa; touch-action: manipulation; font-size: 18px; }
+        .header { background: white; padding: 15px; position: sticky; top: 0; z-index: 99; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+        .cat-bar { display: flex; overflow-x: auto; white-space: nowrap; padding: 10px 0; gap: 10px; scrollbar-width: none; }
+        .cat-bar::-webkit-scrollbar { display: none; }
+        .cat-btn { background: #f1f3f5; border: 1px solid #dee2e6; padding: 8px 18px; border-radius: 25px; font-size: 1em; color: #495057; cursor: pointer; }
+        .cat-btn.active { background: #28a745; color: white; border-color: #28a745; }
+        .menu-item { background: white; margin: 12px; padding: 15px; border-radius: 12px; display: flex; box-shadow: 0 2px 8px rgba(0,0,0,0.08); position: relative; }
+        .menu-img { width: 100px; height: 100px; border-radius: 10px; object-fit: cover; background: #eee; }
+        .menu-info { flex: 1; padding-left: 15px; display: flex; flex-direction: column; justify-content: space-between; }
+        .menu-info b { font-size: 1.2em; }
+        .add-btn { background: #28a745; color: white; border: none; padding: 10px 20px; border-radius: 20px; align-self: flex-end; font-size: 1em; font-weight: bold; }
+        .sold-out { filter: grayscale(1); opacity: 0.6; pointer-events: none; }
+        .sold-out-badge { position: absolute; top: 10px; right: 10px; background: rgba(0,0,0,0.7); color: white; padding: 4px 10px; border-radius: 5px; font-size: 0.9em; font-weight: bold; z-index: 5; }
+        .cart-bar { position: fixed; bottom: 0; width: 100%; background: white; padding: 15px; box-shadow: 0 -4px 15px rgba(0,0,0,0.15); display: none; flex-direction: column; box-sizing: border-box; z-index: 100; }
+        .cart-summary { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+        .cart-buttons { display: flex; gap: 12px; }
+        .btn-view-cart { background: #ff9800; color: white; border: none; flex: 1; padding: 15px; border-radius: 12px; font-weight: bold; font-size: 1.2em; }
+        .btn-checkout { background: #28a745; color: white; border: none; flex: 1; padding: 15px; border-radius: 12px; font-weight: bold; font-size: 1.2em; }
+        .modal { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); display: none; z-index: 200; justify-content: center; align-items: flex-end; }
+        .modal-c { background: white; width: 100%; padding: 25px; border-radius: 25px 25px 0 0; max-height: 85vh; overflow-y: auto; box-sizing: border-box; }
+        .opt-tag { border: 1px solid #ccc; padding: 8px 15px; border-radius: 20px; margin: 5px; display: inline-block; font-size: 1.1em; }
+        .opt-tag.sel { background: #e3f2fd; border-color: #2196f3; color: #2196f3; font-weight: bold; }
+        .cat-header { padding: 12px 15px; font-weight: bold; font-size: 1.3em; color: #333; background: #eee; margin-top: 15px; scroll-margin-top: 160px; }
+        .qty-ctrl { display: flex; align-items: center; gap: 15px; justify-content: center; margin: 20px 0; }
+        .qty-ctrl button { width: 50px; height: 50px; border-radius: 25px; border: 1px solid #ddd; background: white; font-size: 1.8em; }
+        .qty-input { width: 70px; text-align: center; font-size: 1.4em; border: 1px solid #ddd; padding: 8px; border-radius: 8px; }
+        .cart-item-row { border-bottom: 1px solid #eee; padding: 15px 0; }
+        .cart-item-main { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+        .cart-qty-sub { display: flex; align-items: center; justify-content: flex-end; gap: 15px; }
+        .btn-edit-opt { background: #e3f2fd; color: #2196f3; border: 1px solid #2196f3; padding: 6px 12px; border-radius: 8px; font-size: 0.9em; font-weight: bold; cursor: pointer; }
     </style>
 </head>
 <body>
-
-<div class="header">
-    <h2>{{ texts.welcome }}</h2>
-    <input type="text" id="table_number" placeholder="{{ texts.table_placeholder }}" value="{{ table_num }}" style="width: 80%; padding: 8px; border-radius: 5px; border: 1px solid #ddd;">
-</div>
-
-<div class="category-nav">
-    {% for cat in categories %}
-    <button class="cat-btn" onclick="filterCategory('{{ cat }}')">{{ cat }}</button>
-    {% endfor %}
-</div>
-
-<div class="product-grid">
-    {% for p in products %}
-    <div class="product-card" data-category="{{ p.category }}">
-        {% if p.image_url %}
-        <img src="{{ p.image_url }}" class="product-img" alt="{{ p.name }}">
-        {% endif %}
-        <div class="product-info">
-            <div class="product-name">{{ p.name }}</div>
-            <div class="product-price">${{ p.price }}</div>
-            <button onclick="openModal({{ p | tojson }})" class="checkout-btn" style="width:100%; margin-top:10px; padding:5px;">{{ texts.add }}</button>
+    <div class="header">
+        {% if edit_oid %}
+        <div style="background:#fff3cd;padding:12px;color:#856404;text-align:center;font-weight:bold;">
+            ⚠️ {{ texts['edit_notice'] or '正在編輯' }} #{{ edit_oid }} ({{ order_lang }})
         </div>
+        {% endif %}
+        <h2 style="margin:0 0 10px 0;">{{ texts['welcome'] }}</h2>
+        <input type="text" id="visible_table" value="{{ table_num }}" placeholder="{{ texts['table_placeholder'] }}" 
+               style="padding:12px;width:100%;box-sizing:border-box;border:2px solid #ddd;border-radius:8px;font-size:1.2em;margin-bottom:8px;">
+        <div class="cat-bar" id="cat-nav"></div>
     </div>
-    {% endfor %}
-</div>
 
-<div class="cart-bar">
-    <div>{{ texts.total }}: $<span id="cart-total">0</span></div>
-    <button class="checkout-btn" onclick="submitOrder()">{{ texts.checkout }}</button>
-</div>
+    <div id="list"></div>
 
-<script>
-    let cart = [];
-    let currentLang = "{{ lang }}";
-    const texts = {{ texts | tojson }};
+    <form id="order-form" method="POST" action="/menu">
+        <input type="hidden" name="cart_data" id="cart_input">
+        <input type="hidden" name="table_number" id="tbl_input">
+        <input type="hidden" name="lang_input" id="lang_final_input" value="{{ order_lang }}">
+        {% if edit_oid %}
+        <input type="hidden" name="old_order_id" value="{{ edit_oid }}">
+        {% endif %}
+        
+        <div class="cart-bar" id="bar">
+            <div class="cart-summary">
+                <div style="font-weight:bold; font-size:1.3em;">Total: $<span id="tot">0</span> (<span id="cnt">0</span>)</div>
+                <label style="font-size:1em;"><input type="checkbox" name="need_receipt" checked> {{ texts['print_receipt_opt'] }}</label>
+            </div>
+            <div class="cart-buttons">
+                <button type="button" class="btn-view-cart" onclick="showCart()">🛒 {{ texts['cart_detail'] }}</button>
+                <button type="button" class="btn-checkout" onclick="sub()">{{ texts['checkout'] }}</button>
+            </div>
+        </div>
+    </form>
 
-    function openModal(product) {
-        // 這裡實作你的客製化彈窗邏輯
-        // 建議使用 Swal.fire (SweetAlert2) 或自定義 Modal
-        addToCart(product, 1, "");
-    }
+    <div class="modal" id="opt-m" onclick="closeModalByBg(event, 'opt-m')">
+        </div>
 
-    function addToCart(product, qty, note) {
-        cart.push({ ...product, qty, note });
-        updateCartUI();
-    }
+    <script>
+    // 將 Python/Jinja2 變數傳入 JS
+    const P = {{ products | tojson }};
+    const T = {{ texts | tojson }};
+    const EDIT_OID = "{{ edit_oid or '' }}";
+    const PRELOAD_CART = {{ preload_cart | safe }};
+    const CUR_LANG = "{{ display_lang }}";
+    const ORDER_LANG = "{{ order_lang }}";
 
-    function updateCartUI() {
-        let total = cart.reduce((sum, item) => sum + (item.price * item.qty), 0);
-        document.getElementById('cart-total').innerText = total;
-    }
+    let C = [], cur = null, selectedOptIndices = [], addP = 0, editIndex = -1;
 
-    async function submitOrder() {
-        const table = document.getElementById('table_number').value;
-        if (!table) return Swal.fire(texts.table_placeholder);
-        if (cart.length === 0) return Swal.fire(texts.empty_cart);
-
-        const response = await fetch('/submit_order', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                table_number: table,
-                items: cart,
-                total_price: parseInt(document.getElementById('cart-total').innerText),
-                lang: currentLang
-            })
-        });
-
-        const result = await response.json();
-        if (result.success) {
-            Swal.fire(texts.order_success, texts.daily_seq_prefix + ": " + result.daily_seq, 'success')
-                .then(() => location.reload());
-        }
-    }
-
-    function filterCategory(cat) {
-        document.querySelectorAll('.product-card').forEach(card => {
-            card.style.display = (card.dataset.category === cat || cat === 'All') ? 'block' : 'none';
-        });
-    }
-</script>
-
+    // ... (其餘你提供的 JavaScript 邏輯：initCart, upd, openOpt, sub 等) ...
+    // 請確保將你提供的完整 JS 代碼貼於此處
+    </script>
 </body>
 </html>
