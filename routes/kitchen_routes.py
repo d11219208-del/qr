@@ -16,7 +16,6 @@ def get_tw_time_range(target_date_str=None):
     
     tw_start = target_date_obj.replace(hour=0, minute=0, second=0, microsecond=0)
     tw_end = target_date_obj.replace(hour=23, minute=59, second=59, microsecond=999999)
-    # 轉為 UTC 時間供 SQL 查詢
     return tw_start - timedelta(hours=8), tw_end - timedelta(hours=8)
 
 # --- 1. 廚房看板主頁 ---
@@ -74,19 +73,19 @@ def check_new_orders():
         except: 
             items_html = "<div class='item-row'>資料解析錯誤</div>"
 
-        # 【修正重點】所有 URL 前面都必須加上 /kitchen 
-        # 注意：如果您原本的 /print_order 是在 menu_bp (根目錄)，則不用加 /kitchen
-        # 但建議統一由廚房模組處理
+        # 【關鍵修正】加上 /kitchen 前綴以符合 Blueprint 路由
+        # 如果 /print_order 和 /menu 在其他 Blueprint (如 menu_bp)，則不加 /kitchen
+        # 但這裡假設您希望統一由 kitchen 路由管理
         buttons = ""
         if status == 'Pending':
             buttons += f"<button onclick='action(\"/kitchen/complete/{oid}\")' class='btn btn-main'>✅ 出餐 / 付款</button>"
             buttons += f"""<div class="btn-group">
-                <a href='/print_order/{oid}' target='_blank' class='btn btn-print'>🖨️ 補印</a>
+                <a href='/kitchen/print_order/{oid}' target='_blank' class='btn btn-print'>🖨️ 補印</a>
                 <a href='/menu?edit_oid={oid}&lang=zh' target='_blank' class='btn btn-edit'>✏️ 修改</a>
                 <button onclick='if(confirm(\"⚠️ 作廢？\")) action(\"/kitchen/cancel/{oid}\")' class='btn btn-void'>🗑️</button>
             </div>"""
         else:
-            buttons += f"<div class='btn-group'><a href='/print_order/{oid}' target='_blank' class='btn btn-print' style='width:100%'>🖨️ 補印單據</a></div>"
+            buttons += f"<div class='btn-group'><a href='/kitchen/print_order/{oid}' target='_blank' class='btn btn-print' style='width:100%'>🖨️ 補印單據</a></div>"
 
         html_content += f"""
         <div class="card {status_cls}">
@@ -100,7 +99,19 @@ def check_new_orders():
         
     return jsonify({'html': html_content, 'max_seq': max_seq_val, 'new_ids': new_order_ids})
 
-# --- 3. 訂單操作 ---
+# --- 3. 訂單操作 (補上列印路由) ---
+@kitchen_bp.route('/print_order/<int:oid>')
+def print_order(oid):
+    from database import get_db_connection
+    c = get_db_connection()
+    cur = c.cursor()
+    cur.execute("SELECT table_number, items, daily_seq, content_json, created_at FROM orders WHERE id=%s", (oid,))
+    order = cur.fetchone()
+    c.close()
+    if not order: return "訂單不存在", 404
+    # 請確保你有一個 print_template.html 或是直接渲染列印畫面
+    return render_template('print_order.html', order=order)
+
 @kitchen_bp.route('/complete/<int:oid>')
 def complete_order(oid):
     from database import get_db_connection
