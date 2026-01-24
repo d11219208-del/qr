@@ -16,6 +16,7 @@ def get_tw_time_range(target_date_str=None):
     
     tw_start = target_date_obj.replace(hour=0, minute=0, second=0, microsecond=0)
     tw_end = target_date_obj.replace(hour=23, minute=59, second=59, microsecond=999999)
+    # 返回 UTC 時間以供資料庫查詢
     return tw_start - timedelta(hours=8), tw_end - timedelta(hours=8)
 
 # --- 1. 廚房看板主頁 ---
@@ -189,40 +190,117 @@ def cancel_order(oid):
     c.commit(); c.close()
     return "OK"
 
-# --- 5. 日結報表 ---
+# --- 5. 日結報表 (強化版統計與專業渲染) ---
 @kitchen_bp.route('/report')
 def daily_report():
-    target_date_str = request.args.get('date', (datetime.utcnow() + timedelta(hours=8)).strftime('%Y-%m-%d'))
+    target_date_str = request.args.get('date')
+    if not target_date_str:
+        target_date_str = (datetime.utcnow() + timedelta(hours=8)).strftime('%Y-%m-%d')
+    
     utc_start, utc_end = get_tw_time_range(target_date_str)
+    
     from database import get_db_connection
     conn = get_db_connection(); cur = conn.cursor()
-    cur.execute("SELECT content_json, total_price, status FROM orders WHERE created_at >= %s AND created_at <= %s", (utc_start, utc_end))
-    rows = cur.fetchall()
+    
+    # 查詢有效單與作廢單
+    cur.execute("SELECT COUNT(*), SUM(total_price) FROM orders WHERE created_at >= %s AND created_at <= %s AND status != 'Cancelled'", (utc_start, utc_end))
+    valid_count, valid_total = cur.fetchone()
+    
+    cur.execute("SELECT content_json FROM orders WHERE created_at >= %s AND created_at <= %s AND status != 'Cancelled'", (utc_start, utc_end))
+    valid_rows = cur.fetchall()
+    
+    cur.execute("SELECT COUNT(*), SUM(total_price) FROM orders WHERE created_at >= %s AND created_at <= %s AND status = 'Cancelled'", (utc_start, utc_end))
+    void_count, void_total = cur.fetchone()
+    
+    cur.execute("SELECT content_json FROM orders WHERE created_at >= %s AND created_at <= %s AND status = 'Cancelled'", (utc_start, utc_end))
+    void_rows = cur.fetchall()
     conn.close()
-    valid_stats = {}; void_stats = {}
-    valid_total = 0; void_total = 0
-    valid_count = 0; void_count = 0
-    for c_json, price, status in rows:
-        stats = void_stats if status == 'Cancelled' else valid_stats
-        if status == 'Cancelled': void_total += price; void_count += 1
-        else: valid_total += price; valid_count += 1
-        try:
-            items = json.loads(c_json) if c_json else []
-            for i in items:
-                name = i.get('name_zh', i.get('name', '未知'))
-                qty = int(i.get('qty', 0))
-                amt = int(i.get('price', 0)) * qty
-                if name not in stats: stats[name] = {'qty': 0, 'amt': 0}
-                stats[name]['qty'] += qty; stats[name]['amt'] += amt
-        except: continue
+
+    # 統計品項函數 (整合您的強力偵測邏輯)
+    def agg_items(rows):
+        stats = {}
+        for r in rows:
+            if not r[0]: continue
+            try:
+                items = json.loads(r[0]) if isinstance(r[0], str) else r[0]
+                if isinstance(items, dict): items = [items]
+                for i in items:
+                    name = i.get('name_zh', i.get('name', '未知品項'))
+                    try:
+                        qty = int(float(i.get('qty', 0)))
+                    except:
+                        qty = 0
+
+                    line_total = 0
+                    raw_price = i.get('price') or i.get('unit_price') or i.get('cost') or i.get('amount')
+                    raw_line_total = i.get('total') or i.get('subtotal') or i.get('item_total')
+
+                    try:
+                        if raw_price is not None:
+                            line_total = int(float(raw_price) * qty)
+                        elif raw_line_total is not None:
+                            line_total = int(float(raw_line_total))
+                    except:
+                        line_total = 0
+
+                    if name not in stats:
+                        stats[name] = {'qty': 0, 'total_amt': 0}
+                    stats[name]['qty'] += qty
+                    stats[name]['total_amt'] += line_total
+            except: continue
+        return stats
+
+    valid_stats = agg_items(valid_rows)
+    void_stats = agg_items(void_rows)
+
     def render_table(stats_dict):
-        if not stats_dict: return "<p style='text-align:center;color:#888;'>無銷售資料</p>"
-        h = "<table style='width:100%;border-collapse:collapse;font-size:14px;'><thead><tr style='background:#f0f0f0;'><th style='text-align:left;padding:6px;'>品項</th><th style='text-align:right;padding:6px;'>量</th><th style='text-align:right;padding:6px;'>金額</th></tr></thead><tbody>"
+        if not stats_dict: return "<p style='text-align:center;color:#888;padding:10px;'>無銷售資料</p>"
+        h = """<table style='width:100%; border-collapse:collapse; font-size:14px; margin-top:5px;'>
+            <thead><tr style='border-bottom:2px solid #444; background-color: #f0f0f0;'>
+            <th style='text-align:left; padding: 6px;'>品項</th>
+            <th style='text-align:right; padding: 6px;'>數量</th>
+            <th style='text-align:right; padding: 6px;'>金額</th></tr></thead><tbody>"""
         for name, data in sorted(stats_dict.items(), key=lambda x: x[1]['qty'], reverse=True):
-            h += f"<tr style='border-bottom:1px solid #eee;'><td style='padding:6px;'>{name}</td><td style='text-align:right;padding:6px;'>{data['qty']}</td><td style='text-align:right;padding:6px;'>${data['amt']:,}</td></tr>"
+            color = "color:red;" if data['total_amt'] == 0 else ""
+            h += f"""<tr style='border-bottom: 1px dotted #ccc;'>
+                <td style='padding:8px 4px;'>{name}</td>
+                <td style='text-align:right; padding:8px 4px;'>{data['qty']}</td>
+                <td style='text-align:right; padding:8px 4px; {color}'>${data['total_amt']:,}</td></tr>"""
         return h + "</tbody></table>"
+
     return f"""
-    <!DOCTYPE html><html><head><meta charset="UTF-8"><title>日結報表_{target_date_str}</title>
-    <style>body {{ font-family: sans-serif; background: #eee; padding: 20px; display: flex; flex-direction: column; align-items: center; }} .ticket {{ background: white; width: 80mm; padding: 20px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); border-radius: 4px; }} .no-print {{ margin-bottom: 20px; background: white; padding: 15px; border-radius: 8px; }} .summary {{ background: #f9f9f9; padding: 10px; border-left: 4px solid #4caf50; margin: 10px 0; }} @media print {{ .no-print {{ display: none; }} body {{ background: white; padding: 0; }} .ticket {{ box-shadow: none; width: 100%; }} }}</style></head>
-    <body><div class="no-print"><form action="/kitchen/report" method="get">📅 日期：<input type="date" name="date" value="{target_date_str}" onchange="this.form.submit()"><button type="button" onclick="window.print()">🖨️ 列印</button><a href="/kitchen">🔙 返回</a></form></div><div class="ticket"><h2 style="text-align:center;">日結營收報表</h2><p style="text-align:center;">{target_date_str}</p><div class="summary"><b>✅ 有效訂單</b><br>單數：{valid_count} 筆 / 總額：<span style="color:green;font-weight:bold;">${valid_total:,}</span></div>{render_table(valid_stats)}<div class="summary" style="border-left-color: #f44336; margin-top:20px;"><b>❌ 作廢統計</b><br>單數：{void_count} 筆 / 金額：${void_total:,}</div>{render_table(void_stats)}</div></body></html>
+    <!DOCTYPE html><html><head><meta charset="UTF-8">
+    <title>日結報表_{target_date_str}</title>
+    <style>
+        body {{ font-family: sans-serif; background: #eee; padding: 20px; display: flex; flex-direction: column; align-items: center; }} 
+        .ticket {{ background: white; width: 85mm; padding: 20px; box-shadow: 0 4px 15px rgba(0,0,0,0.15); border-radius: 4px; }} 
+        .summary-box {{ margin-bottom: 15px; padding: 12px; border-radius: 8px; border-left: 5px solid #28a745; background: #f8f9fa; }} 
+        .void-box {{ border-left-color: #dc3545; background: #fff5f5; }}
+        .no-print {{ margin-bottom: 20px; background: white; padding: 15px; border-radius: 8px; }}
+        .btn {{ padding: 8px 15px; border-radius: 4px; text-decoration: none; color: white; border: none; cursor: pointer; }}
+        @media print {{ .no-print {{ display: none; }} body {{ background: white; padding: 0; }} .ticket {{ box-shadow: none; width: 100%; }} }}
+    </style></head>
+    <body>
+        <div class="no-print">
+            <form action="/kitchen/report" method="get">
+                📅 日期：<input type="date" name="date" value="{target_date_str}" onchange="this.form.submit()">
+                <button type="button" class="btn" style="background:#28a745" onclick="window.print()">🖨️ 列印</button>
+                <a href="/kitchen" class="btn" style="background:#6c757d">🔙 返回</a>
+            </form>
+        </div>
+        <div class="ticket">
+            <h2 style="text-align:center;border-bottom:2px solid #333;padding-bottom:10px;">日結營收報表</h2>
+            <p style="text-align:center;">營業日期: <b>{target_date_str}</b></p>
+            <div class="summary-box">
+                <b>✅ 有效訂單統計</b><br>單數：{valid_count or 0} 筆<br>總額：<span style="color:#28a745;font-size:1.2em;font-weight:bold;">${int(valid_total or 0):,}</span>
+            </div>
+            <b>[ 商品銷售明細 ]</b>
+            {render_table(valid_stats)}
+            <div class="summary-box void-box" style="margin-top:20px;">
+                <b>❌ 作廢/取消統計</b><br>單數：{void_count or 0} 筆<br>金額：${int(void_total or 0):,}
+            </div>
+            {render_table(void_stats)}
+            <p style="text-align:center; font-size:11px; color:#999; margin-top:20px;">製表時間: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
+        </div>
+    </body></html>
     """
