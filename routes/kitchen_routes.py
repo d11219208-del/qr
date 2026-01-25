@@ -157,9 +157,12 @@ def sales_ranking():
     sorted_data = [{"name": k, "total_qty": v} for k, v in sorted(stats.items(), key=lambda item: item[1], reverse=True)]
     return jsonify(sorted_data)
 
-# --- 4. 補印功能 ---
+# --- 4. 補印功能 (強化版：支援分單列印) ---
 @kitchen_bp.route('/print_order/<int:oid>')
 def print_order(oid):
+    # 取得列印類型: receipt(結帳單), kitchen(廚房單), all(全部)
+    print_type = request.args.get('type', 'all')
+    
     conn = get_db_connection(); cur = conn.cursor()
     cur.execute("SELECT id, table_number, total_price, status, created_at, daily_seq, content_json, lang FROM orders WHERE id=%s", (oid,))
     o = cur.fetchone()
@@ -172,20 +175,66 @@ def print_order(oid):
     tw_time = created_at + timedelta(hours=8)
     time_str = tw_time.strftime('%Y-%m-%d %H:%M:%S')
 
-    def mk_ticket(t_name, item_list, show_total=False, is_kitchen=False):
+    # 定義列印專用樣式 (適合 58mm/80mm 熱感紙)
+    ticket_style = """
+    <style>
+        body { font-family: "Microsoft JhengHei", sans-serif; margin: 0; padding: 10px; width: 70mm; }
+        .ticket { border-bottom: 2px dashed #000; padding-bottom: 10px; margin-bottom: 20px; }
+        .head { text-align: center; }
+        .head h1 { font-size: 45px; margin: 5px 0; }
+        .head h2 { font-size: 20px; margin: 0; border: 1px solid #000; display: inline-block; padding: 2px 10px; }
+        .info { font-size: 16px; font-weight: bold; margin: 10px 0; }
+        .row { display: flex; justify-content: space-between; font-size: 18px; font-weight: bold; margin-top: 8px; }
+        .opt { font-size: 14px; margin-left: 15px; border-left: 2px solid #ccc; padding-left: 5px; }
+        .total { text-align: right; font-size: 22px; font-weight: 900; margin-top: 15px; border-top: 1px solid #000; padding-top: 5px; }
+        .break { page-break-after: always; }
+        @media print { .no-print { display: none; } }
+    </style>
+    """
+
+    def mk_ticket(t_name, item_list, show_total=False):
         if not item_list: return ""
-        h = f"<div class='ticket'><div class='head'><h2>{t_name}</h2><h1>#{seq}</h1><p>Table: {table_num}</p><small>{time_str}</small></div><hr>"
+        h = f"""
+        <div class='ticket'>
+            <div class='head'>
+                <h2>{t_name}</h2>
+                <h1>#{seq}</h1>
+            </div>
+            <div class='info'>
+                桌號: {table_num} <br>
+                時間: {time_str}
+            </div>
+            <hr style="border: 0; border-top: 1px solid #000;">
+        """
         for i in item_list:
             qty = i.get('qty', 1)
-            d_name = i.get('name_zh', '商品') if is_kitchen else i.get('name_zh')
+            name = i.get('name_zh', '商品')
             ops = i.get('options_zh', [])
-            h += f"<div class='row'><span>{qty} x {d_name}</span><span></span></div>"
+            h += f"<div class='row'><span>{name}</span><span>x{qty}</span></div>"
             if ops: h += f"<div class='opt'>└ {', '.join(ops)}</div>"
-        if show_total: h += f"<hr><div style='text-align:right;font-size:1.2em;font-weight:bold;'>Total: ${total_val}</div>"
+        
+        if show_total:
+            h += f"<div class='total'>總計: ${int(total_val)}</div>"
+        
+        # 加上頁底訊息
+        h += f"<div style='text-align:center; font-size:12px; margin-top:10px;'>*** 補印單據 ***</div>"
         return h + "</div><div class='break'></div>"
 
-    body = mk_ticket("結帳單 (Receipt)", items, show_total=True)
-    return f"<html><body onload='window.print();window.close();'>{body}</body></html>" # 簡化列印模板以節省篇幅
+    body_html = ""
+    # 根據參數組合內容
+    if print_type in ['receipt', 'all']:
+        body_html += mk_ticket("結帳單 (Receipt)", items, show_total=True)
+    if print_type in ['kitchen', 'all']:
+        body_html += mk_ticket("廚房工作單 (Kitchen)", items, show_total=False)
+
+    return f"""
+    <html>
+    <head>{ticket_style}</head>
+    <body onload="window.print(); setTimeout(()=>window.close(), 500);">
+        {body_html}
+    </body>
+    </html>
+    """
 
 # --- 5. 狀態變更 ---
 @kitchen_bp.route('/complete/<int:oid>')
@@ -316,5 +365,6 @@ def daily_report():
         </div>
     </body></html>
     """
+
 
 
