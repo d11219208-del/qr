@@ -39,7 +39,6 @@ def send_daily_report(manual_config=None, is_test=False):
             subject = f"【連線測試】Resend API 設定確認 ({today_str})"
             email_content = "✅ Resend API 連線成功！"
         else:
-            # (此處省略部分數據統計邏輯以節省篇幅，維持你原本的邏輯即可)
             subject = f"【日結單】{today_str} 營業統計報告"
             email_content = f"🍴 餐廳日結報表 ({today_str})"
 
@@ -87,13 +86,12 @@ def admin_panel():
 
     cur.execute("SELECT key, value FROM settings")
     config = dict(cur.fetchall())
-    # 確保查詢欄位與 admin.html 的 p[0], p[1] 索引對應
     cur.execute("SELECT id, name, price, category, is_available, print_category, sort_order, image_url, name_en, name_jp, name_kr FROM products ORDER BY sort_order ASC, id DESC")
     prods = cur.fetchall()
     conn.close()
     return render_template('admin.html', config=config, prods=prods, msg=msg)
 
-# --- 路由：編輯產品 (修正 Blueprint 格式) ---
+# --- 路由：編輯產品 (完整多國語言版) ---
 @admin_bp.route('/edit_product/<int:pid>', methods=['GET','POST'])
 def edit_product(pid):
     conn = get_db_connection()
@@ -122,6 +120,7 @@ def edit_product(pid):
             return redirect(url_for('admin.admin_panel', msg="✅ 產品已更新"))
         except Exception as e:
             conn.rollback()
+            traceback.print_exc()
             return f"Update Error: {e}"
         finally:
             conn.close()
@@ -143,6 +142,7 @@ def edit_product(pid):
     
     if not row: return "找不到該產品", 404
 
+    # 建立絕對對應表
     idx = {
         'id': 0, 'name': 1, 'price': 2, 'category': 3, 'image_url': 4,
         'custom_options': 5, 'sort_order': 6,
@@ -156,7 +156,6 @@ def edit_product(pid):
         val = row[idx[key]]
         return val if val is not None else ""
 
-    # 使用 f-string 渲染 HTML (注意：在大括號中使用雙大括號 {{}} 逃避 CSS/JS)
     return f"""
     <!DOCTYPE html><html><head><meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -164,46 +163,67 @@ def edit_product(pid):
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/milligram/1.4.1/milligram.min.css">
     <style>
         body {{ padding: 20px; background: #f4f7f6; font-family: sans-serif; }}
-        .container {{ background: white; padding: 30px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); max-width: 800px; margin: auto; }}
-        h5 {{ background: #9b4dca; color: white; padding: 5px 10px; border-radius: 4px; margin-top: 20px; }}
+        .container {{ background: white; padding: 30px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); max-width: 900px; margin: auto; }}
+        h5 {{ background: #9b4dca; color: white; padding: 5px 10px; border-radius: 4px; margin-top: 25px; }}
+        label {{ font-weight: bold; margin-top: 10px; }}
         hr {{ margin: 30px 0; }}
+        .row {{ margin-bottom: 1.5rem; }}
     </style>
     </head>
     <body>
         <div class="container">
             <h3>📝 編輯產品 #{v('id')}</h3>
             <form method="POST">
-                <h5>1. 基本資料 & 排序</h5>
+                <h5>1. 基本資料 & 區域</h5>
                 <div class="row">
-                    <div class="column"><label>名稱 (中文)</label><input type="text" name="name" value="{v('name')}" required></div>
+                    <div class="column column-40"><label>名稱 (中文)</label><input type="text" name="name" value="{v('name')}" required></div>
                     <div class="column"><label>價格</label><input type="number" name="price" value="{v('price')}" required></div>
                     <div class="column"><label>排序</label><input type="number" name="sort_order" value="{v('sort_order')}"></div>
                 </div>
-                <h5>2. 分類與區域</h5>
                 <div class="row">
-                    <div class="column"><label>分類 (中)</label><input type="text" name="category" value="{v('category')}"></div>
-                    <div class="column"><label>出單區域</label>
+                    <div class="column">
+                        <label>出單區域</label>
                         <select name="print_category">
-                            <option value="Noodle" {'selected' if v('print_category')=='Noodle' else ''}>麵區</option>
-                            <option value="Soup" {'selected' if v('print_category')=='Soup' else ''}>湯區</option>
+                            <option value="Noodle" {'selected' if v('print_category')=='Noodle' else ''}>🍜 麵區</option>
+                            <option value="Soup" {'selected' if v('print_category')=='Soup' else ''}>🍲 湯區</option>
                         </select>
                     </div>
+                    <div class="column column-67"><label>圖片 URL</label><input type="text" name="image_url" value="{v('image_url')}"></div>
                 </div>
-                <h5>🌐 多國語言品名</h5>
+
+                <h5>2. 分類多語翻譯 (Category)</h5>
                 <div class="row">
-                    <div class="column"><label>English</label><input type="text" name="name_en" value="{v('name_en')}"></div>
-                    <div class="column"><label>日本語</label><input type="text" name="name_jp" value="{v('name_jp')}"></div>
-                    <div class="column"><label>한국어</label><input type="text" name="name_kr" value="{v('name_kr')}"></div>
+                    <div class="column"><label>中文分類</label><input type="text" name="category" value="{v('category')}"></div>
+                    <div class="column"><label>English Category</label><input type="text" name="category_en" value="{v('category_en')}"></div>
+                    <div class="column"><label>日本語 カテゴリ</label><input type="text" name="category_jp" value="{v('category_jp')}"></div>
+                    <div class="column"><label>한국어 카테고리</label><input type="text" name="category_kr" value="{v('category_kr')}"></div>
                 </div>
-                <div style="margin-top:30px; text-align: right;">
-                    <a href="{url_for('admin.admin_panel')}" class="button button-outline">❌ 取消</a>
-                    <button type="submit">💾 儲存變更</button>
+
+                <h5>3. 品名多語翻譯 (Name)</h5>
+                <div class="row">
+                    <div class="column"><label>English Name</label><input type="text" name="name_en" value="{v('name_en')}"></div>
+                    <div class="column"><label>日本語 名称</label><input type="text" name="name_jp" value="{v('name_jp')}"></div>
+                    <div class="column"><label>한국어 이름</label><input type="text" name="name_kr" value="{v('name_kr')}"></div>
+                </div>
+
+                <h5>4. 客製化選項多語翻譯 (Options)</h5>
+                <label>中文選項 (例如: 加麵,去蔥)</label>
+                <input type="text" name="custom_options" value="{v('custom_options')}">
+                <div class="row">
+                    <div class="column"><label>English Options</label><input type="text" name="custom_options_en" value="{v('custom_options_en')}"></div>
+                    <div class="column"><label>日本語 オプション</label><input type="text" name="custom_options_jp" value="{v('custom_options_jp')}"></div>
+                    <div class="column"><label>한국어 옵션</label><input type="text" name="custom_options_kr" value="{v('custom_options_kr')}"></div>
+                </div>
+
+                <div style="margin-top:40px; text-align: right; border-top: 1px solid #eee; padding-top: 20px;">
+                    <a href="{url_for('admin.admin_panel')}" class="button button-outline">❌ 取消回後台</a>
+                    <button type="submit" style="margin-left:10px;">💾 儲存所有變更</button>
                 </div>
             </form>
         </div>
     </body></html>"""
 
-# --- 其他功能路由 (切換、刪除、排序) ---
+# --- 其他功能路由 ---
 @admin_bp.route('/toggle_product/<int:pid>', methods=['POST'])
 def toggle_product(pid):
     conn = get_db_connection(); cur = conn.cursor()
