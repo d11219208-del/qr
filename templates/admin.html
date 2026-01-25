@@ -3,80 +3,155 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>餐廳後台管理</title>
+    <title>餐廳後台管理 - 進階版</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/milligram/1.4.1/milligram.min.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.14.0/Sortable.min.js"></script>
     <style>
-        :root { --primary: #9b4dca; }
-        body { background: #f4f5f7; padding-bottom: 50px; }
-        .container { max-width: 1000px; margin: 0 auto; padding: 20px; }
+        :root { --primary: #9b4dca; --bg: #f4f5f7; }
+        body { background: var(--bg); padding-bottom: 50px; }
+        .container { max-width: 1100px; margin: 0 auto; padding: 20px; }
         .card { background: #fff; border-radius: 12px; padding: 25px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); margin-bottom: 25px; }
-        .btn-full { width: 100%; } .btn-sm { padding: 0 10px; height: 28px; line-height: 26px; }
+        
+        /* 搜尋欄置頂效果 */
+        .sticky-search {
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            background: var(--bg);
+            padding: 15px 0;
+            margin-bottom: 10px;
+        }
+        .sticky-search input { 
+            background: #fff; 
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            margin-bottom: 0;
+        }
+
+        .btn-full { width: 100%; } 
+        .btn-sm { padding: 0 10px; height: 28px; line-height: 26px; font-size: 1.1rem; }
         .status-on { background: #e6ffed; color: #28a745; border-color: #b7eb8f; }
         .status-off { background: #fff1f0; color: #f5222d; border-color: #ffa39e; }
-        .alert { padding: 12px; background: #e6f7ff; color: #0050b3; display: none; margin-bottom: 20px; border-radius: 6px; }
-        .prod-cat { font-size: 0.8em; color: #666; }
-        .handle { cursor: grab; color: #999; }
+        
+        .alert { padding: 12px; background: #e6f7ff; color: #0050b3; border-radius: 6px; margin-bottom: 20px; border-left: 5px solid #1890ff; }
+        .lang-tag { font-size: 0.7em; background: #eee; padding: 2px 5px; border-radius: 4px; margin-right: 3px; color: #666; }
+        .handle { cursor: grab; color: #ccc; font-size: 20px; }
+        
+        /* 表格優化 */
+        table { border-collapse: collapse; }
+        tr.product-row:hover { background: #fafafa; }
+        .prod-detail { font-size: 0.85em; color: #888; margin-top: 4px; }
+        
+        .flex-actions { display: flex; gap: 10px; align-items: center; }
+        .import-box { border: 2px dashed #ccc; padding: 15px; border-radius: 8px; text-align: center; margin-bottom: 20px; }
     </style>
 </head>
 <body>
     <div class="container">
-        <h2>🍴 餐廳後台</h2>
-        <a href="/kitchen" class="button">👨‍🍳 廚房看板</a>
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+            <h2>🍴 餐廳系統後台</h2>
+            <div>
+                <a href="/kitchen" class="button button-outline">👨‍🍳 進入廚房看板</a>
+            </div>
+        </div>
         
         {% if msg %}
-        <div id="status-msg" class="alert" style="display:block;">{{ msg }}</div>
+        <div id="status-msg" class="alert">{{ msg }}</div>
         {% endif %}
 
         <div class="card">
-            <h4>⚙️ 郵件報表設定</h4>
+            <h4>⚙️ 系統與報表設定</h4>
             <form method="POST" action="/admin">
-                <input type="email" name="report_email" value="{{ config.get('report_email','') }}" placeholder="收件人 Email">
-                <input type="email" name="sender_email" value="{{ config.get('sender_email','') }}" placeholder="發件人 Email">
-                <input type="password" name="resend_api_key" value="{{ config.get('resend_api_key','') }}" placeholder="Resend API Key">
+                <div class="row">
+                    <div class="column"><label>收件 Email</label><input type="email" name="report_email" value="{{ config.get('report_email','') }}" placeholder="接收每日報表"></div>
+                    <div class="column"><label>Resend API Key</label><input type="password" name="resend_api_key" value="{{ config.get('resend_api_key','') }}" placeholder="re_..."></div>
+                </div>
                 <button type="submit" name="action" value="save_settings">💾 儲存設定</button>
-                <button type="submit" name="action" value="test_email" class="button button-outline">🧪 發送測試信</button>
-            </form>
-            <hr>
-            <form method="POST" action="/admin">
-                <button type="submit" name="action" value="send_report_now">📊 立即產生並發送今日報表</button>
+                <button type="submit" name="action" value="test_email" class="button button-outline">🧪 測試發送</button>
+                <button type="submit" name="action" value="send_report_now" class="button button-outline" style="float: right;">📊 立即發送今日報表</button>
             </form>
         </div>
 
         <div class="card">
-            <h4>➕ 新增產品</h4>
+            <h4>➕ 新增/編輯產品</h4>
             <form method="POST" action="/admin">
                 <input type="hidden" name="action" value="add_product">
                 <div class="row">
-                    <div class="column"><input type="text" name="name" required placeholder="名稱 (中)"></div>
-                    <div class="column"><input type="number" name="price" required placeholder="價格"></div>
+                    <div class="column column-40">
+                        <label>品項名稱 (繁中)</label>
+                        <input type="text" name="name" required placeholder="例如：紅燒牛肉麵">
+                    </div>
+                    <div class="column">
+                        <label>價格</label>
+                        <input type="number" name="price" required placeholder="100">
+                    </div>
+                    <div class="column">
+                        <label>分類</label>
+                        <input type="text" name="category" placeholder="主食">
+                    </div>
                 </div>
-                <input type="text" name="category" placeholder="分類 (如: 主食)">
-                <input type="text" name="image_url" placeholder="圖片網址">
-                <button type="submit" class="button btn-full">🚀 新增產品</button>
+                
+                <div class="row">
+                    <div class="column"><input type="text" name="name_en" placeholder="English Name (EN)"></div>
+                    <div class="column"><input type="text" name="name_jp" placeholder="日本語名称 (JP)"></div>
+                    <div class="column"><input type="text" name="name_kr" placeholder="한국어 이름 (KR)"></div>
+                </div>
+
+                <div class="row">
+                    <div class="column column-75"><input type="text" name="image_url" placeholder="圖片連結 (URL)"></div>
+                    <div class="column"><button type="submit" class="button btn-full">🚀 提交產品</button></div>
+                </div>
             </form>
         </div>
 
         <div class="card">
-            <h4>📋 菜單管理 (可拖曳排序)</h4>
-            <input type="text" id="productSearch" placeholder="搜尋品項...">
+            <h4>📂 批次管理 (Excel)</h4>
+            <div class="row">
+                <div class="column">
+                    <div class="import-box">
+                        <form method="POST" action="/admin/import_menu" enctype="multipart/form-data">
+                            <label>匯入菜單 (.xlsx)</label>
+                            <input type="file" name="excel_file" accept=".xlsx" required>
+                            <button type="submit" class="button button-small">📥 開始匯入</button>
+                        </form>
+                    </div>
+                </div>
+                <div class="column">
+                    <div class="import-box" style="border-style: solid;">
+                        <label>備份數據</label><br>
+                        <a href="/admin/export_menu" class="button button-outline btn-full">📤 匯出目前菜單 Excel</a>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="sticky-search">
+            <input type="text" id="productSearch" placeholder="🔍 輸入關鍵字搜尋品項 (名稱、分類、語言)...">
+        </div>
+
+        <div class="card">
+            <h4>📋 菜單清單 (拖曳可排序)</h4>
             <table>
                 <thead>
                     <tr>
-                        <th width="50">排序</th>
-                        <th>品項</th>
-                        <th>價格</th>
-                        <th>狀態</th>
-                        <th>操作</th>
+                        <th width="40"></th>
+                        <th>品項詳情</th>
+                        <th width="100">價格</th>
+                        <th width="120">狀態</th>
+                        <th width="120">操作</th>
                     </tr>
                 </thead>
                 <tbody id="menu-list">
                     {% for p in prods %}
                     <tr data-id="{{ p[0] }}" class="product-row">
                         <td class="handle">☰</td>
-                        <td class="search-key">
-                            <div class="prod-name">{{ p[1] }} {% if p[7] %}🖼️{% endif %}</div>
-                            <div class="prod-cat">{{ p[3] }} / {{ p[5] }}</div>
+                        <td>
+                            <div class="prod-name"><b>{{ p[1] }}</b></div>
+                            <div class="prod-detail">
+                                <span class="lang-tag">EN</span>{{ p[8] or '-' }} | 
+                                <span class="lang-tag">JP</span>{{ p[9] or '-' }} | 
+                                <span class="lang-tag">KR</span>{{ p[10] or '-' }}
+                            </div>
+                            <div class="prod-detail">分類: {{ p[3] }} | 列印: {{ p[5] }}</div>
                         </td>
                         <td><b>${{ p[2] }}</b></td>
                         <td>
@@ -85,28 +160,27 @@
                                 {{ '上架中' if p[4] else '已下架' }}
                             </button>
                         </td>
-                        <td>
-                            <a href="/admin/edit_product/{{ p[0] }}" class="button button-clear">✎</a>
-                            <a href="/admin/delete_product/{{ p[0] }}" class="button button-clear" style="color:red;" onclick="return confirm('確定刪除?')">✖</a>
+                        <td class="flex-actions">
+                            <a href="/admin/edit_product/{{ p[0] }}" class="button button-clear">✎ 編輯</a>
+                            <a href="/admin/delete_product/{{ p[0] }}" class="button button-clear" style="color:red;" onclick="return confirm('確定刪除品項?')">✖</a>
                         </td>
                     </tr>
                     {% endfor %}
                 </tbody>
             </table>
-            <hr>
-            <a href="/admin/export_menu" class="button button-outline">📤 匯出 Excel</a>
-            <div style="float:right;">
-                <a href="/admin/reset_menu" class="button" style="background:red;" onclick="return confirm('確定清空菜單?')">🗑️ 清空菜單</a>
+            
+            <div style="margin-top: 30px; text-align: right;">
+                <a href="/admin/reset_menu" class="button" style="background:#ff4d4f; border-color:#ff4d4f;" onclick="return confirm('⚠️ 警告：這將刪除所有產品數據！')">🗑️ 清空所有菜單</a>
             </div>
         </div>
     </div>
 
     <script>
-        // 自動隱藏訊息
+        // 1. 自動隱藏訊息
         const msgBox = document.getElementById('status-msg');
-        if(msgBox) { setTimeout(()=> msgBox.style.display='none', 3000); }
+        if(msgBox) { setTimeout(()=> msgBox.style.opacity='0', 2500); }
         
-        // 切換上下架
+        // 2. 切換上下架 (AJAX)
         function toggleProduct(pid, btn) {
             fetch('/admin/toggle_product/' + pid, {method:'POST'})
             .then(r=>r.json()).then(d=>{
@@ -117,18 +191,20 @@
             });
         }
 
-        // 搜尋功能
+        // 3. 進階搜尋功能 (支援多國語言搜尋)
         document.getElementById('productSearch').addEventListener('input', e=>{
             let v = e.target.value.toLowerCase();
             document.querySelectorAll('.product-row').forEach(r=>{
-                r.style.display = r.innerText.toLowerCase().includes(v) ? '' : 'none';
+                const text = r.innerText.toLowerCase();
+                r.style.display = text.includes(v) ? '' : 'none';
             });
         });
 
-        // 拖曳排序
+        // 4. 拖曳排序同步到資料庫
         Sortable.create(document.getElementById('menu-list'), {
             handle: '.handle',
             animation: 150,
+            ghostClass: 'sortable-ghost',
             onEnd: function() {
                 let order = Array.from(document.querySelectorAll('#menu-list tr')).map(r=>r.getAttribute('data-id'));
                 fetch('/admin/reorder_products', {
