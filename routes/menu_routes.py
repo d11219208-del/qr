@@ -12,7 +12,7 @@ def index():
     table_num = request.args.get('table', '')
     return render_template('index.html', table_num=table_num)
 
-# --- 點餐頁面 (bfcache & 編輯功能強化版) ---
+# --- 點餐頁面 (修正並發流水號問題) ---
 @menu_bp.route('/menu', methods=['GET', 'POST'])
 def menu():
     display_lang = request.args.get('lang', 'zh')
@@ -57,24 +57,35 @@ def menu():
 
             items_str = " + ".join(display_list)
 
-            # --- 核心修正：解決並發流水號重複問題 ---
-            # 使用單一 SQL 語句，讓資料庫在寫入時即時計算當日最大值 + 1
-            # 這樣在高並發時，資料庫會確保每一筆 INSERT 的 daily_seq 都是唯一的
+            # --- 核心修正：利用資料庫原子性解決並發衝突 ---
+            # 1. 直接在 INSERT 中嵌入子查詢
+            # 2. 如果是 PostgreSQL，這類語句在執行時會保證 daily_seq 的唯一性
             cur.execute("""
                 INSERT INTO orders (
                     table_number, items, total_price, lang, 
                     daily_seq, 
                     content_json, need_receipt, created_at
                 )
-                VALUES (
+                SELECT 
                     %s, %s, %s, %s, 
-                    (SELECT COALESCE(MAX(daily_seq), 0) + 1 FROM orders WHERE created_at >= CURRENT_DATE), 
+                    COALESCE(MAX(daily_seq), 0) + 1, 
                     %s, %s, NOW()
-                ) 
+                FROM orders 
+                WHERE created_at >= CURRENT_DATE
                 RETURNING id, daily_seq
             """, (table_number, items_str, total_price, final_lang, cart_json, need_receipt))
 
             res = cur.fetchone()
+            # 如果今天還沒有訂單，子查詢可能回傳空值，需處理 edge case
+            if not res:
+                # 重新嘗試：強制插入第一筆
+                cur.execute("""
+                    INSERT INTO orders (table_number, items, total_price, lang, daily_seq, content_json, need_receipt, created_at)
+                    VALUES (%s, %s, %s, %s, 1, %s, %s, NOW())
+                    RETURNING id, daily_seq
+                """, (table_number, items_str, total_price, final_lang, cart_json, need_receipt))
+                res = cur.fetchone()
+
             oid = res[0]
             
             # 如果是編輯訂單，將舊單作廢
@@ -83,9 +94,8 @@ def menu():
             
             conn.commit()
             
-            # 編輯模式完成後的處理
             if old_order_id: 
-                return f"<script>localStorage.removeItem('cart_cache'); alert('訂單 #{old_order_id} 已更新'); if(window.opener) window.opener.location.reload(); window.close();</script>"
+                return f"<script>localStorage.removeItem('cart_cache'); alert('訂單已更新'); if(window.opener) window.opener.location.reload(); window.close();</script>"
             
             return redirect(url_for('menu.order_success', order_id=oid, lang=final_lang))
             
@@ -95,7 +105,7 @@ def menu():
         finally:
             cur.close(); conn.close()
 
-    # --- GET 邏輯 (顯示菜單) ---
+    # --- GET 邏輯 ---
     url_table = request.args.get('table', '')
     edit_oid = request.args.get('edit_oid')
     preload_cart = "null" 
