@@ -3,18 +3,19 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>廚房出餐看板</title>
+    <title>🍳 廚房出餐看板 Pro</title>
     <style>
         :root {
             --pending: #fff4e5;
             --completed: #e8f5e9;
             --cancelled: #ffebee;
             --main-text: #333;
-            /* 銷售排名專用色 */
             --accent-purple: #673ab7;
             --accent-blue: #2196f3;
+            --accent-green: #4caf50;
+            --accent-orange: #ff9800;
         }
-        body { font-family: "Microsoft JhengHei", sans-serif; background: #f0f2f5; margin: 0; padding: 15px; }
+        body { font-family: "Microsoft JhengHei", sans-serif; background: #f0f2f5; margin: 0; padding: 15px; color: var(--main-text); }
         
         header { 
             display: flex; justify-content: space-between; align-items: center; 
@@ -24,60 +25,73 @@
 
         .order-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
             gap: 20px;
         }
 
+        /* 訂單卡片樣式 */
         .card { 
             background: white; border-radius: 12px; border: 1px solid #ddd;
             display: flex; flex-direction: column; overflow: hidden;
             transition: transform 0.2s;
         }
         .card:hover { transform: translateY(-3px); box-shadow: 0 5px 15px rgba(0,0,0,0.1); }
-
-        .card.pending { border-left: 8px solid #ff9800; background: var(--pending); }
-        .card.completed { border-left: 8px solid #4caf50; background: var(--completed); opacity: 0.8; }
-        .card.cancelled { border-left: 8px solid #f44336; background: var(--cancelled); opacity: 0.6; }
+        .card.pending { border-left: 8px solid var(--accent-orange); background: var(--pending); }
+        .card.completed { border-left: 8px solid var(--accent-green); background: var(--completed); opacity: 0.9; }
+        .card.cancelled { border-left: 8px solid #f44336; background: var(--cancelled); opacity: 0.7; }
 
         .card-header { 
             padding: 12px; border-bottom: 1px dashed #ccc; 
             display: flex; justify-content: space-between; align-items: flex-start;
         }
-        .seq-num { font-size: 24px; font-weight: bold; color: #d32f2f; }
-        .table-num { font-size: 20px; font-weight: bold; background: #333; color: white; padding: 4px 8px; border-radius: 4px; }
-        .time-stamp { font-size: 12px; color: #666; }
+        .seq-num { font-size: 26px; font-weight: bold; color: #d32f2f; }
+        .table-num { font-size: 20px; font-weight: bold; background: #333; color: white; padding: 4px 10px; border-radius: 4px; }
+        .time-stamp { font-size: 12px; color: #666; margin-top: 4px; }
 
-        .items { padding: 12px; flex-grow: 1; }
-        .item-row { margin-bottom: 8px; border-bottom: 1px solid rgba(0,0,0,0.05); padding-bottom: 4px; }
-        .item-name { display: flex; justify-content: space-between; font-size: 18px; font-weight: 600; }
+        .items { padding: 12px; flex-grow: 1; min-height: 100px; }
+        .item-row { margin-bottom: 8px; border-bottom: 1px solid rgba(0,0,0,0.05); padding-bottom: 6px; }
+        .item-name { display: flex; justify-content: space-between; font-size: 19px; font-weight: 600; }
         .item-qty { color: #d32f2f; font-weight: bold; }
+        .item-opts { font-size: 14px; color: #666; margin-top: 2px; padding-left: 10px; }
 
-        .actions { padding: 10px; background: rgba(255,255,255,0.5); display: flex; flex-direction: column; gap: 8px; }
+        .actions { padding: 12px; background: rgba(255,255,255,0.6); display: flex; flex-direction: column; gap: 8px; }
+        
+        /* 按鈕通用樣式 */
         .btn { 
             padding: 10px; border: none; border-radius: 6px; cursor: pointer; 
             font-size: 16px; font-weight: bold; text-align: center; text-decoration: none;
+            display: inline-block; transition: filter 0.2s;
         }
-        .btn-main { background: #4caf50; color: white; width: 100%; }
+        .btn:active { filter: brightness(0.8); }
+        .btn-main { background: var(--accent-green); color: white; width: 100%; }
         .btn-rank { background: var(--accent-purple); color: white; }
         .btn-print { background: var(--accent-blue); color: white; }
+        .btn-void { background: #f44336; color: white; }
+        .btn-group { display: flex; gap: 5px; width: 100%; }
+        .btn-group .btn { flex: 1; font-size: 14px; padding: 8px; }
 
-        /* --- 銷售排行榜彈窗樣式 --- */
+        /* --- 彈窗通用樣式 --- */
         .modal {
             display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%;
-            background-color: rgba(0,0,0,0.6);
+            background-color: rgba(0,0,0,0.6); backdrop-filter: blur(2px);
         }
         .modal-content {
             background-color: #fff; margin: 5% auto; padding: 25px;
-            border-radius: 12px; width: 90%; max-width: 600px; box-shadow: 0 5px 30px rgba(0,0,0,0.3);
+            border-radius: 12px; width: 90%; max-width: 550px; box-shadow: 0 5px 30px rgba(0,0,0,0.3);
         }
         .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; border-bottom: 1px solid #eee; padding-bottom: 10px; }
         .close { color: #aaa; font-size: 28px; font-weight: bold; cursor: pointer; }
-        
-        table { width: 100%; border-collapse: collapse; margin-top: 15px; }
-        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #eee; }
-        th { background: #f8f9fa; color: var(--accent-blue); }
+        .close:hover { color: #000; }
 
-        #loading-msg { text-align: center; padding: 50px; font-size: 1.5em; color: #666; }
+        /* 排行榜表格樣式 */
+        .rank-table { width: 100%; border-collapse: collapse; }
+        .rank-table th { background: #f8f9fa; position: sticky; top: 0; z-index: 1; }
+        .rank-table td, .rank-table th { padding: 12px; text-align: left; border-bottom: 1px solid #eee; }
+        .top-1 { background-color: #fff9c4 !important; } /* 金 */
+        .top-2 { background-color: #f5f5f5 !important; } /* 銀 */
+        .top-3 { background-color: #fff3e0 !important; } /* 銅 */
+
+        #loading-msg { text-align: center; padding: 100px; font-size: 1.5em; color: #888; grid-column: 1/-1; }
     </style>
 </head>
 <body>
@@ -102,22 +116,37 @@
 <div id="rankModal" class="modal">
     <div class="modal-content">
         <div class="modal-header">
-            <h2 style="margin:0;">🏆 商品銷售排行</h2>
+            <h2 style="margin:0;">🏆 商品銷售排行 (Top Rankings)</h2>
             <span class="close" onclick="closeRankModal()">&times;</span>
         </div>
-        <div style="display: flex; gap: 10px; align-items: flex-end; margin-bottom: 20px;">
+        <div style="display: flex; gap: 10px; align-items: flex-end; margin-bottom: 20px; flex-wrap: wrap;">
             <div>
-                <label style="font-size:12px;">開始日期</label><br>
-                <input type="date" id="startDate" style="padding:8px; border-radius:4px; border:1px solid #ddd;">
+                <label style="font-size:12px; font-weight: bold;">開始日期</label><br>
+                <input type="date" id="startDate" style="padding:8px; border:1px solid #ddd; border-radius:4px;">
             </div>
             <div>
-                <label style="font-size:12px;">結束日期</label><br>
-                <input type="date" id="endDate" style="padding:8px; border-radius:4px; border:1px solid #ddd;">
+                <label style="font-size:12px; font-weight: bold;">結束日期</label><br>
+                <input type="date" id="endDate" style="padding:8px; border:1px solid #ddd; border-radius:4px;">
             </div>
             <button onclick="fetchRanking()" class="btn btn-print" style="padding: 8px 20px;">查詢</button>
         </div>
-        <div id="rank-result" style="max-height: 400px; overflow-y: auto;">
-            <p style="color:#888; text-align:center;">請選擇日期區間並點擊查詢</p>
+        <div id="rank-result" style="max-height: 450px; overflow-y: auto; border: 1px solid #eee; border-radius: 8px;">
+            <p style="color:#888; text-align:center; padding: 20px;">請點擊查詢載入數據</p>
+        </div>
+    </div>
+</div>
+
+<div id="printModal" class="modal">
+    <div class="modal-content" style="max-width: 350px; text-align: center;">
+        <div class="modal-header">
+            <h3 style="margin:0;">🖨️ 選擇列印類型</h3>
+            <span class="close" onclick="closePrintModal()">&times;</span>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 12px; margin-top: 10px;">
+            <button onclick="doPrint('receipt')" class="btn" style="background: #2196f3; color: white; padding: 15px;">📄 僅結帳單 (含金額)</button>
+            <button onclick="doPrint('kitchen')" class="btn" style="background: #ff9800; color: white; padding: 15px;">🍳 僅廚房單 (大字體)</button>
+            <button onclick="doPrint('all')" class="btn" style="background: #4caf50; color: white; padding: 15px;">📋 全部列印</button>
+            <button onclick="closePrintModal()" class="btn" style="background: #eee; color: #333;">取消</button>
         </div>
     </div>
 </div>
@@ -126,11 +155,12 @@
 
 <script>
     let lastMaxSeq = 0;
+    let currentPrintOid = null;
     const grid = document.getElementById('order-grid');
     const updateTimeText = document.getElementById('update-time');
     const audio = document.getElementById('newOrderSound');
 
-    // 初始化日期選擇器為今天
+    // 初始化日期選擇器
     document.getElementById('startDate').valueAsDate = new Date();
     document.getElementById('endDate').valueAsDate = new Date();
 
@@ -145,38 +175,67 @@
             })
             .catch(error => {
                 updateTimeText.innerText = '連線失敗';
+                console.error(error);
             });
     }
 
+    /* --- 補印選擇邏輯 --- */
+    function askPrintType(oid) {
+        currentPrintOid = oid;
+        document.getElementById('printModal').style.display = "block";
+    }
+
+    function closePrintModal() {
+        document.getElementById('printModal').style.display = "none";
+        currentPrintOid = null;
+    }
+
+    function doPrint(type) {
+        if (!currentPrintOid) return;
+        const url = `/kitchen/print_order/${currentPrintOid}?type=${type}`;
+        window.open(url, '_blank');
+        closePrintModal();
+    }
+
     /* --- 排行榜邏輯 --- */
-    function openRankModal() { document.getElementById('rankModal').style.display = "block"; }
+    function openRankModal() { 
+        document.getElementById('rankModal').style.display = "block"; 
+        fetchRanking(); // 打開時自動查一次今天的
+    }
     function closeRankModal() { document.getElementById('rankModal').style.display = "none"; }
 
     function fetchRanking() {
         const start = document.getElementById('startDate').value;
         const end = document.getElementById('endDate').value;
         const resultDiv = document.getElementById('rank-result');
-        resultDiv.innerHTML = '<p style="text-align:center;">📊 正在計算數據...</p>';
+        resultDiv.innerHTML = '<p style="text-align:center; padding:20px;">📊 正在計算數據...</p>';
 
         fetch(`/kitchen/sales_ranking?start=${start}&end=${end}`)
             .then(res => res.json())
             .then(data => {
                 if (!data || data.length === 0) {
-                    resultDiv.innerHTML = '<p style="text-align:center;">此區間無銷售資料</p>';
+                    resultDiv.innerHTML = '<p style="text-align:center; padding:20px;">此區間無銷售資料</p>';
                     return;
                 }
-                let html = '<table><thead><tr><th>排行</th><th>商品名稱</th><th>銷售數量</th></tr></thead><tbody>';
+                let html = '<table class="rank-table"><thead><tr><th>排行</th><th>商品名稱</th><th>數量</th></tr></thead><tbody>';
                 data.forEach((item, index) => {
-                    html += `<tr>
-                        <td>${index + 1}</td>
-                        <td style="font-weight:bold;">${item.name}</td>
-                        <td style="color:#f57c00; font-weight:bold;">${item.total_qty}</td>
+                    let medal = "";
+                    let rowCls = "";
+                    if (index === 0) { medal = "🥇 "; rowCls = "top-1"; }
+                    else if (index === 1) { medal = "🥈 "; rowCls = "top-2"; }
+                    else if (index === 2) { medal = "🥉 "; rowCls = "top-3"; }
+                    else { medal = (index + 1); }
+
+                    html += `<tr class="${rowCls}">
+                        <td style="font-weight:bold;">${medal}</td>
+                        <td style="font-weight:bold; font-size:16px;">${item.name}</td>
+                        <td style="color:#f57c00; font-weight:bold; font-size:18px;">${item.total_qty}</td>
                     </tr>`;
                 });
                 resultDiv.innerHTML = html + '</tbody></table>';
             })
             .catch(err => {
-                resultDiv.innerHTML = '<p style="color:red; text-align:center;">查詢出錯，請確認後端路徑</p>';
+                resultDiv.innerHTML = '<p style="color:red; text-align:center; padding:20px;">查詢出錯，請稍後再試</p>';
             });
     }
 
@@ -199,8 +258,10 @@
 
     // 點擊 Modal 外部可關閉
     window.onclick = function(event) {
-        let modal = document.getElementById('rankModal');
-        if (event.target == modal) closeRankModal();
+        let rankModal = document.getElementById('rankModal');
+        let printModal = document.getElementById('printModal');
+        if (event.target == rankModal) closeRankModal();
+        if (event.target == printModal) closePrintModal();
     }
 </script>
 
