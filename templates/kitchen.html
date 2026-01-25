@@ -6,46 +6,88 @@
     <title>🍳 廚房出餐看板 Pro</title>
     <style>
         :root {
-            --pending: #fff4e5; --completed: #e8f5e9; --cancelled: #ffebee;
+            --pending: #fff4e5; --completed: #e8f5e9; --cancelled: rgba(244, 67, 54, 0.15);
             --main-text: #333; --accent-purple: #673ab7; --accent-blue: #2196f3;
-            --accent-green: #4caf50; --accent-orange: #ff9800;
+            --accent-green: #4caf50; --accent-orange: #ff9800; --accent-red: #f44336;
         }
         body { font-family: "Microsoft JhengHei", sans-serif; background: #f0f2f5; margin: 0; padding: 15px; color: var(--main-text); }
+        
         header { 
             display: flex; justify-content: space-between; align-items: center; 
             background: #fff; padding: 10px 20px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1);
             margin-bottom: 20px;
         }
+
         .order-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 20px; }
         
+        /* 基礎卡片樣式 */
         .card { 
             background: white; border-radius: 12px; border: 1px solid #ddd;
             display: flex; flex-direction: column; overflow: hidden;
-            transition: transform 0.2s;
+            transition: transform 0.2s; position: relative;
         }
-        .card.pending { border-left: 8px solid var(--accent-orange); background: var(--pending); }
-        .card.completed { border-left: 8px solid var(--accent-green); background: var(--completed); opacity: 0.8; }
 
-        .card-header { padding: 12px; border-bottom: 1px dashed #ccc; display: flex; justify-content: space-between; }
+        /* 1. 待出餐 (Pending) */
+        .card.pending { 
+            border-left: 8px solid var(--accent-orange); 
+            background: var(--pending); 
+        }
+
+        /* 2. 已完成 (Completed) */
+        .card.completed { 
+            border-left: 8px solid var(--accent-green); 
+            background: var(--completed); 
+            opacity: 0.8;
+            background-color: #f9f9f9;
+        }
+
+        /* 3. 已作廢 (Cancelled) - 關鍵更新部分 */
+        .card.cancelled {
+            background-color: var(--cancelled) !important; 
+            border: 2px solid rgba(244, 67, 54, 0.3) !important;
+            border-left: 8px solid var(--accent-red);
+            opacity: 0.75; 
+            filter: grayscale(0.4); 
+            overflow: hidden;
+        }
+
+        /* 作廢單浮水印文字 */
+        .card.cancelled::after {
+            content: "CANCELLED";
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%) rotate(-15deg);
+            font-size: 2.2em;
+            font-weight: 900;
+            color: rgba(244, 67, 54, 0.25);
+            pointer-events: none;
+            z-index: 1;
+            letter-spacing: 2px;
+        }
+
+        .card-header { padding: 12px; border-bottom: 1px dashed #ccc; display: flex; justify-content: space-between; z-index: 2; }
         .seq-num { font-size: 26px; font-weight: bold; color: #d32f2f; }
         .table-num { font-size: 20px; font-weight: bold; background: #333; color: white; padding: 4px 10px; border-radius: 4px; }
 
-        .items { padding: 12px; flex-grow: 1; }
+        .items { padding: 12px; flex-grow: 1; z-index: 2; }
         .item-row { margin-bottom: 8px; border-bottom: 1px solid rgba(0,0,0,0.05); padding-bottom: 6px; }
         .item-name { display: flex; justify-content: space-between; font-size: 19px; font-weight: 600; }
         .item-opts { font-size: 14px; color: #666; margin-left: 10px; }
 
-        .actions { padding: 12px; background: rgba(0,0,0,0.03); display: flex; flex-direction: column; gap: 8px; }
+        .actions { padding: 12px; background: rgba(0,0,0,0.03); display: flex; flex-direction: column; gap: 8px; z-index: 2; }
+        
         .btn { 
             padding: 10px; border: none; border-radius: 6px; cursor: pointer; 
             font-size: 16px; font-weight: bold; text-align: center;
         }
         .btn-main { background: var(--accent-green); color: white; }
         .btn-print { background: var(--accent-blue); color: white; }
+        .btn-void { background: var(--accent-red); color: white; }
 
         /* 彈窗樣式 */
         .modal {
-            display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%;
+            display: none; position: fixed; z-index: 2000; left: 0; top: 0; width: 100%; height: 100%;
             background-color: rgba(0,0,0,0.6); backdrop-filter: blur(3px);
         }
         .modal-content {
@@ -68,19 +110,20 @@
     </div>
     <div class="nav-links">
         <button onclick="refreshOrders()" class="btn" style="background:#eee;">🔄 刷新</button>
+        <a href="/kitchen/report" target="_blank" class="btn" style="background:#673ab7; color:white; text-decoration:none;">📊 營收報表</a>
     </div>
 </header>
 
 <div id="order-grid" class="order-grid">
-    <p style="text-align:center; grid-column: 1/-1;">正在載入訂單...</p>
+    <p style="text-align:center; grid-column: 1/-1;">正在載入今日訂單...</p>
 </div>
 
 <div id="printModal" class="modal">
     <div class="modal-content">
-        <h3 style="margin-top:0;">🖨️ 選擇補印內容</h3>
+        <h3 style="margin-top:0;">🖨️ 選擇列印內容</h3>
         <button onclick="doPrint('receipt')" class="modal-btn" style="background:var(--accent-blue); color:white;">📄 僅列印結帳單</button>
         <button onclick="doPrint('kitchen')" class="modal-btn" style="background:var(--accent-orange); color:white;">🍜 僅列印廚房單 (分區)</button>
-        <button onclick="doPrint('all')" class="modal-btn" style="background:var(--accent-green); color:white;">📋 列印全部</button>
+        <button onclick="doPrint('all')" class="modal-btn" style="background:var(--accent-green); color:white;">📋 列印全部單據</button>
         <button onclick="closePrintModal()" class="modal-btn" style="background:#eee; color:#333;">取消</button>
     </div>
 </div>
@@ -95,20 +138,33 @@
     const audio = document.getElementById('newOrderSound');
 
     function refreshOrders() {
+        // current_seq 用於讓後端判斷是否有新進訂單以觸發音效
         fetch('/kitchen/check_new_orders?current_seq=' + lastMaxSeq)
             .then(res => res.json())
             .then(data => {
-                if (data.html) grid.innerHTML = data.html;
-                if (data.new_ids && data.new_ids.length > 0) {
-                    audio.play().catch(e => {});
+                if (data.html) {
+                    grid.innerHTML = data.html;
                 }
-                lastMaxSeq = data.max_seq;
+                
+                // 檢查是否有新訂單 ID (用於播放音效)
+                if (data.new_ids && data.new_ids.length > 0) {
+                    audio.play().catch(e => console.log("音效播放受阻:", e));
+                }
+                
+                // 更新最後一筆序號
+                if (data.max_seq) {
+                    lastMaxSeq = data.max_seq;
+                }
+                
                 updateTimeText.innerText = '最後更新: ' + new Date().toLocaleTimeString();
             })
-            .catch(err => { updateTimeText.innerText = '連線失敗'; });
+            .catch(err => { 
+                updateTimeText.innerText = '連線失敗，請檢查網路'; 
+                console.error(err);
+            });
     }
 
-    // 由後端生成的按鈕點擊此函數
+    // 由後端 Python 渲染的 onclick="askPrintType(oid)" 觸發
     function askPrintType(oid) {
         currentPrintOid = oid;
         document.getElementById('printModal').style.display = "block";
@@ -126,16 +182,29 @@
         closePrintModal();
     }
 
+    // 處理出餐(Complete)或作廢(Cancel)的動作
     function action(url) {
-        fetch(url).then(res => { if (res.ok) refreshOrders(); });
+        fetch(url).then(res => { 
+            if (res.ok) {
+                refreshOrders(); 
+            } else {
+                alert("動作執行失敗");
+            }
+        });
     }
 
+    // 每 4 秒自動同步一次資料
     setInterval(refreshOrders, 4000);
+    
+    // 首次載入
     refreshOrders();
 
-    // 點擊 Modal 外部關閉
+    // 點擊彈窗外部區域自動關閉
     window.onclick = function(event) {
-        if (event.target == document.getElementById('printModal')) closePrintModal();
+        const modal = document.getElementById('printModal');
+        if (event.target == modal) {
+            closePrintModal();
+        }
     }
 </script>
 
