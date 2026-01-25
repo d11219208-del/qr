@@ -251,3 +251,25 @@ def reorder_products():
         cur.execute("UPDATE products SET sort_order = %s WHERE id = %s", (idx, pid))
     conn.commit(); conn.close()
     return jsonify({'status': 'success'})
+
+# --- 新增：清空訂單功能 ---
+@admin_bp.route('/reset_orders')
+def reset_orders():
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        # 清空 orders 資料表
+        # 注意：使用 DELETE 比較安全；若使用 PostgreSQL 且想重置 ID 可用 "TRUNCATE TABLE orders RESTART IDENTITY;"
+        cur.execute("DELETE FROM orders;") 
+        conn.commit()
+        msg = "✅ 所有歷史訂單已清空！"
+    except Exception as e:
+        conn.rollback()
+        msg = f"❌ 清空失敗: {e}"
+    finally:
+        cur.close()
+        conn.close()
+    
+    # 重導回後台首頁，並帶上訊息
+    # 注意：這裡使用 admin.admin_panel 是因為上方的函式名稱為 admin_panel
+    return redirect(url_for('admin.admin_panel', msg=msg))
