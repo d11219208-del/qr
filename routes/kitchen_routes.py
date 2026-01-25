@@ -43,6 +43,7 @@ def check_new_orders():
     conn = get_db_connection()
     cur = conn.cursor()
     
+    # 查詢當日訂單
     query = """
         SELECT id, table_number, items, total_price, status, created_at, lang, daily_seq, content_json 
         FROM orders 
@@ -52,10 +53,12 @@ def check_new_orders():
     cur.execute(query, (utc_start, utc_end))
     orders = cur.fetchall()
     
+    # 取得目前最大序號
     cur.execute("SELECT MAX(daily_seq) FROM orders WHERE created_at >= %s AND created_at <= %s", (utc_start, utc_end))
     res_max = cur.fetchone()
     max_seq_val = res_max[0] if res_max and res_max[0] else 0
     
+    # 檢查是否有比前端傳來更大的序號（即新訂單）
     new_order_ids = []
     if current_max > 0:
         cur.execute("SELECT id FROM orders WHERE daily_seq > %s AND created_at >= %s", (current_max, utc_start))
@@ -71,6 +74,7 @@ def check_new_orders():
         status_cls = status.lower()
         tw_time = created + timedelta(hours=8)
         
+        # 組合品項 HTML
         items_html = ""
         try:
             cart = json.loads(c_json) if c_json else []
@@ -83,15 +87,33 @@ def check_new_orders():
         except: 
             items_html = "<div class='item-row'>資料解析錯誤</div>"
 
+        # 組合按鈕與金額區域
         buttons = ""
+        # 格式化總金額，保留整數 (或依需求改為 :.2f)
+        formatted_total = f"{int(total)}" 
+
         if status == 'Pending':
+            # 在按鈕上方新增總金額顯示區
+            buttons += f"""
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; padding:0 5px;">
+                    <span style="font-size:14px; color:#666; font-weight:bold;">應收總計:</span>
+                    <span style="font-size:22px; color:#d32f2f; font-weight:900;">${formatted_total}</span>
+                </div>
+            """
             buttons += f"<button onclick='action(\"/kitchen/complete/{oid}\")' class='btn btn-main'>✅ 出餐 / 付款</button>"
-            buttons += f"""<div class="btn-group">
+            buttons += f"""<div class="btn-group" style="margin-top:8px;">
                 <a href='/kitchen/print_order/{oid}' target='_blank' class='btn btn-print'>🖨️ 補印</a>
                 <a href='/menu?edit_oid={oid}&lang=zh' target='_blank' class='btn btn-edit' style='background:#ff9800; color:white;'>✏️ 修改</a>
                 <button onclick='if(confirm(\"⚠️ 作廢？\")) action(\"/kitchen/cancel/{oid}\")' class='btn btn-void'>🗑️</button>
             </div>"""
         else:
+            # 已完成訂單也顯示金額，但顏色較淡
+            buttons += f"""
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; padding:0 5px; opacity:0.7;">
+                    <span style="font-size:13px; color:#666;">實收總計:</span>
+                    <span style="font-size:18px; color:#333; font-weight:bold;">${formatted_total}</span>
+                </div>
+            """
             buttons += f"<div class='btn-group'><a href='/kitchen/print_order/{oid}' target='_blank' class='btn btn-print' style='width:100%'>🖨️ 補印單據</a></div>"
 
         html_content += f"""
@@ -294,4 +316,5 @@ def daily_report():
         </div>
     </body></html>
     """
+
 
