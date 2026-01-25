@@ -10,6 +10,9 @@
             --completed: #e8f5e9;
             --cancelled: #ffebee;
             --main-text: #333;
+            /* 銷售排名專用色 */
+            --accent-purple: #673ab7;
+            --accent-blue: #2196f3;
         }
         body { font-family: "Microsoft JhengHei", sans-serif; background: #f0f2f5; margin: 0; padding: 15px; }
         
@@ -32,7 +35,6 @@
         }
         .card:hover { transform: translateY(-3px); box-shadow: 0 5px 15px rgba(0,0,0,0.1); }
 
-        /* 狀態顏色 */
         .card.pending { border-left: 8px solid #ff9800; background: var(--pending); }
         .card.completed { border-left: 8px solid #4caf50; background: var(--completed); opacity: 0.8; }
         .card.cancelled { border-left: 8px solid #f44336; background: var(--cancelled); opacity: 0.6; }
@@ -49,7 +51,6 @@
         .item-row { margin-bottom: 8px; border-bottom: 1px solid rgba(0,0,0,0.05); padding-bottom: 4px; }
         .item-name { display: flex; justify-content: space-between; font-size: 18px; font-weight: 600; }
         .item-qty { color: #d32f2f; font-weight: bold; }
-        .item-opts { font-size: 14px; color: #666; padding-left: 10px; margin-top: 2px; }
 
         .actions { padding: 10px; background: rgba(255,255,255,0.5); display: flex; flex-direction: column; gap: 8px; }
         .btn { 
@@ -57,13 +58,25 @@
             font-size: 16px; font-weight: bold; text-align: center; text-decoration: none;
         }
         .btn-main { background: #4caf50; color: white; width: 100%; }
-        .btn-group { display: flex; gap: 5px; }
-        .btn-print { background: #2196f3; color: white; flex: 2; }
-        .btn-edit { background: #ff9800; color: white; flex: 2; }
-        .btn-void { background: #f44336; color: white; flex: 1; }
+        .btn-rank { background: var(--accent-purple); color: white; }
+        .btn-print { background: var(--accent-blue); color: white; }
 
-        .status-tag { padding: 2px 6px; border-radius: 4px; font-size: 12px; color: white; }
+        /* --- 銷售排行榜彈窗樣式 --- */
+        .modal {
+            display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%;
+            background-color: rgba(0,0,0,0.6);
+        }
+        .modal-content {
+            background-color: #fff; margin: 5% auto; padding: 25px;
+            border-radius: 12px; width: 90%; max-width: 600px; box-shadow: 0 5px 30px rgba(0,0,0,0.3);
+        }
+        .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; border-bottom: 1px solid #eee; padding-bottom: 10px; }
+        .close { color: #aaa; font-size: 28px; font-weight: bold; cursor: pointer; }
         
+        table { width: 100%; border-collapse: collapse; margin-top: 15px; }
+        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #eee; }
+        th { background: #f8f9fa; color: var(--accent-blue); }
+
         #loading-msg { text-align: center; padding: 50px; font-size: 1.5em; color: #666; }
     </style>
 </head>
@@ -77,12 +90,36 @@
     <div class="nav-links" style="display: flex; gap: 10px;">
         <a href="/admin" class="btn" style="padding: 8px 15px; background: #546e7a; color: white;">⚙️ 管理後台</a>
         <a href="/kitchen/report" class="btn btn-print" style="padding: 8px 15px;">📊 日結報表</a>
-        <button onclick="refreshOrders()" class="btn btn-edit" style="padding: 8px 15px;">🔄 立即整理</button>
+        <button onclick="openRankModal()" class="btn btn-rank" style="padding: 8px 15px;">🏆 銷售排行榜</button>
+        <button onclick="refreshOrders()" class="btn" style="padding: 8px 15px; background: #eee; color: #333; border: 1px solid #ccc;">🔄</button>
     </div>
 </header>
 
 <div id="order-grid" class="order-grid">
     <div id="loading-msg">🍽️ 正在載入訂單...</div>
+</div>
+
+<div id="rankModal" class="modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h2 style="margin:0;">🏆 商品銷售排行</h2>
+            <span class="close" onclick="closeRankModal()">&times;</span>
+        </div>
+        <div style="display: flex; gap: 10px; align-items: flex-end; margin-bottom: 20px;">
+            <div>
+                <label style="font-size:12px;">開始日期</label><br>
+                <input type="date" id="startDate" style="padding:8px; border-radius:4px; border:1px solid #ddd;">
+            </div>
+            <div>
+                <label style="font-size:12px;">結束日期</label><br>
+                <input type="date" id="endDate" style="padding:8px; border-radius:4px; border:1px solid #ddd;">
+            </div>
+            <button onclick="fetchRanking()" class="btn btn-print" style="padding: 8px 20px;">查詢</button>
+        </div>
+        <div id="rank-result" style="max-height: 400px; overflow-y: auto;">
+            <p style="color:#888; text-align:center;">請選擇日期區間並點擊查詢</p>
+        </div>
+    </div>
 </div>
 
 <audio id="newOrderSound" src="https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3" preload="auto"></audio>
@@ -93,51 +130,62 @@
     const updateTimeText = document.getElementById('update-time');
     const audio = document.getElementById('newOrderSound');
 
+    // 初始化日期選擇器為今天
+    document.getElementById('startDate').valueAsDate = new Date();
+    document.getElementById('endDate').valueAsDate = new Date();
+
     function refreshOrders() {
-        // 重要：路徑必須加上 /kitchen，對應 app.py 的 url_prefix
         fetch('/kitchen/check_new_orders?current_seq=' + lastMaxSeq)
-            .then(response => {
-                if (!response.ok) throw new Error('HTTP 錯誤: ' + response.status);
-                return response.json();
-            })
+            .then(response => response.json())
             .then(data => {
-                // 更新訂單列表
-                if (data.html) {
-                    grid.innerHTML = data.html;
-                }
-
-                // 檢查是否有新訂單 ID (用於播放聲音)
-                if (data.new_ids && data.new_ids.length > 0) {
-                    playNotification();
-                    console.log("發現新訂單:", data.new_ids);
-                }
-
+                if (data.html) grid.innerHTML = data.html;
+                if (data.new_ids && data.new_ids.length > 0) playNotification();
                 lastMaxSeq = data.max_seq;
                 updateTimeText.innerText = '最後更新: ' + new Date().toLocaleTimeString();
             })
             .catch(error => {
-                console.error('Error:', error);
-                updateTimeText.innerText = '連線失敗，請檢查網路';
+                updateTimeText.innerText = '連線失敗';
+            });
+    }
+
+    /* --- 排行榜邏輯 --- */
+    function openRankModal() { document.getElementById('rankModal').style.display = "block"; }
+    function closeRankModal() { document.getElementById('rankModal').style.display = "none"; }
+
+    function fetchRanking() {
+        const start = document.getElementById('startDate').value;
+        const end = document.getElementById('endDate').value;
+        const resultDiv = document.getElementById('rank-result');
+        resultDiv.innerHTML = '<p style="text-align:center;">📊 正在計算數據...</p>';
+
+        fetch(`/kitchen/sales_ranking?start=${start}&end=${end}`)
+            .then(res => res.json())
+            .then(data => {
+                if (!data || data.length === 0) {
+                    resultDiv.innerHTML = '<p style="text-align:center;">此區間無銷售資料</p>';
+                    return;
+                }
+                let html = '<table><thead><tr><th>排行</th><th>商品名稱</th><th>銷售數量</th></tr></thead><tbody>';
+                data.forEach((item, index) => {
+                    html += `<tr>
+                        <td>${index + 1}</td>
+                        <td style="font-weight:bold;">${item.name}</td>
+                        <td style="color:#f57c00; font-weight:bold;">${item.total_qty}</td>
+                    </tr>`;
+                });
+                resultDiv.innerHTML = html + '</tbody></table>';
+            })
+            .catch(err => {
+                resultDiv.innerHTML = '<p style="color:red; text-align:center;">查詢出錯，請確認後端路徑</p>';
             });
     }
 
     function action(url) {
-        // 點擊按鈕後執行後端操作
-        fetch(url)
-            .then(res => {
-                if (res.ok) {
-                    refreshOrders(); // 成功後立即整理頁面
-                } else {
-                    alert('操作失敗，請重試');
-                }
-            })
-            .catch(err => alert('連線發生錯誤'));
+        fetch(url).then(res => { if (res.ok) refreshOrders(); else alert('操作失敗'); });
     }
 
     function playNotification() {
-        // 播放音效並觸發語音 (部分瀏覽器需使用者先互動過一次才能播放)
-        audio.play().catch(e => console.log("音效自動播放受阻"));
-        
+        audio.play().catch(e => {});
         if ('speechSynthesis' in window) {
             let msg = new SpeechSynthesisUtterance("您有新訂單");
             msg.lang = 'zh-TW';
@@ -145,13 +193,16 @@
         }
     }
 
-    // 每 15 秒自動檢查一次新訂單
+    // 每 3 秒檢查一次
     setInterval(refreshOrders, 3000);
-
-    // 頁面開啟時立即執行一次
     refreshOrders();
+
+    // 點擊 Modal 外部可關閉
+    window.onclick = function(event) {
+        let modal = document.getElementById('rankModal');
+        if (event.target == modal) closeRankModal();
+    }
 </script>
 
 </body>
 </html>
-
