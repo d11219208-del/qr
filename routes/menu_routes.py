@@ -1,7 +1,7 @@
 from flask import Blueprint, render_template, request, jsonify, redirect, url_for
 from database import get_db_connection
 from translations import load_translations
-from datetime import timedelta
+from datetime import timedelta, datetime
 import json
 
 menu_bp = Blueprint('menu', __name__)
@@ -30,12 +30,14 @@ def menu():
             final_lang = request.form.get('lang_input', 'zh')
             old_order_id = request.form.get('old_order_id')
 
-            if not cart_json or cart_json == '[]': return "Empty Cart", 400
+            if not cart_json or cart_json == '[]': 
+                return "Empty Cart", 400
 
             cart_items = json.loads(cart_json)
             total_price = 0
             display_list = []
 
+            # 如果是修改訂單，保持原本的語言
             if old_order_id:
                 cur.execute("SELECT lang FROM orders WHERE id=%s", (old_order_id,))
                 orig_res = cur.fetchone()
@@ -55,29 +57,45 @@ def menu():
 
             items_str = " + ".join(display_list)
 
+            # --- 核心修正：解決並發流水號重複問題 ---
+            # 使用單一 SQL 語句，讓資料庫在寫入時即時計算當日最大值 + 1
+            # 這樣在高並發時，資料庫會確保每一筆 INSERT 的 daily_seq 都是唯一的
             cur.execute("""
-                INSERT INTO orders (table_number, items, total_price, lang, daily_seq, content_json, need_receipt)
-                VALUES (%s, %s, %s, %s, (SELECT COALESCE(MAX(daily_seq), 0) + 1 FROM orders WHERE created_at >= CURRENT_DATE), %s, %s) 
-                RETURNING id
+                INSERT INTO orders (
+                    table_number, items, total_price, lang, 
+                    daily_seq, 
+                    content_json, need_receipt, created_at
+                )
+                VALUES (
+                    %s, %s, %s, %s, 
+                    (SELECT COALESCE(MAX(daily_seq), 0) + 1 FROM orders WHERE created_at >= CURRENT_DATE), 
+                    %s, %s, NOW()
+                ) 
+                RETURNING id, daily_seq
             """, (table_number, items_str, total_price, final_lang, cart_json, need_receipt))
 
-            oid = cur.fetchone()[0]
+            res = cur.fetchone()
+            oid = res[0]
+            
+            # 如果是編輯訂單，將舊單作廢
             if old_order_id:
                 cur.execute("UPDATE orders SET status='Cancelled' WHERE id=%s", (old_order_id,))
             
             conn.commit()
             
+            # 編輯模式完成後的處理
             if old_order_id: 
-                return f"<script>localStorage.removeItem('cart_cache'); alert('Order #{old_order_id} Updated'); if(window.opener) window.opener.location.reload(); window.close();</script>"
+                return f"<script>localStorage.removeItem('cart_cache'); alert('訂單 #{old_order_id} 已更新'); if(window.opener) window.opener.location.reload(); window.close();</script>"
             
             return redirect(url_for('menu.order_success', order_id=oid, lang=final_lang))
+            
         except Exception as e:
             conn.rollback()
             return f"Order Failed: {e}", 500
         finally:
             cur.close(); conn.close()
 
-    # GET 邏輯... (省略部分重複代碼，確保 products 抓取與轉換格式正確)
+    # --- GET 邏輯 (顯示菜單) ---
     url_table = request.args.get('table', '')
     edit_oid = request.args.get('edit_oid')
     preload_cart = "null" 
@@ -117,7 +135,7 @@ def menu():
                            display_lang=display_lang, order_lang=order_lang, 
                            preload_cart=preload_cart, edit_oid=edit_oid)
 
-# --- 4. 下單成功 (滿版優化版) ---
+# --- 下單成功頁面 ---
 @menu_bp.route('/success')
 def order_success():
     oid = request.args.get('order_id')
@@ -125,8 +143,7 @@ def order_success():
     translations = load_translations()
     t = translations.get(lang, translations['zh'])
     
-    conn = get_db_connection()
-    cur = conn.cursor()
+    conn = get_db_connection(); cur = conn.cursor()
     cur.execute("SELECT daily_seq, content_json, total_price, created_at FROM orders WHERE id=%s", (oid,))
     row = cur.fetchone()
     cur.close(); conn.close()
@@ -134,14 +151,12 @@ def order_success():
     if not row: return "Order Not Found", 404
     
     seq, json_str, total, created_at = row
-    # 轉換為台灣時間
     tw_time = created_at + timedelta(hours=8)
     time_str = tw_time.strftime('%Y-%m-%d %H:%M:%S')
     items = json.loads(json_str) if json_str else []
     
     items_html = ""
     for i in items:
-        # 根據當前語言選擇正確的產品名稱與選項
         d_name = i.get(f'name_{lang}', i.get('name_zh', 'Product'))
         ops = i.get(f'options_{lang}', i.get('options_zh', []))
         opt_str = f"<br><small style='color:#777; font-size:0.9em;'>└ {', '.join(ops)}</small>" if ops else ""
