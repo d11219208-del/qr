@@ -15,10 +15,13 @@ def init_db():
     建立所有必要的資料表與預設設定。
     回傳 True 表示成功，False 表示失敗。
     """
-    conn = get_db_connection()
-    conn.autocommit = True
-    cur = conn.cursor()
+    conn = None
+    cur = None
     try:
+        conn = get_db_connection()
+        conn.autocommit = True
+        cur = conn.cursor()
+
         # 1. 建立產品表 (包含多國語系與排序)
         cur.execute('''
             CREATE TABLE IF NOT EXISTS products (
@@ -84,9 +87,14 @@ def init_db():
 
         print("✅ 資料庫初始化檢查完成")
         return True
+
     except Exception as e:
         print(f"❌ 資料庫初始化錯誤: {e}")
         return False
+    
     finally:
-        cur.close()
-        conn.close()
+        # 【修正重點】：先檢查物件是否存在再關閉，避免二次報錯
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()

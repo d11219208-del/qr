@@ -1,135 +1,207 @@
 import json
 import urllib.request
+import urllib.error
 import threading
 import time
+import ssl
+import traceback
 from datetime import datetime, timedelta
 from database import get_db_connection
 
-# --- 1. Email 報告發送邏輯 ---
-def send_daily_report():
-    conn = get_db_connection()
-    cur = conn.cursor()
-    try:
-        cur.execute("SELECT key, value FROM settings")
-        config = dict(cur.fetchall())
-        api_key = config.get('resend_api_key', '').strip()
-        to_email = config.get('report_email', '').strip()
-        if not api_key or not to_email: 
-            print("❌ 未設定 Email 或 API Key，取消發送報表")
-            return
-
-        # 計算台灣時間與 UTC 時間範圍
-        utc_now = datetime.utcnow()
-        tw_now = utc_now + timedelta(hours=8)
-        tw_start_of_day = tw_now.replace(hour=0, minute=0, second=0, microsecond=0)
-        tw_end_of_day = tw_now.replace(hour=23, minute=59, second=59, microsecond=999999)
-
-        utc_start_query = tw_start_of_day - timedelta(hours=8)
-        utc_end_query = tw_end_of_day - timedelta(hours=8)
-        time_filter = f"created_at >= '{utc_start_query}' AND created_at <= '{utc_end_query}'"
-
-        # 抓取統計數據
-        cur.execute(f"SELECT COUNT(*), SUM(total_price) FROM orders WHERE {time_filter} AND status != 'Cancelled'")
-        v_count, v_total = cur.fetchone()
-        
-        cur.execute(f"SELECT COUNT(*), SUM(total_price) FROM orders WHERE {time_filter} AND status = 'Cancelled'")
-        x_count, x_total = cur.fetchone()
-
-        # 抓取並統計品項
-        cur.execute(f"SELECT content_json FROM orders WHERE {time_filter} AND status != 'Cancelled'")
-        valid_rows = cur.fetchall()
-        
-        stats = {}
-        for r in valid_rows:
-            if not r[0]: continue
-            try:
-                items = json.loads(r[0]) if isinstance(r[0], str) else r[0]
-                for i in items:
-                    name = i.get('name_zh', i.get('name', '未知'))
-                    qty = int(i.get('qty', 0))
-                    stats[name] = stats.get(name, 0) + qty
-            except: pass
-
-        today_str = tw_now.strftime('%Y-%m-%d')
-        item_detail_text = "\n【品項銷量統計】\n" + "\n".join([f"• {k}: {v}" for k, v in stats.items()]) if stats else "\n(今日尚無有效銷量)\n"
-
-        email_content = f"""
-🍴 餐廳日結報表 ({today_str})
----------------------------------
-✅ 【有效營收】
-單量：{v_count or 0} 筆
-總額：${v_total or 0}
-{item_detail_text}
----------------------------------
-❌ 【作廢統計】
-單量：{x_count or 0} 筆
-總額：${x_total or 0}
----------------------------------
-報告產出時間：{tw_now.strftime('%Y-%m-%d %H:%M:%S')} (Taiwan Time)
-"""
-        # 發送請求至 Resend API
-        payload = {
-            "from": config.get('sender_email', 'onboarding@resend.dev').strip(),
-            "to": [to_email],
-            "subject": f"【日結單】{today_str} 營業統計報告",
-            "text": email_content
-        }
-        
-        req = urllib.request.Request(
-            "https://api.resend.com/emails", 
-            data=json.dumps(payload).encode('utf-8'),
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}, 
-            method='POST'
-        )
-        with urllib.request.urlopen(req) as res:
-            print(f"[{tw_now}] ✅ 日結報表已發送至 {to_email}")
-            
-    except Exception as e:
-        print(f"❌ 報表發送失敗: {e}")
-    finally: 
-        cur.close(); conn.close()
-
-# --- 2. 自動排程 (發信) ---
-def scheduler_loop():
-    print("⏰ 排程執行緒已啟動 (Scheduler Started)")
-    last_sent_time = ""
-    while True:
-        now_tw = datetime.utcnow() + timedelta(hours=8)
-        current_time = now_tw.strftime("%H:%M")
-        # 設定發信時間點
-        if current_time in ["13:00", "18:00", "20:30"] and current_time != last_sent_time:
-            send_daily_report()
-            last_sent_time = current_time
-        time.sleep(30)
-
-# --- 3. 背景維護工作 (防休眠) ---
-def run_maintenance_tasks():
-    print("🚀 背景維護執行緒已啟動 (Maintenance Started)")
-    while True:
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        # 防止 Render 休眠
-        try:
-            # 替換成你實際的 Render 網址
-            urllib.request.urlopen("https://qr-mbdv.onrender.com", timeout=10)
-            print(f"[{now}] ✅ Web Ping 成功")
-        except Exception as e:
-            print(f"[{now}] ❌ Web Ping 失敗: {e}")
-
-        # 防止資料庫休眠 (Aiven Heartbeat)
+# ==========================================
+# 1. Email 報告發送核心 (User-Agent 修正版)
+# ==========================================
+def send_daily_report(app, manual_config=None, is_test=False):
+    """
+    發送日結報告。
+    """
+    conn = None
+    cur = None
+    
+    with app.app_context():
         try:
             conn = get_db_connection()
             cur = conn.cursor()
-            cur.execute("SELECT 1")
-            cur.close(); conn.close()
-            print(f"[{now}] 💓 DB Heartbeat 成功")
+            
+            # 決定設定來源
+            if manual_config:
+                config = manual_config
+            else:
+                cur.execute("SELECT key, value FROM settings")
+                config = dict(cur.fetchall())
+
+            api_key = config.get('resend_api_key', '').strip()
+            to_email = config.get('report_email', '').strip()
+            sender_email = (config.get('sender_email') or 'onboarding@resend.dev').strip()
+
+            if not api_key or not to_email:
+                print("❌ 未設定 Email 或 API Key，取消發送")
+                return "❌ 設定不完整"
+
+            # 準備時間與內容
+            utc_now = datetime.utcnow()
+            tw_now = utc_now + timedelta(hours=8)
+            today_str = tw_now.strftime('%Y-%m-%d')
+
+            if is_test:
+                subject = f"【測試】Resend API 設定確認 ({today_str})"
+                email_content = f"✅ Resend API 連線成功！\n\n寄件者: {sender_email}\n收件者: {to_email}\n此為測試信件。"
+            else:
+                # 抓取正式數據
+                tw_start = tw_now.replace(hour=0, minute=0, second=0, microsecond=0)
+                tw_end = tw_now.replace(hour=23, minute=59, second=59, microsecond=999999)
+                utc_start = tw_start - timedelta(hours=8)
+                utc_end = tw_end - timedelta(hours=8)
+                time_filter = f"created_at >= '{utc_start}' AND created_at <= '{utc_end}'"
+
+                # 統計數據
+                cur.execute(f"SELECT COUNT(*), SUM(total_price) FROM orders WHERE {time_filter} AND status != 'Cancelled'")
+                v_res = cur.fetchone()
+                v_count, v_total = (v_res[0] or 0), (v_res[1] or 0)
+
+                cur.execute(f"SELECT COUNT(*), SUM(total_price) FROM orders WHERE {time_filter} AND status = 'Cancelled'")
+                x_res = cur.fetchone()
+                x_count, x_total = (x_res[0] or 0), (x_res[1] or 0)
+
+                # 品項統計
+                cur.execute(f"SELECT content_json FROM orders WHERE {time_filter} AND status != 'Cancelled'")
+                rows = cur.fetchall()
+                stats = {}
+                for r in rows:
+                    if not r[0]: continue
+                    try:
+                        items = json.loads(r[0]) if isinstance(r[0], str) else r[0]
+                        if isinstance(items, dict): items = [items]
+                        for i in items:
+                            name = i.get('name_zh', i.get('name', '未知'))
+                            qty = int(i.get('qty', 0))
+                            stats[name] = stats.get(name, 0) + qty
+                    except: pass
+                
+                sorted_stats = sorted(stats.items(), key=lambda x: x[1], reverse=True)
+                item_text = "\n".join([f"• {k}: {v}" for k, v in sorted_stats]) if sorted_stats else "(無銷量)"
+
+                subject = f"【日結單】{today_str} 營業報告"
+                email_content = f"""
+🍴 餐廳日結 ({today_str})
+------------------------
+✅ 有效: {v_count} 筆 (${int(v_total):,})
+{item_text}
+------------------------
+❌ 作廢: {x_count} 筆 (${int(x_total):,})
+"""
+
+            # 發送請求
+            payload = {
+                "from": sender_email,
+                "to": [to_email],
+                "subject": subject,
+                "text": email_content
+            }
+            
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+
+            # 【重要修正】加入 User-Agent 偽裝成瀏覽器
+            headers = {
+                "Authorization": f"Bearer {api_key}", 
+                "Content-Type": "application/json",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" 
+            }
+
+            req = urllib.request.Request(
+                "https://api.resend.com/emails",
+                data=json.dumps(payload).encode('utf-8'),
+                headers=headers,
+                method='POST'
+            )
+            
+            print(f"📡 正在連線 Resend API (From: {sender_email} -> To: {to_email}) ...")
+            
+            with urllib.request.urlopen(req, context=ctx, timeout=10) as res:
+                print(f"✅ Email 發送成功: {res.status}")
+                return "✅ 發送成功"
+
+        except urllib.error.HTTPError as e:
+            try:
+                error_body = e.read().decode('utf-8')
+            except:
+                error_body = "無法讀取錯誤內容"
+
+            print(f"❌ Resend API 拒絕連線 (HTTP {e.code}): {error_body}")
+            
+            if e.code == 403 and "1010" in error_body:
+                 return "❌ 發送失敗: 被 Cloudflare 防火牆阻擋 (User-Agent)"
+
+            try:
+                err_json = json.loads(error_body)
+                msg = err_json.get('message', error_body)
+                return f"❌ 發送失敗: {msg}"
+            except:
+                return f"❌ 發送失敗 (HTTP {e.code})"
+
         except Exception as e:
-            print(f"[{now}] ❌ DB Heartbeat 失敗: {e}")
+            traceback.print_exc()
+            return f"❌ 程式錯誤: {str(e)}"
+        
+        finally:
+            if cur: cur.close()
+            if conn: conn.close()
 
-        time.sleep(600)  # 每 10 分鐘執行一次
+# ==========================================
+# 2. 背景維護工作 (修正 Print 顯示)
+# ==========================================
+def run_maintenance_tasks(app):
+    print("⏳ 背景任務等待啟動中 (Wait 30s)...")
+    time.sleep(30)
+    print("🚀 背景維護執行緒已正式啟動")
+    
+    last_sent_time = ""
+    next_ping_time = datetime.now()
 
-# --- 4. 啟動所有背景任務 ---
-def start_background_tasks():
-    """在 app.py 中呼叫此函式即可啟動所有背景任務"""
-    # 使用 daemon=True 確保主程式關閉時，執行緒也會跟著關閉
-    threading.Thread(target=scheduler_loop, daemon=True).start()
-    threading.Thread(target=run_maintenance_tasks, daemon=True).start()
+    while True:
+        try:
+            now_obj = datetime.now()
+            # 【修正】定義 now_str 供下方 Print 使用
+            now_str = now_obj.strftime("%H:%M:%S")
+
+            # --- A. 自動發信檢查 ---
+            tw_time = datetime.utcnow() + timedelta(hours=8)
+            current_hm = tw_time.strftime("%H:%M")
+            target_times = ["13:00", "18:00", "20:30"]
+            
+            if current_hm in target_times and current_hm != last_sent_time:
+                print(f"[{current_hm}] ⏰ 執行自動發信...")
+                send_daily_report(app)
+                last_sent_time = current_hm
+
+            # --- B. 防休眠 Ping ---
+            if now_obj >= next_ping_time:
+                # 1. Ping 網站
+                try:
+                    # 這裡請確保網址是您正確的 Render 網址
+                    urllib.request.urlopen("https://ding-dong-tipi.onrender.com", timeout=5)
+                    print(f"[{now_str}] ✅ Web Ping 成功")
+                except Exception: 
+                    pass # 失敗不報錯，保持安靜
+                
+                # 2. Ping 資料庫 (維持連線)
+                try:
+                    conn = get_db_connection()
+                    conn.close()
+                    print(f"[{now_str}] 💓 DB Heartbeat 成功")
+                except Exception: 
+                    pass
+                
+                # 設定下次 Ping 的時間 (5分鐘後)
+                next_ping_time = now_obj + timedelta(seconds=300)
+
+            time.sleep(60)
+        except Exception as e:
+            print(f"⚠️ 背景任務錯誤: {e}")
+            time.sleep(60)
+
+def start_background_tasks(app):
+    t = threading.Thread(target=run_maintenance_tasks, args=(app,), daemon=True)
+    t.start()

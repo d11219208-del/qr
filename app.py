@@ -21,7 +21,8 @@ def create_app():
     app.register_blueprint(admin_bp, url_prefix='/admin')
 
     # 3. 啟動背景任務 (排程發信、防休眠 Ping)
-    start_background_tasks()
+    # 【修正重點】：必須將 app 傳入，讓背景執行緒能讀取 Config 與 DB
+    start_background_tasks(app)
 
     return app
 
