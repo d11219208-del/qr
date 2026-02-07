@@ -12,7 +12,7 @@ def index():
     table_num = request.args.get('table', '')
     return render_template('index.html', table_num=table_num)
 
-# --- 點餐頁面 (修正並發流水號問題) ---
+# --- 點餐頁面 (包含外送邏輯) ---
 @menu_bp.route('/menu', methods=['GET', 'POST'])
 def menu():
     display_lang = request.args.get('lang', 'zh')
@@ -26,11 +26,29 @@ def menu():
 
     if request.method == 'POST':
         try:
+            # 1. 基本欄位
             table_number = request.form.get('table_number')
             cart_json = request.form.get('cart_data')
             need_receipt = request.form.get('need_receipt') == 'on'
             final_lang = request.form.get('lang_input', 'zh')
             old_order_id = request.form.get('old_order_id')
+            
+            # 2. 外送欄位 (新增)
+            order_type = request.form.get('order_type', 'dine_in') # 預設內用
+            delivery_fee = int(float(request.form.get('delivery_fee', 0)))
+            
+            delivery_info = None
+            if order_type == 'delivery':
+                # 組合外送資訊 JSON
+                delivery_info = json.dumps({
+                    'name': request.form.get('customer_name'),
+                    'phone': request.form.get('customer_phone'),
+                    'address': request.form.get('delivery_address'),
+                    'distance_km': request.form.get('distance_km'),
+                    'note': request.form.get('delivery_note')
+                }, ensure_ascii=False)
+                # 外送單沒有桌號，設為 None 或特定標示
+                table_number = None 
 
             if not cart_json or cart_json == '[]': 
                 return "Empty Cart", 400
@@ -45,6 +63,7 @@ def menu():
                 orig_res = cur.fetchone()
                 if orig_res: final_lang = orig_res[0] 
 
+            # 3. 計算餐點總額
             for item in cart_items:
                 price = int(float(item['unit_price']))
                 qty = int(float(item['qty']))
@@ -58,33 +77,38 @@ def menu():
                 display_list.append(f"{n_display} {opt_str} x{qty}")
 
             items_str = " + ".join(display_list)
+            
+            # 4. 加入運費到總金額 (如果是外送)
+            total_price += delivery_fee
 
             # --- 核心修正：利用資料庫鎖定解決並發流水號重複問題 ---
             
-            # 1. 鎖定資料表 (Share Row Exclusive Mode)
-            # 這會暫時阻止其他交易進行寫入，確保計算 MAX(daily_seq) 時是安全的
-            # 雖然會稍微犧牲一點點並發寫入速度，但在點餐系統中這通常在毫秒級完成，不影響體驗
+            # 鎖定資料表
             cur.execute("LOCK TABLE orders IN SHARE ROW EXCLUSIVE MODE")
 
-            # 2. 插入資料並由資料庫生成流水號
-            # 使用 VALUES + 子查詢的方式，即使當天沒有訂單也能正確回傳 1
+            # 插入資料 (新增 order_type, delivery_info, delivery_fee)
             cur.execute("""
                 INSERT INTO orders (
                     table_number, items, total_price, lang, 
                     daily_seq, 
-                    content_json, need_receipt, created_at
+                    content_json, need_receipt, created_at,
+                    order_type, delivery_info, delivery_fee
                 )
                 VALUES (
                     %s, %s, %s, %s, 
                     (SELECT COALESCE(MAX(daily_seq), 0) + 1 FROM orders WHERE created_at >= CURRENT_DATE), 
-                    %s, %s, NOW()
+                    %s, %s, NOW(),
+                    %s, %s, %s
                 )
                 RETURNING id, daily_seq
-            """, (table_number, items_str, total_price, final_lang, cart_json, need_receipt))
+            """, (
+                table_number, items_str, total_price, final_lang, 
+                cart_json, need_receipt, 
+                order_type, delivery_info, delivery_fee
+            ))
 
             res = cur.fetchone()
             oid = res[0]
-            # seq = res[1] # 若需要可在這裡取得 seq
             
             # 如果是編輯訂單，將舊單作廢
             if old_order_id:
@@ -118,6 +142,10 @@ def menu():
             preload_cart = old_data[1] 
             order_lang = old_data[2] if old_data[2] else 'zh'
 
+    # 讀取產品與設定 (設定用來判斷外送是否開啟)
+    cur.execute("SELECT key, value FROM settings")
+    settings = dict(cur.fetchall())
+    
     cur.execute("""
         SELECT id, name, price, category, image_url, is_available, custom_options, sort_order,
                name_en, name_jp, name_kr, custom_options_en, custom_options_jp, custom_options_kr, 
@@ -140,11 +168,12 @@ def menu():
             'print_category': p[14] or 'Noodle'
         })
     
+    # 將 settings 傳入 template
     return render_template('menu.html', products=p_list, texts=t, table_num=url_table, 
                            display_lang=display_lang, order_lang=order_lang, 
-                           preload_cart=preload_cart, edit_oid=edit_oid)
+                           preload_cart=preload_cart, edit_oid=edit_oid, config=settings)
 
-# --- 下單成功頁面 ---
+# --- 下單成功頁面 (包含外送資訊顯示) ---
 @menu_bp.route('/success')
 def order_success():
     oid = request.args.get('order_id')
@@ -153,19 +182,34 @@ def order_success():
     t = translations.get(lang, translations['zh'])
     
     conn = get_db_connection(); cur = conn.cursor()
-    cur.execute("SELECT daily_seq, content_json, total_price, created_at FROM orders WHERE id=%s", (oid,))
+    # 讀取 order_type, delivery_info, delivery_fee
+    cur.execute("""
+        SELECT daily_seq, content_json, total_price, created_at, order_type, delivery_info, delivery_fee 
+        FROM orders WHERE id=%s
+    """, (oid,))
     row = cur.fetchone()
     cur.close(); conn.close()
     
     if not row: return "Order Not Found", 404
     
-    seq, json_str, total, created_at = row
+    seq, json_str, total, created_at, order_type, delivery_info_json, delivery_fee = row
     tw_time = created_at + timedelta(hours=8)
     time_str = tw_time.strftime('%Y-%m-%d %H:%M:%S')
     items = json.loads(json_str) if json_str else []
     
+    # 解析外送資訊
+    is_delivery = (order_type == 'delivery')
+    delivery_info = json.loads(delivery_info_json) if delivery_info_json else {}
+    
+    # 產生餐點 HTML
     items_html = ""
+    # 餐點小計
+    subtotal = 0
+    
     for i in items:
+        price = i['unit_price'] * i['qty']
+        subtotal += price
+        
         d_name = i.get(f'name_{lang}', i.get('name_zh', 'Product'))
         ops = i.get(f'options_{lang}', i.get('options_zh', []))
         opt_str = f"<br><small style='color:#777; font-size:0.9em;'>└ {', '.join(ops)}</small>" if ops else ""
@@ -176,9 +220,47 @@ def order_success():
                 <div style="font-size:1.1em; font-weight:bold; color:#333;">{d_name} <span style="color:#888; font-weight:normal;">x{i['qty']}</span></div>
                 {opt_str}
             </div>
-            <div style="font-weight:bold; font-size:1.1em; white-space:nowrap;">${i['unit_price'] * i['qty']}</div>
+            <div style="font-weight:bold; font-size:1.1em; white-space:nowrap;">${price}</div>
         </div>
         """
+    
+    # 產生外送資訊 HTML
+    delivery_html = ""
+    fee_row_html = ""
+    
+    if is_delivery:
+        # 運費欄位
+        fee_label = "Delivery Fee" if lang == 'en' else "運費"
+        fee_row_html = f"""
+        <div style='display:flex; justify-content:space-between; align-items: center; border-bottom:2px solid #333; padding:15px 0; color:#007bff;'>
+            <div style="font-weight:bold;">🛵 {fee_label}</div>
+            <div style="font-weight:bold; font-size:1.1em;">${delivery_fee}</div>
+        </div>
+        """
+        
+        # 客戶資訊欄位
+        d_name = delivery_info.get('name', '')
+        d_phone = delivery_info.get('phone', '')
+        d_addr = delivery_info.get('address', '')
+        d_note = delivery_info.get('note', '')
+        
+        delivery_html = f"""
+        <div style="background:#e3f2fd; padding:15px; border-radius:10px; margin-bottom:20px; text-align:left; border:1px solid #90caf9;">
+            <h4 style="margin:0 0 10px 0; color:#1565c0;">🛵 Delivery Info / 外送資訊</h4>
+            <div style="margin-bottom:5px;"><b>Name:</b> {d_name}</div>
+            <div style="margin-bottom:5px;"><b>Phone:</b> <a href="tel:{d_phone}">{d_phone}</a></div>
+            <div style="margin-bottom:5px;"><b>Address:</b> {d_addr}</div>
+            <div style="font-size:0.9em; color:#555;"><b>Note:</b> {d_note}</div>
+        </div>
+        """
+        
+        # 外送的提示訊息
+        status_msg = "Order Received / 訂單已收到"
+        wait_msg = "Please wait for confirmation call.<br>請留意電話，我們可能與您確認。"
+    else:
+        # 內用的提示訊息
+        status_msg = t.get('pay_at_counter', '請至櫃檯結帳')
+        wait_msg = t['kitchen_prep']
 
     return f"""
     <!DOCTYPE html>
@@ -198,7 +280,7 @@ def order_success():
             .seq-number {{ font-size: 5em; font-weight: 900; color: #e91e63; line-height: 1; }}
             .notice-box {{ background: #fdf6e3; padding: 18px; border-left: 6px solid #ff9800; border-radius: 8px; margin-bottom: 30px; text-align: left; }}
             .details-area {{ text-align: left; margin-bottom: 30px; }}
-            .total-row {{ text-align: right; font-weight: 900; font-size: 1.8em; margin-top: 20px; color: #d32f2f; border-top: 2px solid #333; padding-top: 15px; }}
+            .total-row {{ text-align: right; font-weight: 900; font-size: 1.8em; margin-top: 20px; color: #d32f2f; border-top: 2px solid #ddd; padding-top: 15px; }}
             .home-btn {{ display: block; padding: 18px; background: #007bff; color: white !important; text-decoration: none; border-radius: 12px; font-weight: bold; font-size: 1.2em; margin-top: auto; box-shadow: 0 4px 10px rgba(0,123,255,0.3); }}
         </style>
     </head>
@@ -207,19 +289,26 @@ def order_success():
             <div class="card">
                 <div class="success-icon">✅</div>
                 <h1 class="status-title">{t['order_success']}</h1>
+                
                 <div class="seq-box">
                     <div class="seq-label">取餐單號 / ORDER NO.</div>
                     <div class="seq-number">#{seq:03d}</div>
                 </div>
+
                 <div class="notice-box">
-                    <div style="font-weight:bold; color:#856404; font-size:1.3em; margin-bottom:5px;">⚠️ {t.get('pay_at_counter', '請至櫃檯結帳')}</div>
-                    <div style="color:#856404; font-size:1em; line-height:1.4;">{t['kitchen_prep']}</div>
+                    <div style="font-weight:bold; color:#856404; font-size:1.3em; margin-bottom:5px;">⚠️ {status_msg}</div>
+                    <div style="color:#856404; font-size:1em; line-height:1.4;">{wait_msg}</div>
                 </div>
+
+                {delivery_html}
+
                 <div class="details-area">
                     <h3 style="border-bottom:2px solid #eee; padding-bottom:10px; margin-bottom:10px; color:#444;">🧾 {t.get('order_details', '訂單明細')}</h3>
                     {items_html}
+                    {fee_row_html}
                     <div class="total-row">{t['total']}: ${total}</div>
                 </div>
+                
                 <p style="color:#999; font-size:0.85em; margin: 20px 0;">下單時間: {time_str}</p>
                 <a href="{url_for('menu.index')}?lang={lang}" class="home-btn">回首頁 / Back to Menu</a>
             </div>
