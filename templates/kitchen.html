@@ -3,12 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>🍳 廚房出餐看板 Pro</title>
+    <title>🍳 廚房出餐看板 Pro (含外送)</title>
     <style>
         :root {
             --pending: #fff4e5; --completed: #e8f5e9; --cancelled: rgba(244, 67, 54, 0.15);
             --main-text: #333; --accent-purple: #673ab7; --accent-blue: #2196f3;
             --accent-green: #4caf50; --accent-orange: #ff9800; --accent-red: #f44336;
+            --delivery-color: #ff5722; /* 新增外送色系 */
         }
         body { font-family: "Microsoft JhengHei", sans-serif; background: #f0f2f5; margin: 0; padding: 15px; color: var(--main-text); }
         
@@ -66,7 +67,17 @@
         .card-header { padding: 12px; border-bottom: 1px dashed #ccc; display: flex; justify-content: space-between; z-index: 2; align-items: flex-start; }
         .seq-num { font-size: 26px; font-weight: 900; color: #d32f2f; line-height: 1; }
         .time-stamp { font-size: 0.8em; color: #666; margin-top: 4px; }
-        .table-num { font-size: 20px; font-weight: bold; background: #333; color: white; padding: 4px 10px; border-radius: 4px; }
+        
+        /* 桌號與外送標籤樣式 */
+        .badge-table { font-size: 20px; font-weight: bold; background: #333; color: white; padding: 4px 10px; border-radius: 4px; }
+        .badge-delivery { font-size: 18px; font-weight: bold; background: var(--delivery-color); color: white; padding: 4px 10px; border-radius: 4px; display: inline-flex; align-items: center; gap: 4px; }
+        
+        /* 外送詳細資訊區塊 */
+        .delivery-details {
+            font-size: 0.85rem; background: #fff3e0; color: #bf360c;
+            padding: 8px; margin: 0 12px 5px 12px; border-radius: 4px;
+            border: 1px dashed #ffb74d; display: flex; flex-direction: column; gap: 2px;
+        }
 
         .items { padding: 12px; flex-grow: 1; z-index: 2; min-height: 80px; }
         .item-row { margin-bottom: 8px; border-bottom: 1px solid rgba(0,0,0,0.05); padding-bottom: 6px; }
@@ -148,7 +159,7 @@
     <div class="modal-content">
         <h3 style="margin-top:0;">🖨️ 選擇列印內容</h3>
         <button onclick="doPrint('receipt')" class="modal-btn" style="background:var(--accent-blue); color:white;">📄 僅列印結帳單</button>
-        <button onclick="doPrint('kitchen')" class="modal-btn" style="background:var(--accent-orange); color:white;">🍜 僅列印廚房單 (分區)</button>
+        <button onclick="doPrint('kitchen')" class="modal-btn" style="background:var(--accent-orange); color:white;">🍜 僅列印廚房/打包單</button>
         <button onclick="doPrint('all')" class="modal-btn" style="background:var(--accent-green); color:white;">📋 列印全部單據</button>
         <button onclick="closePrintModal()" class="modal-btn" style="background:#eee; color:#333;">取消</button>
     </div>
