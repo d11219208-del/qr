@@ -50,7 +50,7 @@ def kitchen_panel():
     return render_template('kitchen.html')
 
 
-# --- 2. 檢查新訂單 API (已修正：讀取外送資訊) ---
+# --- 2. 檢查新訂單 API (修正：加入 rollback 與更嚴謹的外送判斷) ---
 @kitchen_bp.route('/check_new_orders')
 def check_new_orders():
     try:
@@ -60,8 +60,7 @@ def check_new_orders():
         conn = get_db_connection()
         cur = conn.cursor()
         
-        # 修改 SQL：多抓取 customer_name, customer_phone 欄位 (請確保資料庫有這些欄位)
-        # 如果資料庫還沒新增這些欄位，請先去資料庫新增，或是用 try-except 包裹
+        # 嘗試讀取包含外送欄位的完整 Query
         query = """
             SELECT id, table_number, items, total_price, status, created_at, lang, daily_seq, content_json,
                    customer_name, customer_phone
@@ -76,8 +75,11 @@ def check_new_orders():
         try:
             cur.execute(query, (utc_start, utc_end))
         except Exception as e:
-            # 如果欄位不存在的 fallback (向下相容)
-            print(f"SQL Error (可能缺少外送欄位): {e}")
+            # ★★★ 關鍵修正：PostgreSQL 事務失敗後必須 Rollback 才能執行下一個查詢 ★★★
+            conn.rollback() 
+            print(f"SQL Fallback triggered (check_new_orders): {e}")
+            
+            # 欄位不存在的 Fallback Query
             query_fallback = """
                 SELECT id, table_number, items, total_price, status, created_at, lang, daily_seq, content_json,
                        NULL as customer_name, NULL as customer_phone
@@ -108,23 +110,29 @@ def check_new_orders():
             html_content = "<div id='loading-msg' style='grid-column:1/-1;text-align:center;padding:100px;font-size:1.5em;color:#888;'>🍽️ 目前沒有訂單</div>"
         
         for o in orders:
-            # 解包變數 (注意順序要跟 SQL 一樣)
+            # 解包變數
             oid, table, raw_items, total, status, created, order_lang, seq_num, c_json, c_name, c_phone = o
             
             status_cls = status.lower()
             tw_time = created + timedelta(hours=8)
             
-            # --- 判斷是否為外送 (邏輯：桌號是外送 或 有電話號碼) ---
-            is_delivery = (table == '外送') or (c_phone and len(str(c_phone)) > 5)
+            # --- 判斷是否為外送 (邏輯增強) ---
+            # 1. table_number 等於 '外送'
+            # 2. 或者有電話號碼 (確保不是 None 且長度足夠)
+            is_delivery = (str(table).strip() == '外送') or (c_phone and str(c_phone).strip().lower() != 'none' and len(str(c_phone)) > 5)
             
             # 顯示用的桌號 HTML
             if is_delivery:
-                # 外送顯示樣式
                 display_table = "🛵 外送"
-                if c_name: display_table += f"<br><span style='font-size:0.6em; font-weight:normal;'>{c_name}</span>"
+                # 如果有名字，顯示名字
+                if c_name and str(c_name).strip(): 
+                    display_table += f"<br><span style='font-size:0.6em; font-weight:normal;'>{c_name}</span>"
+                # 如果沒名字但有電話，顯示電話後三碼
+                elif c_phone:
+                    display_table += f"<br><span style='font-size:0.6em; font-weight:normal;'>*{str(c_phone)[-3:]}</span>"
+                    
                 table_html = f"<div class='table-num' style='color:#1565c0; border-color:#1565c0;'>{display_table}</div>"
             else:
-                # 內用顯示樣式
                 table_html = f"<div class='table-num'>桌號 {table}</div>"
 
             # 解析商品 JSON
@@ -195,7 +203,7 @@ def check_new_orders():
         return jsonify({'html': f"載入錯誤: {str(e)}", 'max_seq': 0, 'new_ids': []})
 
 
-# --- 3. 核心列印路由 (已修正：包含外送資訊) ---
+# --- 3. 核心列印路由 (已修正：解決 Transaction Aborted 錯誤) ---
 @kitchen_bp.route('/print_order/<int:oid>')
 def print_order(oid):
     try:
@@ -204,9 +212,6 @@ def print_order(oid):
         conn = get_db_connection()
         cur = conn.cursor()
         
-        # 修改 SQL：讀取外送相關欄位
-        # table_number, total_price, daily_seq, content_json, created_at, status, 
-        # customer_name, customer_phone, delivery_address, delivery_fee
         query = """
             SELECT table_number, total_price, daily_seq, content_json, created_at, status,
                    customer_name, customer_phone, delivery_address, delivery_fee
@@ -215,8 +220,11 @@ def print_order(oid):
         try:
             cur.execute(query, (oid,))
             order = cur.fetchone()
-        except Exception:
-            # Fallback for old DB schema
+        except Exception as e:
+            # ★★★ 關鍵修正：必須 Rollback 否則 Fallback Query 無法執行 ★★★
+            conn.rollback()
+            print(f"SQL Fallback triggered (print_order): {e}")
+            
             cur.execute("""
                 SELECT table_number, total_price, daily_seq, content_json, created_at, status,
                        NULL, NULL, NULL, 0
@@ -236,7 +244,8 @@ def print_order(oid):
         
         # 資料預處理
         c_fee = int(c_fee or 0)
-        is_delivery = (table_num == '外送') or (c_phone is not None and str(c_phone).strip() != '')
+        # 修正判斷：確保字串比較安全
+        is_delivery = (str(table_num).strip() == '外送') or (c_phone is not None and str(c_phone).strip() != '')
         
         if isinstance(content_json, str):
             items = json.loads(content_json)
@@ -288,7 +297,7 @@ def print_order(oid):
         """
 
         def generate_html(title, item_list, is_receipt=False):
-            if not item_list and not is_receipt: return "" # 允許空的結帳單(為了顯示外送費)
+            if not item_list and not is_receipt: return "" 
             if not item_list and is_receipt and c_fee == 0: return ""
 
             void_mark = "<div class='void-watermark'>作廢單</div>" if status == 'Cancelled' else ""
@@ -351,7 +360,7 @@ def print_order(oid):
         
         if print_type in ['all', 'receipt']:
             content += generate_html("結帳單 Receipt", items, is_receipt=True)
-            has_content = True # 結帳單總是產生
+            has_content = True 
             
         if print_type in ['all', 'kitchen']:
             if noodle_items: content += generate_html("廚房單 - 麵區", noodle_items); has_content = True
@@ -400,23 +409,30 @@ def print_order(oid):
         traceback.print_exc()
         return f"Print Error: {str(e)}", 500
 
-
 # --- 4. 狀態變更 (完成/作廢) ---
 @kitchen_bp.route('/complete/<int:oid>')
 def complete_order(oid):
-    c=get_db_connection(); cur=c.cursor()
-    cur.execute("UPDATE orders SET status='Completed' WHERE id=%s",(oid,))
-    c.commit(); c.close(); 
-    print(f"[{get_current_time_str()}] ✅ 訂單完成: ID {oid}")
-    return "OK"
+    try:
+        c=get_db_connection(); cur=c.cursor()
+        cur.execute("UPDATE orders SET status='Completed' WHERE id=%s",(oid,))
+        c.commit(); c.close(); 
+        print(f"[{get_current_time_str()}] ✅ 訂單完成: ID {oid}")
+        return "OK"
+    except Exception as e:
+        print(f"Error completing order: {e}")
+        return "Error", 500
 
 @kitchen_bp.route('/cancel/<int:oid>')
 def cancel_order(oid):
-    c=get_db_connection(); cur=c.cursor()
-    cur.execute("UPDATE orders SET status='Cancelled' WHERE id=%s",(oid,))
-    c.commit(); c.close(); 
-    print(f"[{get_current_time_str()}] 🗑️ 訂單作廢: ID {oid}")
-    return "OK"
+    try:
+        c=get_db_connection(); cur=c.cursor()
+        cur.execute("UPDATE orders SET status='Cancelled' WHERE id=%s",(oid,))
+        c.commit(); c.close(); 
+        print(f"[{get_current_time_str()}] 🗑️ 訂單作廢: ID {oid}")
+        return "OK"
+    except Exception as e:
+        print(f"Error cancelling order: {e}")
+        return "Error", 500
 
 
 # --- 5. 銷售排名 API ---
@@ -541,3 +557,4 @@ def daily_report():
         </div>
     </body></html>
     """
+
