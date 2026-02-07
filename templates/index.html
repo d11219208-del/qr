@@ -19,7 +19,7 @@
         }
         .header-info {
             text-align: center;
-            margin-bottom: 40px;
+            margin-bottom: 30px;
         }
         h2 {
             color: #333;
@@ -40,7 +40,7 @@
         }
         .btn {
             padding: 22px; /* 增加點擊區域 */
-            margin: 12px 0;
+            margin: 10px 0;
             text-align: center;
             text-decoration: none;
             font-size: 1.6em; /* 放大按鈕文字 */
@@ -50,6 +50,7 @@
             box-shadow: 0 6px 15px rgba(0,0,0,0.15);
             transition: transform 0.1s, box-shadow 0.1s;
             border: none;
+            display: block;
         }
         .btn:active {
             transform: scale(0.95);
@@ -60,9 +61,23 @@
         .en { background: linear-gradient(135deg, #007bff, #0056b3); } 
         .jp { background: linear-gradient(135deg, #ff9800, #f57c00); } 
         .kr { background: linear-gradient(135deg, #20c997, #17a2b8); }
+        
+        /* 外送按鈕樣式 (獨立區塊) */
+        .delivery-section {
+            margin-top: 20px;
+            padding-top: 20px;
+            border-top: 2px solid #eee;
+            width: 100%;
+            text-align: center;
+        }
+        .delivery { 
+            background: linear-gradient(135deg, #ff5722, #d84315); 
+            font-size: 1.4em; /* 比語言按鈕稍小 */
+            padding: 18px;
+        }
 
         .footer-info {
-            margin-top: 50px;
+            margin-top: 40px;
             text-align: center;
             color: #555;
         }
@@ -93,6 +108,10 @@
         <a href="/menu?lang=en{{ table_param }}" class="btn en">English</a>
         <a href="/menu?lang=jp{{ table_param }}" class="btn jp">日本語</a>
         <a href="/menu?lang=kr{{ table_param }}" class="btn kr">한국어</a>
+
+        <div class="delivery-section">
+            <a href="/delivery/setup" class="btn delivery">🛵 外送服務 (Delivery)</a>
+        </div>
     </div>
 
     <div class="footer-info">
