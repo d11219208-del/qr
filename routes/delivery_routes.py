@@ -4,11 +4,11 @@ from geopy.geocoders import Nominatim
 from geopy.exc import GeocoderTimedOut, GeocoderUnavailable
 from haversine import haversine, Unit
 from database import get_db_connection
-import re  # 匯入正規表達式模組
+import re
 
 delivery_bp = Blueprint('delivery', __name__)
 
-# 餐廳座標 (請確保這裡是你餐廳的正確座標)
+# 餐廳座標 (請確認這是正確的)
 RESTAURANT_COORDS = (25.054358, 121.543468)
 
 def get_delivery_settings():
@@ -27,34 +27,27 @@ def get_delivery_settings():
     }
 
 def normalize_address(addr):
-    """
-    第一階段清洗：移除郵遞區號、樓層、室號
-    輸入: '104臺北市中山區長春路348-4號1樓'
-    輸出: '臺北市中山區長春路348-4號'
-    """
-    # 1. 移除開頭的郵遞區號 (3到5碼數字)
-    addr = re.sub(r'^\d{3,5}\s?', '', addr)
-    
-    # 2. 移除樓層與室號 (例如: 1樓, 5F, 5f, -1樓, B1, 室)
-    # 這裡會把 '1樓' 及其後面的字全部切掉
-    addr = re.sub(r'(\d+[Ff樓].*)|(B\d+.*)|(地下.*)|(室.*)', '', addr)
-    
+    """基本清洗：移除郵遞區號與樓層"""
+    addr = re.sub(r'^\d{3,5}\s?', '', addr) # 移除開頭郵遞區號
+    addr = re.sub(r'(\d+[Ff樓].*)|(B\d+.*)|(地下.*)|(室.*)', '', addr) # 移除樓層
     return addr.strip()
 
-def remove_dash_number(addr):
+def extract_road_only(addr):
     """
-    第二階段清洗：處理 '之' 或 '-' 的門牌
-    輸入: '臺北市中山區長春路348-4號' 或 '348號之4'
-    輸出: '臺北市中山區長春路348號'
-    (OpenStreetMap 常常找不到附號，但主號位置是一樣的)
+    終極手段：只抓取路名
+    輸入: '臺北市中山區長春路348-4號'
+    輸出: '臺北市中山區長春路'
     """
-    # 針對 '348-4號' -> 取 '348號'
-    addr = re.sub(r'(\d+)[-‐‑]\d+號', r'\1號', addr)
-    # 針對 '348號之4' -> 取 '348號'
-    addr = re.sub(r'(\d+號)之\d+', r'\1', addr)
-    return addr
+    # 抓取直到 "路"、"街"、"大道"、"巷" 為止的字串
+    match = re.search(r'.+?[縣市].+?[區鄉鎮市].+?[路街大道巷]', addr)
+    if match:
+        return match.group(0)
+    # 如果上面沒抓到，嘗試抓簡化版 (只要有路/街)
+    match_simple = re.search(r'.+?[路街大道]', addr)
+    if match_simple:
+        return match_simple.group(0)
+    return addr # 真的沒招了，回傳原值
 
-# 1. 外送首頁
 @delivery_bp.route('/setup')
 def setup():
     settings = get_delivery_settings()
@@ -73,7 +66,6 @@ def setup():
 
     return render_template('delivery_setup.html', dates=date_options)
 
-# 2. 檢查地址並計算運費 API
 @delivery_bp.route('/check', methods=['POST'])
 def check_address():
     data = request.json
@@ -84,40 +76,51 @@ def check_address():
     if not raw_address or not name or not phone:
         return jsonify({'success': False, 'msg': '請填寫完整資訊'})
     
-    geolocator = Nominatim(user_agent="tw_food_delivery_v3_fix")
+    geolocator = Nominatim(user_agent="tw_food_delivery_final_v4")
     
     location = None
+    fallback_level = 0
     
-    # --- 智慧搜尋策略 (三階段嘗試) ---
     try:
-        # 步驟 1: 基礎清洗 (移除 104, 1樓)
-        search_addr_1 = normalize_address(raw_address)
-        print(f"嘗試 1: {search_addr_1}")
-        location = geolocator.geocode(f"台灣 {search_addr_1}", timeout=10)
+        # --- 第一層：標準清洗 (去樓層) ---
+        search_addr = normalize_address(raw_address)
+        # 加上 "台灣" 強制鎖定區域
+        query = f"台灣 {search_addr}"
+        location = geolocator.geocode(query, timeout=10)
         
-        # 步驟 2: 如果找不到，移除連字號 (348-4號 -> 348號)
-        if not location and ('-' in search_addr_1 or '之' in search_addr_1):
-            search_addr_2 = remove_dash_number(search_addr_1)
-            print(f"嘗試 2 (移除附號): {search_addr_2}")
-            # 如果清洗後地址變了，才搜第二次
-            if search_addr_2 != search_addr_1:
-                location = geolocator.geocode(f"台灣 {search_addr_2}", timeout=10)
-        
-        # 步驟 3: (保底) 真的還找不到，試試看只搜「路名」? 
-        # (這裡選擇不自動搜路名，因為怕定位到該路頭或路尾，導致運費誤差太大，寧願報錯)
+        # --- 第二層：去連字號 (348-4 -> 348號) ---
+        if not location:
+            # 將 "348-4號" 轉為 "348號"，將 "之4" 去掉
+            addr_no_dash = re.sub(r'(\d+)[-‐‑]\d+號', r'\1號', search_addr)
+            addr_no_dash = re.sub(r'(\d+號)之\d+', r'\1', addr_no_dash)
+            
+            if addr_no_dash != search_addr:
+                print(f"嘗試降級搜尋 (去號): {addr_no_dash}")
+                location = geolocator.geocode(f"台灣 {addr_no_dash}", timeout=10)
+                fallback_level = 1
 
+        # --- 第三層 (大絕招)：只搜路名 ---
+        if not location:
+            road_only = extract_road_only(search_addr)
+            if road_only != search_addr:
+                print(f"嘗試終極搜尋 (只搜路名): {road_only}")
+                location = geolocator.geocode(f"台灣 {road_only}", timeout=10)
+                fallback_level = 2
+
+        # --- 判斷結果 ---
         if not location:
              return jsonify({
                  'success': False, 
-                 'msg': '找不到此地址。系統已嘗試移除樓層與附號搜尋仍失敗，請檢查路名或門牌號碼是否正確。'
+                 'msg': '找不到此地址。請確認您輸入了正確的「行政區」與「路名」。'
              })
 
-        # --- 定位成功，開始計算 ---
+        # 計算距離
         user_coords = (location.latitude, location.longitude)
         dist = haversine(RESTAURANT_COORDS, user_coords, unit=Unit.KILOMETERS)
         
         settings = get_delivery_settings()
         
+        # 檢查距離限制
         if dist > settings['max_km']:
             return jsonify({
                 'success': False, 
@@ -130,14 +133,20 @@ def check_address():
         session['delivery_data'] = {
             'name': name,
             'phone': phone,
-            'address': raw_address # 保留使用者原始輸入 (含樓層)
+            'address': raw_address # 使用者原始輸入 (含樓層)
         }
+
+        # 根據 fallback 等級，給予不同的精準度提示 (可選)
+        note = ""
+        if fallback_level == 2:
+            note = "(以路段中心估算)"
 
         session['delivery_info'] = {
             'is_delivery': True,
             'distance_km': round(dist, 1),
             'shipping_fee': shipping_fee,
-            'min_price': settings['min_price']
+            'min_price': settings['min_price'],
+            'note': note
         }
         
         session['table_num'] = '外送'
