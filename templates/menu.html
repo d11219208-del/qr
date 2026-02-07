@@ -14,7 +14,6 @@
         .menu-item { background: white; margin: 12px; padding: 15px; border-radius: 12px; display: flex; box-shadow: 0 2px 8px rgba(0,0,0,0.08); position: relative; }
         .menu-img { width: 100px; height: 100px; border-radius: 10px; object-fit: cover; background: #eee; }
         .menu-info { flex: 1; padding-left: 15px; display: flex; flex-direction: column; justify-content: space-between; }
-        .menu-info b { font-size: 1.2em; }
         .add-btn { background: #28a745; color: white; border: none; padding: 10px 20px; border-radius: 20px; align-self: flex-end; font-size: 1em; font-weight: bold; }
         .sold-out { filter: grayscale(1); opacity: 0.6; pointer-events: none; }
         .sold-out-badge { position: absolute; top: 10px; right: 10px; background: rgba(0,0,0,0.7); color: white; padding: 4px 10px; border-radius: 5px; font-size: 0.9em; font-weight: bold; z-index: 5; }
@@ -23,28 +22,30 @@
         .cart-buttons { display: flex; gap: 12px; }
         .btn-view-cart { background: #ff9800; color: white; border: none; flex: 1; padding: 15px; border-radius: 12px; font-weight: bold; font-size: 1.2em; }
         .btn-checkout { background: #28a745; color: white; border: none; flex: 1; padding: 15px; border-radius: 12px; font-weight: bold; font-size: 1.2em; }
+        
+        /* Modal Styles */
         .modal { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); display: none; z-index: 200; justify-content: center; align-items: flex-end; }
         .modal-c { background: white; width: 100%; padding: 25px; border-radius: 25px 25px 0 0; max-height: 85vh; overflow-y: auto; box-sizing: border-box; }
         .opt-tag { border: 1px solid #ccc; padding: 8px 15px; border-radius: 20px; margin: 5px; display: inline-block; font-size: 1.1em; }
         .opt-tag.sel { background: #e3f2fd; border-color: #2196f3; color: #2196f3; font-weight: bold; }
-        .cat-header { padding: 12px 15px; font-weight: bold; font-size: 1.3em; color: #333; background: #eee; margin-top: 15px; scroll-margin-top: 160px; }
         .qty-ctrl { display: flex; align-items: center; gap: 15px; justify-content: center; margin: 20px 0; }
         .qty-ctrl button { width: 50px; height: 50px; border-radius: 25px; border: 1px solid #ddd; background: white; font-size: 1.8em; }
         .qty-input { width: 70px; text-align: center; font-size: 1.4em; border: 1px solid #ddd; padding: 8px; border-radius: 8px; }
+        .cat-header { padding: 12px 15px; font-weight: bold; font-size: 1.3em; color: #333; background: #eee; margin-top: 15px; scroll-margin-top: 160px; }
+
+        /* 外送資訊卡片樣式 */
+        .delivery-info-card {
+            background: #e3f2fd; border: 1px solid #90caf9; border-radius: 10px; padding: 12px; margin-bottom: 10px; color: #1565c0; font-size: 0.95em;
+        }
+        .di-row { margin-bottom: 4px; display: flex; align-items: flex-start; }
+        .di-icon { margin-right: 8px; font-size: 1.1em; }
+        .di-fee { font-weight: bold; color: #d32f2f; margin-top: 5px; text-align: right; border-top: 1px solid #bbdefb; padding-top: 5px; }
+
+        /* 購物車樣式調整 */
         .cart-item-row { border-bottom: 1px solid #eee; padding: 15px 0; }
         .cart-item-main { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
         .cart-qty-sub { display: flex; align-items: center; justify-content: flex-end; gap: 15px; }
         .btn-edit-opt { background: #e3f2fd; color: #2196f3; border: 1px solid #2196f3; padding: 6px 12px; border-radius: 8px; font-size: 0.9em; font-weight: bold; cursor: pointer; }
-        
-        /* 新增樣式：模式切換與外送表單 */
-        .mode-switch { display: flex; background: #eee; border-radius: 10px; padding: 4px; margin-bottom: 10px; }
-        .mode-btn { flex: 1; text-align: center; padding: 10px; border-radius: 8px; cursor: pointer; font-weight: bold; color: #666; transition: 0.3s; }
-        .mode-btn.active { background: white; color: #007bff; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
-        
-        .delivery-form { display: none; background: #f0f8ff; padding: 15px; border-radius: 10px; border: 1px solid #cce5ff; }
-        .df-row { margin-bottom: 10px; }
-        .df-input { width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 8px; box-sizing: border-box; font-size: 1em; }
-        .fee-notice { font-size: 0.9em; color: #007bff; margin-top: 5px; text-align: right; font-weight: bold; }
     </style>
 </head>
 <body>
@@ -57,23 +58,23 @@
         
         <h2 style="margin:0 0 10px 0;">{{ texts['welcome'] }}</h2>
 
-        <div class="mode-switch">
-            <div class="mode-btn active" id="btn-dine" onclick="switchMode('dine_in')">🍽️ {{ texts.get('dine_in', '內用') }}</div>
-            <div class="mode-btn" id="btn-delivery" onclick="switchMode('delivery')">🛵 {{ texts.get('delivery', '外送') }}</div>
-        </div>
-
-        <div id="dine-section">
-            <input type="text" id="visible_table" value="{{ table_num }}" placeholder="{{ texts['table_placeholder'] }}" 
-                   style="padding:12px;width:100%;box-sizing:border-box;border:2px solid #ddd;border-radius:8px;font-size:1.2em;margin-bottom:8px;">
-        </div>
-
-        <div id="delivery-section" class="delivery-form">
-            <div class="df-row"><input type="text" id="d_name" class="df-input" placeholder="Name / 稱呼"></div>
-            <div class="df-row"><input type="tel" id="d_phone" class="df-input" placeholder="Phone / 電話 (必填)"></div>
-            <div class="df-row"><input type="text" id="d_addr" class="df-input" placeholder="Address / 地址 (必填)"></div>
-            <div class="df-row"><input type="text" id="d_note" class="df-input" placeholder="Note / 備註"></div>
-            <div class="fee-notice">🛵 Delivery Fee: $<span id="disp-fee">0</span></div>
-        </div>
+        {% if delivery_data.phone %}
+            <div class="delivery-info-card">
+                <div class="di-row"><span class="di-icon">🛵</span> <b>外送訂單 (Delivery)</b></div>
+                <div class="di-row"><span class="di-icon">👤</span> {{ delivery_data.name or '貴賓' }} / {{ delivery_data.phone }}</div>
+                <div class="di-row"><span class="di-icon">📍</span> {{ delivery_data.address }}</div>
+                <div class="di-fee">
+                    運費 Delivery Fee: ${{ session.get('delivery_info', {}).get('shipping_fee', 0) }}
+                </div>
+            </div>
+            <input type="hidden" id="visible_table" value="外送">
+        {% else %}
+            <div style="margin-bottom: 10px;">
+                <label style="font-weight:bold; color:#555;">{{ texts['table_placeholder'] }}</label>
+                <input type="text" id="visible_table" value="{{ table_num }}" placeholder="請輸入桌號" 
+                       style="padding:12px;width:100%;box-sizing:border-box;border:2px solid #ddd;border-radius:8px;font-size:1.2em;margin-top:5px;">
+            </div>
+        {% endif %}
 
         <div class="cat-bar" id="cat-nav"></div>
     </div>
@@ -88,13 +89,12 @@
         {% endif %}
         
         <input type="hidden" name="table_number" id="tbl_input">
-        <input type="hidden" name="order_type" id="type_input" value="dine_in">
-        <input type="hidden" name="delivery_fee" id="fee_input" value="0">
         
-        <input type="hidden" name="customer_name" id="h_name">
-        <input type="hidden" name="customer_phone" id="h_phone">
-        <input type="hidden" name="delivery_address" id="h_addr">
-        <input type="hidden" name="delivery_note" id="h_note">
+        <input type="hidden" name="order_type" value="{{ 'delivery' if delivery_data.phone else 'dine_in' }}">
+        <input type="hidden" name="customer_name" value="{{ delivery_data.name }}">
+        <input type="hidden" name="customer_phone" value="{{ delivery_data.phone }}">
+        <input type="hidden" name="delivery_address" value="{{ delivery_data.address }}">
+        <input type="hidden" name="delivery_fee" value="{{ session.get('delivery_info', {}).get('shipping_fee', 0) }}">
         
         <div class="cart-bar" id="bar">
             <div class="cart-summary">
@@ -131,38 +131,20 @@
     </div>
 
     <script>
-    // 資料注入
+    // --- 初始化變數 ---
     const P = {{ products | tojson }};
     const T = {{ texts | tojson }};
     const EDIT_OID = "{{ edit_oid or '' }}";
     const PRELOAD_CART = {{ preload_cart | safe }};
     const CUR_LANG = "{{ display_lang }}";
-    const DELIVERY_FEE = {{ config.get('delivery_fee', 0) }}; // 從後端讀取運費
+    
+    // 判斷當前模式 (由後端 delivery_data 決定)
+    const IS_DELIVERY = {{ 'true' if delivery_data.phone else 'false' }};
+    const DELIVERY_FEE = {{ session.get('delivery_info', {}).get('shipping_fee', 0) }};
 
     let C = [], cur = null, selectedOptIndices = [], addP = 0, editIndex = -1;
-    let orderMode = 'dine_in'; // 當前模式: dine_in 或 delivery
 
-    // --- 模式切換邏輯 ---
-    function switchMode(mode) {
-        orderMode = mode;
-        document.getElementById('type_input').value = mode;
-        
-        if(mode === 'dine_in') {
-            document.getElementById('btn-dine').classList.add('active');
-            document.getElementById('btn-delivery').classList.remove('active');
-            document.getElementById('dine-section').style.display = 'block';
-            document.getElementById('delivery-section').style.display = 'none';
-        } else {
-            document.getElementById('btn-dine').classList.remove('active');
-            document.getElementById('btn-delivery').classList.add('active');
-            document.getElementById('dine-section').style.display = 'none';
-            document.getElementById('delivery-section').style.display = 'block';
-            document.getElementById('disp-fee').innerText = DELIVERY_FEE;
-            document.getElementById('fee_input').value = DELIVERY_FEE;
-        }
-        upd(); // 重新計算總價(含運費)
-    }
-
+    // --- 快取與載入 ---
     function saveCache() { 
         if(!EDIT_OID) localStorage.setItem('cart_cache', JSON.stringify(C)); 
     }
@@ -183,7 +165,7 @@
         }
     });
 
-    // 渲染產品清單
+    // --- 渲染產品與分類 ---
     let h = "", lastCatKey = "", cats = [];
     P.forEach(p => {
         let currentCatName = p['category_' + CUR_LANG] || p.category_zh;
@@ -206,7 +188,6 @@
     });
     document.getElementById('list').innerHTML = h;
 
-    // 渲染導覽列
     let navH = ""; 
     cats.forEach(c => { 
         navH += `<div class="cat-btn" onclick="scrollToCat('${c.id}', this)">${c.name}</div>`; 
@@ -221,13 +202,13 @@
             const elementRect = el.getBoundingClientRect().top;
             const elementPosition = elementRect - bodyRect;
             const offsetPosition = elementPosition - offset;
-
             window.scrollTo({ top: offsetPosition, behavior: 'smooth' });
             document.querySelectorAll('.cat-btn').forEach(b => b.classList.remove('active'));
             btn.classList.add('active');
         }
     }
 
+    // --- Modal 相關 ---
     function closeModalByBg(e, id) { if(e.target.id === id) document.getElementById(id).style.display = 'none'; }
 
     function openOpt(productId, cartIndex = -1) {
@@ -306,16 +287,16 @@
         if(editIndex > -1) showCart();
     }
 
+    // --- 購物車與結帳邏輯 ---
     function upd() {
         if(C.length) {
             document.getElementById('bar').style.display = 'flex';
             
-            // 計算餐點總額
             let foodTotal = C.reduce((a, b) => a + b.unit_price * b.qty, 0);
             
-            // 如果是外送，加上運費
+            // 如果是外送模式，加上運費顯示
             let finalTotal = foodTotal;
-            if (orderMode === 'delivery') {
+            if (IS_DELIVERY) {
                 finalTotal += DELIVERY_FEE;
             }
 
@@ -357,8 +338,8 @@
             </div>`;
         });
         
-        // 在購物車明細中也顯示運費提示 (如果目前是外送模式)
-        if (orderMode === 'delivery' && C.length > 0) {
+        // 購物車明細中顯示運費
+        if (IS_DELIVERY && C.length > 0) {
             h += `<div style="text-align:right; padding:15px 0; border-top:2px solid #333; color:#007bff; font-weight:bold;">
                     Delivery Fee: $${DELIVERY_FEE}
                   </div>`;
@@ -369,29 +350,22 @@
     }
 
     function sub() {
-        if (orderMode === 'dine_in') {
-            let t = document.getElementById('visible_table').value;
-            if(!t) return alert(T.table_placeholder || '請輸入桌號');
-            document.getElementById('tbl_input').value = t;
-        } else {
-            // 外送驗證
-            let phone = document.getElementById('d_phone').value;
-            let addr = document.getElementById('d_addr').value;
-            if(!phone || !addr) return alert('Phone and Address are required!\n請填寫電話與地址');
-            
-            // 填寫隱藏欄位
-            document.getElementById('h_name').value = document.getElementById('d_name').value;
-            document.getElementById('h_phone').value = phone;
-            document.getElementById('h_addr').value = addr;
-            document.getElementById('h_note').value = document.getElementById('d_note').value;
-            // 外送時桌號留空或填寫特定值
-            document.getElementById('tbl_input').value = 'Delivery'; 
+        // 設定桌號欄位
+        let tableVal = document.getElementById('visible_table').value;
+        
+        // 驗證
+        if (!IS_DELIVERY) {
+            // 內用模式：必須檢查桌號
+            if(!tableVal || tableVal.trim() === '') {
+                return alert(T.table_placeholder || '請輸入桌號');
+            }
         }
+        
+        // 將桌號填入 hidden input
+        document.getElementById('tbl_input').value = tableVal;
 
         if(confirm(T.confirm_order)) {
             document.getElementById('cart_input').value = JSON.stringify(C);
-            
-            // 提交成功後清空快取
             localStorage.removeItem('cart_cache');
             document.getElementById('order-form').submit();
         }
