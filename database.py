@@ -23,7 +23,7 @@ def init_db():
         conn.autocommit = True
         cur = conn.cursor()
 
-        # 1. 建立產品表 (包含多國語系與排序)
+        # 1. 建立產品表
         cur.execute('''
             CREATE TABLE IF NOT EXISTS products (
                 id SERIAL PRIMARY KEY, 
@@ -48,6 +48,7 @@ def init_db():
         ''')
         
         # 2. 建立訂單表
+        # 注意：這裡已經加入了 order_type 和 delivery_info
         cur.execute('''
             CREATE TABLE IF NOT EXISTS orders (
                 id SERIAL PRIMARY KEY, 
@@ -60,7 +61,10 @@ def init_db():
                 content_json TEXT, 
                 need_receipt BOOLEAN DEFAULT FALSE, 
                 lang VARCHAR(10) DEFAULT 'zh',
-                is_delivery BOOLEAN DEFAULT FALSE,
+                
+                -- 外送相關欄位
+                order_type VARCHAR(50) DEFAULT 'dine_in',
+                delivery_info TEXT,
                 customer_name TEXT,
                 customer_phone TEXT,
                 customer_address TEXT,
@@ -72,49 +76,45 @@ def init_db():
         # 3. 建立系統設定表
         cur.execute('''CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);''')
         
-        # 4. 插入預設設定 (Email 與 外送相關)
+        # 4. 插入預設設定
         default_settings = [
-            # Email 相關
-            ('report_email', ''), 
-            ('resend_api_key', ''), 
             ('sender_email', 'onboarding@resend.dev'),
-            
-            # --- 新增：外送設定預設值 ---
-            ('delivery_enabled', '1'),      # 外送開關 (1開 0關)
-            ('delivery_min_price', '500'),  # 最低起送金額 (購物車滿多少錢)
-            ('delivery_max_km', '5'),       # 最大外送距離 (公里)
-            ('delivery_base_fee', '30'),    # 基礎運費
-            ('delivery_fee_per_km', '10')   # 每公里加收費用
+            ('delivery_enabled', '1'),
+            ('delivery_min_price', '500'),
+            ('delivery_fee_base', '60')
         ]
         
         for k, v in default_settings:
-            # ON CONFLICT DO NOTHING 確保不會覆蓋使用者已修改的設定
             cur.execute("INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT DO NOTHING", (k, v))
 
-        # 5. 欄位安全性更新 (若已存在資料表則補上缺少的欄位)
-        # 這裡包含舊系統升級到新系統時必要的 ALTER 指令
+        # 5. 【關鍵】欄位自動補全 (Migration)
+        # 這裡會檢查現有的 orders 表，如果缺少欄位會自動補上，解決 "column does not exist" 錯誤
         alters = [
             "ALTER TABLE orders ADD COLUMN IF NOT EXISTS lang VARCHAR(10) DEFAULT 'zh';",
             "ALTER TABLE orders ADD COLUMN IF NOT EXISTS content_json TEXT;",
             
-            # --- 新增：外送功能所需的欄位 ---
-            "ALTER TABLE orders ADD COLUMN IF NOT EXISTS is_delivery BOOLEAN DEFAULT FALSE;",
+            # 補上缺少的欄位
+            "ALTER TABLE orders ADD COLUMN IF NOT EXISTS order_type VARCHAR(50) DEFAULT 'dine_in';",
+            "ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_info TEXT;",
+            
+            # 外送詳細欄位
             "ALTER TABLE orders ADD COLUMN IF NOT EXISTS customer_name TEXT;",
             "ALTER TABLE orders ADD COLUMN IF NOT EXISTS customer_phone TEXT;",
             "ALTER TABLE orders ADD COLUMN IF NOT EXISTS customer_address TEXT;",
-            "ALTER TABLE orders ADD COLUMN IF NOT EXISTS scheduled_for TEXT;", # 儲存預約日期字串 (YYYY-MM-DD)
+            "ALTER TABLE orders ADD COLUMN IF NOT EXISTS scheduled_for TEXT;",
             "ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_fee INTEGER DEFAULT 0;"
         ]
         
+        print("🔄 正在檢查資料庫欄位結構...")
         for cmd in alters:
             try:
                 cur.execute(cmd)
             except Exception as e:
-                # 忽略欄位已存在的錯誤，但印出其他錯誤以便除錯
-                if 'duplicate column' not in str(e):
+                # 忽略 "duplicate column" 錯誤，其他錯誤則印出
+                if 'duplicate' not in str(e).lower() and 'exists' not in str(e).lower():
                     print(f"⚠️ Warning during migration: {e}")
 
-        print("✅ 資料庫初始化檢查完成 (含外送模組)")
+        print("✅ 資料庫初始化檢查完成 (含 order_type 與 delivery_info)")
         return True
 
     except Exception as e:
@@ -126,3 +126,7 @@ def init_db():
             cur.close()
         if conn:
             conn.close()
+
+if __name__ == "__main__":
+    # 讓這個檔案可以直接被執行以初始化資料庫
+    init_db()
