@@ -68,9 +68,18 @@
                     <div class="column"><label>發件人 Email</label><input type="email" name="sender_email" value="{{ config.get('sender_email','') }}" placeholder="需與 Resend 驗證網域一致"></div>
                     <div class="column"><label>Resend API Key</label><input type="password" name="resend_api_key" value="{{ config.get('resend_api_key','') }}" placeholder="re_..."></div>
                 </div>
-                <button type="submit" name="action" value="save_settings">💾 儲存設定</button>
-                <button type="submit" name="action" value="test_email" class="button button-outline">🧪 測試連線</button>
-                <button type="submit" name="action" value="send_report_now" class="button button-outline" style="float: right;">📊 立即補發今日報表</button>
+                <div class="row">
+                    <div class="column column-33">
+                        <label>🛵 外送運費 (Delivery Fee)</label>
+                        <input type="number" name="delivery_fee" value="{{ config.get('delivery_fee', 0) }}" placeholder="0" min="0">
+                    </div>
+                </div>
+
+                <div style="margin-top: 10px;">
+                    <button type="submit" name="action" value="save_settings">💾 儲存所有設定</button>
+                    <button type="submit" name="action" value="test_email" class="button button-outline">🧪 測試連線</button>
+                    <button type="submit" name="action" value="send_report_now" class="button button-outline" style="float: right;">📊 立即補發今日報表</button>
+                </div>
             </form>
         </div>
 
@@ -173,7 +182,7 @@
                     </form>
                 </div>
                 <div class="column" style="text-align: right;">
-                    <a href="{{ url_for('admin.reset_menu') }}" class="button" style="background:#ff4d4f; border-color:#ff4d4f;" onclick="return confirmMenuReset('⚠️ 將清空所有產品且無法復原，確定？')">🗑️ 清空菜單</a>
+                    <a href="{{ url_for('admin.reset_menu') }}" class="button" style="background:#ff4d4f; border-color:#ff4d4f;" onclick="return confirmMenuReset()">🗑️ 清空菜單</a>
                     <button type="button" class="button" style="background:#ff4d4f; border-color:#ff4d4f; color: white; cursor: pointer;" onclick="openOrderModal()">💥 清空訂單</button>
                 </div>
             </div>
@@ -221,7 +230,6 @@
         });
     </script>
     
-    <!--/*清空指定日期區間訂單紀錄*/-->
     <div id="orderModal" class="custom-modal" style="display: none;">
     <div class="custom-modal-content">
         <span class="close-btn" onclick="closeOrderModal()">&times;</span>
@@ -328,25 +336,17 @@
         }
     }
 
-   // --- 新增：清空菜單的雙重確認邏輯 ---
+   // 清空菜單的雙重確認邏輯
     function confirmMenuReset() {
-        // 1. 彈出輸入框提示
         var input = prompt("⚠️ 危險操作！\n這將清空所有產品資料且「無法復原」。\n\n若確定要執行，請輸入 'DELETE'：");
-        
-        // 2. 檢查輸入內容
         if (input === 'DELETE') {
-            return true; // 允許連結跳轉 (執行刪除)
+            return true;
         } else {
             alert("❌ 輸入不正確或已取消，操作中止。");
-            return false; // 阻止連結跳轉 (取消操作)
+            return false; 
         }
     }
     
 </script>
 </body>
 </html>
-
-
-
-
-
