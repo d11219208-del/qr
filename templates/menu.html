@@ -49,6 +49,8 @@
     </style>
 </head>
 <body>
+    {% set delivery_data = delivery_data or {} %}
+
     <div class="header">
         {% if edit_oid %}
         <div style="background:#fff3cd;padding:12px;color:#856404;text-align:center;font-weight:bold;margin-bottom:10px;border-radius:8px;">
@@ -58,7 +60,7 @@
         
         <h2 style="margin:0 0 10px 0;">{{ texts['welcome'] }}</h2>
 
-        {% if delivery_data.phone %}
+        {% if delivery_data.get('phone') %}
             <div class="delivery-info-card">
                 <div class="di-row"><span class="di-icon">🛵</span> <b>外送訂單 (Delivery)</b></div>
                 <div class="di-row"><span class="di-icon">👤</span> {{ delivery_data.name or '貴賓' }} / {{ delivery_data.phone }}</div>
@@ -90,10 +92,10 @@
         
         <input type="hidden" name="table_number" id="tbl_input">
         
-        <input type="hidden" name="order_type" value="{{ 'delivery' if delivery_data.phone else 'dine_in' }}">
-        <input type="hidden" name="customer_name" value="{{ delivery_data.name }}">
-        <input type="hidden" name="customer_phone" value="{{ delivery_data.phone }}">
-        <input type="hidden" name="delivery_address" value="{{ delivery_data.address }}">
+        <input type="hidden" name="order_type" value="{{ 'delivery' if delivery_data.get('phone') else 'dine_in' }}">
+        <input type="hidden" name="customer_name" value="{{ delivery_data.get('name', '') }}">
+        <input type="hidden" name="customer_phone" value="{{ delivery_data.get('phone', '') }}">
+        <input type="hidden" name="delivery_address" value="{{ delivery_data.get('address', '') }}">
         <input type="hidden" name="delivery_fee" value="{{ session.get('delivery_info', {}).get('shipping_fee', 0) }}">
         
         <div class="cart-bar" id="bar">
@@ -131,20 +133,18 @@
     </div>
 
     <script>
-    // --- 初始化變數 ---
     const P = {{ products | tojson }};
     const T = {{ texts | tojson }};
     const EDIT_OID = "{{ edit_oid or '' }}";
     const PRELOAD_CART = {{ preload_cart | safe }};
     const CUR_LANG = "{{ display_lang }}";
     
-    // 判斷當前模式 (由後端 delivery_data 決定)
-    const IS_DELIVERY = {{ 'true' if delivery_data.phone else 'false' }};
+    // JS 這裡也需要保護，避免 delivery_data 為空時報錯
+    const IS_DELIVERY = {{ 'true' if (delivery_data and delivery_data.phone) else 'false' }};
     const DELIVERY_FEE = {{ session.get('delivery_info', {}).get('shipping_fee', 0) }};
 
     let C = [], cur = null, selectedOptIndices = [], addP = 0, editIndex = -1;
 
-    // --- 快取與載入 ---
     function saveCache() { 
         if(!EDIT_OID) localStorage.setItem('cart_cache', JSON.stringify(C)); 
     }
@@ -165,7 +165,6 @@
         }
     });
 
-    // --- 渲染產品與分類 ---
     let h = "", lastCatKey = "", cats = [];
     P.forEach(p => {
         let currentCatName = p['category_' + CUR_LANG] || p.category_zh;
@@ -208,7 +207,6 @@
         }
     }
 
-    // --- Modal 相關 ---
     function closeModalByBg(e, id) { if(e.target.id === id) document.getElementById(id).style.display = 'none'; }
 
     function openOpt(productId, cartIndex = -1) {
@@ -287,19 +285,14 @@
         if(editIndex > -1) showCart();
     }
 
-    // --- 購物車與結帳邏輯 ---
     function upd() {
         if(C.length) {
             document.getElementById('bar').style.display = 'flex';
-            
             let foodTotal = C.reduce((a, b) => a + b.unit_price * b.qty, 0);
-            
-            // 如果是外送模式，加上運費顯示
             let finalTotal = foodTotal;
             if (IS_DELIVERY) {
                 finalTotal += DELIVERY_FEE;
             }
-
             document.getElementById('tot').innerText = finalTotal;
             document.getElementById('cnt').innerText = C.reduce((a, b) => a + b.qty, 0);
         } else {
@@ -338,7 +331,6 @@
             </div>`;
         });
         
-        // 購物車明細中顯示運費
         if (IS_DELIVERY && C.length > 0) {
             h += `<div style="text-align:right; padding:15px 0; border-top:2px solid #333; color:#007bff; font-weight:bold;">
                     Delivery Fee: $${DELIVERY_FEE}
@@ -350,18 +342,12 @@
     }
 
     function sub() {
-        // 設定桌號欄位
         let tableVal = document.getElementById('visible_table').value;
-        
-        // 驗證
         if (!IS_DELIVERY) {
-            // 內用模式：必須檢查桌號
             if(!tableVal || tableVal.trim() === '') {
                 return alert(T.table_placeholder || '請輸入桌號');
             }
         }
-        
-        // 將桌號填入 hidden input
         document.getElementById('tbl_input').value = tableVal;
 
         if(confirm(T.confirm_order)) {
@@ -371,7 +357,6 @@
         }
     }
     
-    // 初始化載入
     initCart();
     </script>
 </body>
