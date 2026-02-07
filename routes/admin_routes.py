@@ -134,6 +134,43 @@ def admin_panel():
     
     return render_template('admin.html', config=config, prods=prods, msg=msg)
 
+# ==========================================
+# 新增功能：外送設定儲存路由
+# ==========================================
+@admin_bp.route('/settings/delivery', methods=['POST'])
+def update_delivery_settings():
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        # 處理 Checkbox：沒勾選時 form 不會送出值，所以預設為 '0'
+        is_enabled = '1' if request.form.get('delivery_enabled') else '0'
+
+        settings = {
+            'delivery_enabled': is_enabled,
+            'delivery_min_price': request.form.get('delivery_min_price'),
+            'delivery_max_km': request.form.get('delivery_max_km'),
+            'delivery_base_fee': request.form.get('delivery_base_fee'),
+            'delivery_fee_per_km': request.form.get('delivery_fee_per_km')
+        }
+
+        for key, val in settings.items():
+            # 使用 ON CONFLICT 更新現有設定
+            cur.execute("""
+                INSERT INTO settings (key, value) 
+                VALUES (%s, %s) 
+                ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+            """, (key, val))
+        
+        conn.commit()
+        msg = "✅ 外送設定已更新"
+    except Exception as e:
+        conn.rollback()
+        msg = f"❌ 設定更新失敗: {e}"
+    finally:
+        cur.close()
+        conn.close()
+
+    return redirect(url_for('admin.admin_panel', msg=msg))
 
 # ==========================================
 # 編輯產品 (獨立頁面)
