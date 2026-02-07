@@ -1,92 +1,135 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>外送資料填寫 | Delivery Info</title>
+    <title>外送資料填寫</title>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
     <style>
-        body {
-            font-family: 'Microsoft JhengHei', sans-serif;
-            background: #f5f5f5;
-            padding: 20px;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            min-height: 100vh;
-            margin: 0;
-        }
-        .container {
-            background: white;
-            padding: 30px;
-            border-radius: 15px;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
-            width: 100%;
-            max-width: 400px;
-            box-sizing: border-box;
-        }
-        h2 { text-align: center; color: #333; margin-bottom: 20px; }
-        
-        .form-group { margin-bottom: 20px; }
+        body { font-family: 'Microsoft JhengHei', sans-serif; background: #f5f5f5; padding: 20px; text-align: center; }
+        .container { background: white; padding: 30px; border-radius: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); max-width: 400px; margin: 0 auto; }
+        .form-group { margin-bottom: 20px; text-align: left; }
         label { display: block; margin-bottom: 8px; font-weight: bold; color: #555; }
+        input, select { width: 100%; padding: 12px; border: 2px solid #ddd; border-radius: 8px; font-size: 16px; box-sizing: border-box; }
         
-        input[type="tel"], 
-        input[type="text"] {
-            width: 100%;
-            padding: 15px;
-            border: 2px solid #ddd;
-            border-radius: 10px;
-            font-size: 1.1em;
-            box-sizing: border-box;
-            outline: none;
-            transition: border-color 0.3s;
-        }
-        input:focus { border-color: #ff5722; }
-
+        /* 按鈕樣式 */
         .btn-submit {
-            width: 100%;
-            padding: 18px;
-            background: linear-gradient(135deg, #ff5722, #d84315);
-            color: white;
-            border: none;
-            border-radius: 50px;
-            font-size: 1.4em;
-            font-weight: bold;
-            cursor: pointer;
-            box-shadow: 0 4px 10px rgba(255, 87, 34, 0.3);
+            width: 100%; padding: 15px;
+            background: #ff5722; color: white;
+            border: none; border-radius: 50px;
+            font-size: 1.2em; cursor: pointer;
+            transition: 0.3s;
         }
-        .btn-submit:active { transform: scale(0.98); }
-
-        .btn-back {
-            display: block;
-            text-align: center;
-            margin-top: 20px;
-            color: #777;
-            text-decoration: none;
-            font-size: 1.1em;
+        .btn-submit:disabled { background: #ccc; cursor: not-allowed; }
+        
+        /* 載入中動畫 */
+        .loader {
+            display: none;
+            border: 4px solid #f3f3f3; border-top: 4px solid #ff5722;
+            border-radius: 50%; width: 20px; height: 20px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto;
         }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        
+        .error-msg { color: #d32f2f; margin-top: 10px; display: none; font-weight: bold; }
     </style>
 </head>
 <body>
 
-    <div class="container">
-        <h2>🛵 外送資料</h2>
-        
-        <form method="POST" action="/delivery/setup">
-            <div class="form-group">
-                <label>聯絡電話 (Phone)</label>
-                <input type="tel" name="phone" placeholder="例如：0912-345-678" required autofocus>
-            </div>
+<div class="container">
+    <h2>🛵 外送服務</h2>
+    <p style="color:#666; font-size:0.9em;">我們會自動計算距離與運費</p>
 
-            <div class="form-group">
-                <label>外送地址 (Address)</label>
-                <input type="text" name="address" placeholder="請輸入完整地址" required>
-            </div>
-
-            <button type="submit" class="btn-submit">開始點餐</button>
-        </form>
-
-        <a href="/" class="btn-back">← 返回首頁</a>
+    <div class="form-group">
+        <label>聯絡人姓名</label>
+        <input type="text" id="name" placeholder="您的稱呼" required>
     </div>
+
+    <div class="form-group">
+        <label>手機號碼</label>
+        <input type="tel" id="phone" placeholder="09xx-xxx-xxx" required>
+    </div>
+
+    <div class="form-group">
+        <label>外送日期</label>
+        <select id="date">
+            {% for d in dates %}
+            <option value="{{ d.value }}">{{ d.label }}</option>
+            {% endfor %}
+        </select>
+    </div>
+
+    <div class="form-group">
+        <label>完整地址 (含縣市)</label>
+        <input type="text" id="address" placeholder="例如：台北市中山區..." required>
+    </div>
+
+    <div id="error-box" class="error-msg"></div>
+
+    <button onclick="checkAndSubmit()" id="submitBtn" class="btn-submit">
+        <span id="btnText">確認並開始點餐</span>
+        <div id="loader" class="loader"></div>
+    </button>
+    
+    <br><br>
+    <a href="/" style="color:#999; text-decoration:none;">← 返回首頁</a>
+</div>
+
+<script>
+    async function checkAndSubmit() {
+        const name = document.getElementById('name').value;
+        const phone = document.getElementById('phone').value;
+        const address = document.getElementById('address').value;
+        const date = document.getElementById('date').value;
+        const btn = document.getElementById('submitBtn');
+        const loader = document.getElementById('loader');
+        const btnText = document.getElementById('btnText');
+        const errorBox = document.getElementById('error-box');
+
+        // 簡單驗證
+        if(!name || !phone || !address) {
+            alert('請填寫所有欄位');
+            return;
+        }
+
+        // UI 變更為讀取中
+        btn.disabled = true;
+        btnText.style.display = 'none';
+        loader.style.display = 'block';
+        errorBox.style.display = 'none';
+
+        try {
+            const response = await fetch('/delivery/check', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name, phone, address, date })
+            });
+
+            const result = await response.json();
+
+            if (result.success) {
+                // 成功，跳轉到菜單
+                window.location.href = result.redirect;
+            } else {
+                // 失敗 (距離太遠或找不到地址)
+                errorBox.innerText = "❌ " + result.msg;
+                errorBox.style.display = 'block';
+                
+                // 恢復按鈕
+                btn.disabled = false;
+                btnText.style.display = 'inline';
+                loader.style.display = 'none';
+            }
+        } catch (err) {
+            console.error(err);
+            errorBox.innerText = "❌ 系統錯誤，請檢查網路連線";
+            errorBox.style.display = 'block';
+            btn.disabled = false;
+            btnText.style.display = 'inline';
+            loader.style.display = 'none';
+        }
+    }
+</script>
 
 </body>
 </html>
