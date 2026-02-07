@@ -49,9 +49,15 @@
     </style>
 </head>
 <body>
-    {# --- 關鍵邏輯：判斷是否為外送模式 --- #}
-    {% set delivery_data = delivery_data or {} %}
-    {% set is_delivery = (delivery_data.get('phone') is defined and delivery_data.get('phone')) or table_num == '外送' %}
+    {# --- 1. 強制從 Session 讀取資料 (即使後端變數沒傳也不怕) --- #}
+    {% set session_delivery = session.get('delivery_data', {}) %}
+    {% set session_table = session.get('table_num') %}
+    
+    {# --- 2. 判斷邏輯：只要 Session 裡有電話，或桌號是外送，就認定為外送模式 --- #}
+    {% set is_delivery_mode = (session_delivery.get('phone')) or (session_table == '外送') %}
+    
+    {# --- 3. 決定最終顯示的桌號 (如果是外送模式，強制顯示 '外送') --- #}
+    {% set final_table_num = '外送' if is_delivery_mode else (table_num or session_table or '') %}
 
     <div class="header">
         {% if edit_oid %}
@@ -62,18 +68,21 @@
         
         <h2 style="margin:0 0 10px 0;">{{ texts['welcome'] }}</h2>
 
-        {% if is_delivery %}
+        {% if is_delivery_mode %}
             {# --- 外送模式顯示卡片 --- #}
             <div class="delivery-info-card">
                 <div class="di-row"><span class="di-icon">🛵</span> <b>外送訂單 (Delivery)</b></div>
-                <div class="di-row"><span class="di-icon">👤</span> {{ delivery_data.get('name', '貴賓') }} / {{ delivery_data.get('phone', '-') }}</div>
-                <div class="di-row"><span class="di-icon">📍</span> {{ delivery_data.get('address', session.get('cust_address', '')) }}</div>
+                <div class="di-row"><span class="di-icon">👤</span> {{ session_delivery.get('name', '貴賓') }} / {{ session_delivery.get('phone', '-') }}</div>
+                <div class="di-row"><span class="di-icon">📍</span> {{ session_delivery.get('address', '地址載入中') }}</div>
                 <div class="di-fee">
                     運費 Delivery Fee: ${{ session.get('delivery_info', {}).get('shipping_fee', 0) }}
+                    {% if session.get('delivery_info', {}).get('note') %}
+                        <br><small style="color:#666;font-weight:normal;">{{ session.get('delivery_info', {}).get('note') }}</small>
+                    {% endif %}
                 </div>
             </div>
             
-            {# --- 關鍵修改：即便外送，也顯示 input 但鎖定 (Readonly) --- #}
+            {# --- 鎖定的外送桌號欄位 --- #}
             <div style="margin-bottom: 10px;">
                 <label style="font-weight:bold; color:#1565c0;">{{ texts['table_placeholder'] }}</label>
                 <input type="text" id="visible_table" value="外送" readonly
@@ -83,7 +92,7 @@
             {# --- 內用模式 --- #}
             <div style="margin-bottom: 10px;">
                 <label style="font-weight:bold; color:#555;">{{ texts['table_placeholder'] }}</label>
-                <input type="text" id="visible_table" value="{{ table_num }}" placeholder="請輸入桌號" 
+                <input type="text" id="visible_table" value="{{ final_table_num }}" placeholder="請輸入桌號" 
                        style="padding:12px;width:100%;box-sizing:border-box;border:2px solid #ddd;border-radius:8px;font-size:1.2em;margin-top:5px;">
             </div>
         {% endif %}
@@ -102,10 +111,11 @@
         
         <input type="hidden" name="table_number" id="tbl_input">
         
-        <input type="hidden" name="order_type" value="{{ 'delivery' if is_delivery else 'dine_in' }}">
-        <input type="hidden" name="customer_name" value="{{ delivery_data.get('name', '') }}">
-        <input type="hidden" name="customer_phone" value="{{ delivery_data.get('phone', '') }}">
-        <input type="hidden" name="delivery_address" value="{{ delivery_data.get('address', '') }}">
+        {# --- 表單欄位也強制從 Session 讀取 --- #}
+        <input type="hidden" name="order_type" value="{{ 'delivery' if is_delivery_mode else 'dine_in' }}">
+        <input type="hidden" name="customer_name" value="{{ session_delivery.get('name', '') }}">
+        <input type="hidden" name="customer_phone" value="{{ session_delivery.get('phone', '') }}">
+        <input type="hidden" name="delivery_address" value="{{ session_delivery.get('address', '') }}">
         <input type="hidden" name="delivery_fee" value="{{ session.get('delivery_info', {}).get('shipping_fee', 0) }}">
         
         <div class="cart-bar" id="bar">
@@ -120,6 +130,7 @@
         </div>
     </form>
 
+    {# --- Modal 區域 --- #}
     <div class="modal" id="opt-m" onclick="closeModalByBg(event, 'opt-m')">
         <div class="modal-c" onclick="event.stopPropagation()">
             <h3 id="m-name" style="font-size:1.5em;margin-top:0;"></h3>
@@ -149,8 +160,8 @@
     const PRELOAD_CART = {{ preload_cart | safe }};
     const CUR_LANG = "{{ display_lang }}";
     
-    // JS 這裡也使用更寬鬆的判定，只要 table_num 是外送，也視為外送
-    const IS_DELIVERY = {{ 'true' if is_delivery else 'false' }};
+    // JS 這裡也改為使用變數判定
+    const IS_DELIVERY = {{ 'true' if is_delivery_mode else 'false' }};
     const DELIVERY_FEE = {{ session.get('delivery_info', {}).get('shipping_fee', 0) }};
 
     let C = [], cur = null, selectedOptIndices = [], addP = 0, editIndex = -1;
@@ -232,7 +243,6 @@
         area.innerHTML = "";
         
         let opts = cur['custom_options_' + CUR_LANG] || cur.custom_options_zh;
-        // 如果後端傳來的是字串，先轉成陣列 (安全防護)
         if (typeof opts === 'string') {
             opts = opts.split(',').filter(x => x.trim() !== '');
         } else if (!Array.isArray(opts)) {
@@ -248,9 +258,7 @@
             d.className = 'opt-tag';
             d.innerText = n + (p ? ` (+$${p})` : '');
             
-            // 這裡使用 opts 陣列本身的 index 來對應，避免不同語系對不上的問題
-            // 若需進階比對字串，需確保 custom_options_zh 存在
-            if(editIndex > -1 && existingOpts.includes(n)) { // 簡單用名稱比對
+            if(editIndex > -1 && existingOpts.includes(n)) { 
                 selectedOptIndices.push(index); 
                 addP += p; 
                 d.classList.add('sel');
@@ -284,7 +292,6 @@
     function addC() {
         let q = parseInt(document.getElementById('m-q').value) || 1;
         
-        // 取得各語言選項列表 (安全存取)
         let opts_zh = cur.custom_options_zh || [];
         if(typeof opts_zh === 'string') opts_zh = opts_zh.split(',').filter(x=>x);
         
@@ -302,7 +309,6 @@
             name_zh: cur.name_zh, name_en: cur.name_en, name_jp: cur.name_jp, name_kr: cur.name_kr, 
             unit_price: cur.price + addP, 
             qty: q, 
-            // 選項只存名稱部分，去掉價格
             options_zh: selectedOptIndices.map(idx => (opts_zh[idx] || '').split('+')[0].trim()),
             options_en: selectedOptIndices.map(idx => (opts_en[idx] || opts_zh[idx] || '').split('+')[0].trim()),
             options_jp: selectedOptIndices.map(idx => (opts_jp[idx] || opts_zh[idx] || '').split('+')[0].trim()),
@@ -378,14 +384,13 @@
     function sub() {
         let tableVal = document.getElementById('visible_table').value;
         
-        // 這裡再次做安全檢查
-        if (!IS_DELIVERY) {
-            if(!tableVal || tableVal.trim() === '') {
-                return alert(T.table_placeholder || '請輸入桌號');
-            }
-        } else {
-            // 如果是外送，強制設為 '外送' (如果原本是空的話)
-            if(!tableVal || tableVal.trim() === '') tableVal = '外送';
+        // 防呆：如果是外送模式，強制把 value 設為外送 (避免 JS 讀到空值)
+        if (IS_DELIVERY) {
+            tableVal = '外送';
+        }
+
+        if(!tableVal || tableVal.trim() === '') {
+            return alert(T.table_placeholder || '請輸入桌號');
         }
         
         document.getElementById('tbl_input').value = tableVal;
