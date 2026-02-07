@@ -205,4 +205,3 @@ def run_maintenance_tasks(app):
 def start_background_tasks(app):
     t = threading.Thread(target=run_maintenance_tasks, args=(app,), daemon=True)
     t.start()
-
