@@ -78,12 +78,16 @@ def menu():
 
             items_str = " + ".join(display_list)
             
-            # --- [修改處] 新增檢查：外送金額門檻 ---
-            # 這裡檢查的是純餐點金額 (尚未加上運費)
-            # 如果希望連同運費一起算，請將此段移到下方加上 delivery_fee 之後
+            # --- [新增邏輯] 外送低消檢查 ---
+            # 必須在加入運費之前檢查，確保是「餐點金額」滿 1000
             if order_type == 'delivery' and total_price < 1000:
-                return f"<script>alert('金額未達到1000元'); history.back();</script>"
-            # -------------------------------------
+                # 回傳一段 JS，跳出警告並回到上一頁 (保留購物車內容)
+                return """
+                <script>
+                    alert('金額未達到1000元 (外送低消)');
+                    window.history.back();
+                </script>
+                """
 
             # 4. 加入運費到總金額 (如果是外送)
             total_price += delivery_fee
