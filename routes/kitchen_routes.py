@@ -1,3 +1,4 @@
+# routes/kitchen_routes.py
 from flask import Blueprint, render_template, request, jsonify
 import json
 import base64  # 用於 RawBT 編碼
@@ -59,9 +60,9 @@ def check_new_orders():
         conn = get_db_connection()
         cur = conn.cursor()
         
-        # [修正] SQL 查詢：
-        # 1. 將 delivery_address 改為 customer_address
-        # 2. 新增 scheduled_for, delivery_fee
+        # [更新] SQL 查詢：包含所有新欄位
+        # 欄位順序: 1.id, 2.table, 3.items, 4.total, 5.status, 6.created, 7.lang, 8.seq, 9.json, 
+        #          10.name, 11.phone, 12.addr, 13.schedule, 14.fee
         query = """
             SELECT id, table_number, items, total_price, status, created_at, lang, daily_seq, content_json,
                    customer_name, customer_phone, customer_address, scheduled_for, delivery_fee
@@ -78,7 +79,7 @@ def check_new_orders():
         except Exception as e:
             conn.rollback() 
             print(f"SQL Fallback triggered (check_new_orders): {e}")
-            # Fallback: 確保欄位數量與主要查詢一致 (補 NULL)
+            # Fallback: 確保欄位數量與主要查詢一致 (補 NULL 或 0)
             query_fallback = """
                 SELECT id, table_number, items, total_price, status, created_at, lang, daily_seq, content_json,
                        NULL, NULL, NULL, NULL, 0
@@ -102,23 +103,23 @@ def check_new_orders():
             html_content = "<div id='loading-msg' style='grid-column:1/-1;text-align:center;padding:100px;font-size:1.5em;color:#888;'>🍽️ 目前沒有訂單</div>"
         
         for o in orders:
-            # [修正] 解包變數 (現在是 14 個欄位)
+            # [修正] 解包變數 (確保變數數量 = 14)
             oid, table, raw_items, total, status, created, order_lang, seq_num, c_json, \
             c_name, c_phone, c_addr, c_schedule, c_fee = o
             
             status_cls = status.lower()
             tw_time = created + timedelta(hours=8)
             
-            # 處理資料
+            # 資料預處理
             table_str = str(table).strip() if table else ""
             c_fee = int(c_fee or 0)
             
-            # 判斷是否為外送/外帶 (有電話或地址或明確標示)
+            # 判斷是否為外送/外帶/預約
             has_contact = (c_phone and str(c_phone).strip() != '' and str(c_phone).strip().lower() != 'none')
             has_addr = (c_addr and str(c_addr).strip() != '' and str(c_addr).strip().lower() != 'none')
-            has_schedule = (c_schedule and str(c_schedule).strip() != '')
+            has_schedule = (c_schedule and str(c_schedule).strip() != '' and str(c_schedule).lower() != 'none')
 
-            is_delivery = (table_str == '外送') or has_contact or has_addr
+            is_delivery = (table_str == '外送') or has_addr
             
             # --- 顯示 HTML 組合 ---
             display_table = ""
@@ -133,14 +134,9 @@ def check_new_orders():
             # 組合詳細資訊 (HTML)
             info_html = ""
             
-            # [新增] 預約時間顯示
+            # [新增] 預約時間顯示 (醒目)
             if has_schedule:
-                # 嘗試格式化預約時間，如果格式正確
-                try:
-                    # 假設 scheduled_for 存的是字串，直接顯示，或依需求 parse
-                    info_html += f"<div style='background:#e3f2fd; color:#0d47a1; padding:2px 4px; border-radius:3px; margin-bottom:3px; font-weight:bold;'>🕒 預約: {c_schedule}</div>"
-                except:
-                    info_html += f"<div>🕒 {c_schedule}</div>"
+                info_html += f"<div style='background:#fff9c4; color:#f57f17; padding:4px; border-radius:4px; margin-bottom:4px; font-weight:bold; border:1px solid #fbc02d;'>🕒 預約: {c_schedule}</div>"
 
             # 姓名
             if c_name and str(c_name).strip() and str(c_name).lower() != 'none': 
@@ -154,14 +150,10 @@ def check_new_orders():
             if has_addr:
                 info_html += f"<div style='margin-top:2px; line-height:1.2; border-top:1px dashed #aaa; padding-top:2px; font-weight:bold; color:#bf360c;'>📍 {c_addr}</div>"
 
-            # 將詳細資訊嵌入
+            # 將詳細資訊嵌入桌號區塊
             if info_html:
-                 # 如果是外送或外帶，字體大一點，如果是內用桌號，保持桌號大字
-                if is_delivery or not table_str:
-                    table_html = f"<div class='table-num' style='color:#d84315; border-color:#d84315; font-size:1.2em; padding: 5px; flex-direction:column;'><div>{display_table}</div><div style='font-size:0.55em; font-weight:normal; text-align:left; width:100%; margin-top:5px; color:#333;'>{info_html}</div></div>"
-                else:
-                     # 內用有備註的情況
-                    table_html = f"<div class='table-num' style='flex-direction:column;'><div>{display_table}</div><div style='font-size:0.4em; font-weight:normal; text-align:left; width:100%; margin-top:5px;'>{info_html}</div></div>"
+                 # 如果是外送/外帶/有預約，排版調整
+                table_html = f"<div class='table-num' style='flex-direction:column; padding:5px;'><div>{display_table}</div><div style='font-size:0.5em; font-weight:normal; text-align:left; width:100%; margin-top:5px; color:#333; word-break:break-all;'>{info_html}</div></div>"
             else:
                 table_html = f"<div class='table-num'>{display_table}</div>"
 
@@ -248,7 +240,7 @@ def print_order(oid):
         conn = get_db_connection()
         cur = conn.cursor()
         
-        # [修正] SQL 查詢，加入新的欄位並修正 address 名稱
+        # [更新] SQL 查詢：包含所有新欄位
         query = """
             SELECT table_number, total_price, daily_seq, content_json, created_at, status,
                    customer_name, customer_phone, customer_address, delivery_fee, scheduled_for
@@ -260,7 +252,7 @@ def print_order(oid):
         except Exception as e:
             conn.rollback() 
             print(f"SQL Fallback triggered (print_order): {e}")
-            # Fallback 也要補齊欄位
+            # Fallback
             cur.execute("""
                 SELECT table_number, total_price, daily_seq, content_json, created_at, status,
                        NULL, NULL, NULL, 0, NULL
@@ -286,9 +278,9 @@ def print_order(oid):
         # 判斷資訊存在
         has_contact = (c_phone and str(c_phone).strip() != '' and str(c_phone).lower() != 'none')
         has_addr = (c_addr and str(c_addr).strip() != '' and str(c_addr).lower() != 'none')
-        has_schedule = (c_schedule and str(c_schedule).strip() != '')
+        has_schedule = (c_schedule and str(c_schedule).strip() != '' and str(c_schedule).lower() != 'none')
         
-        is_delivery = (table_str == '外送') or has_contact or has_addr
+        is_delivery = (table_str == '外送') or has_addr
         
         if isinstance(content_json, str):
             items = json.loads(content_json)
@@ -326,7 +318,7 @@ def print_order(oid):
             
             /* 外送與預約資訊樣式 */
             .delivery-box { border: 2px solid #000; padding: 5px; margin: 5px 0; font-size: 16px; font-weight: bold; text-align: left; background: #eee; }
-            .schedule-row { font-size: 18px; font-weight: 900; text-align: center; background: #000; color: #fff; margin: 5px 0; padding: 2px; }
+            .schedule-row { font-size: 22px; font-weight: 900; text-align: center; background: #000; color: #fff; margin: 5px 0; padding: 5px; border-radius: 4px; }
             
             .item-row { display: flex; justify-content: space-between; align-items: flex-start; margin-top: 10px; line-height: 1.2; }
             .name-col { width: 85%; display: flex; flex-direction: column; }
@@ -336,7 +328,7 @@ def print_order(oid):
             .opt { font-size: 18px; font-weight: bold; padding-left: 15px; margin-top: 2px; }
             .opt-sub { font-size: 14px; margin-top: -2px; }
             .total { text-align: right; font-size: 24px; font-weight: 900; margin-top: 15px; padding-top: 10px; border-top: 3px solid #000; }
-            .fee-row { text-align: right; font-size: 16px; font-weight: bold; margin-top: 5px; }
+            .fee-row { text-align: right; font-size: 16px; font-weight: bold; margin-top: 5px; color: #333; }
         </style>
         """
 
@@ -354,9 +346,9 @@ def print_order(oid):
             h = f"<div class='ticket'>{void_mark}<div class='head'><h2>{title}</h2><h1>#{seq:03d}</h1></div>"
             h += f"<div class='info-box'><div class='table-row'><span class='table-label'>Table</span><span class='table-val'>{display_tbl_name}</span></div><div class='time-row'>{time_str}</div></div>"
             
-            # [新增] 顯示預約時間
+            # [新增] 顯示預約時間 (非常醒目)
             if has_schedule:
-                h += f"<div class='schedule-row'>預約: {c_schedule}</div>"
+                h += f"<div class='schedule-row'>🕒 預約: {c_schedule}</div>"
 
             # 顯示客戶/外送資訊
             if has_contact or has_addr or c_name:
@@ -368,7 +360,7 @@ def print_order(oid):
                 if name_s or phone_s:
                     h += f"<div>👤 {name_s} {phone_s}</div>"
                 if addr_s:
-                    h += f"<div style='margin-top:2px;border-top:1px solid #999;'>📍 {addr_s}</div>"
+                    h += f"<div style='margin-top:2px;border-top:1px solid #999; padding-top:2px;'>📍 {addr_s}</div>"
                 h += f"</div>"
             
             # 列出商品
