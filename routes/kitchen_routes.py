@@ -50,17 +50,18 @@ def kitchen_panel():
     return render_template('kitchen.html')
 
 
-# --- 2. 檢查新訂單 API (修正：加入外送地址與詳細資訊顯示) ---
+# --- 2. 檢查新訂單 API ---
 @kitchen_bp.route('/check_new_orders')
 def check_new_orders():
     try:
-        current_max = request.args.get('current_seq', 0, type=int)
+        # current_max 用於判斷是否有新單，但在本版本中我們移除了自動列印，
+        # 僅保留 max_seq 用於前端更新狀態，不再回傳 new_ids 觸發列印。
         utc_start, utc_end = get_tw_time_range()
 
         conn = get_db_connection()
         cur = conn.cursor()
         
-        # ★★★ 修正 1: 在查詢中加入 delivery_address ★★★
+        # 確保查詢欄位包含客戶資訊
         query = """
             SELECT id, table_number, items, total_price, status, created_at, lang, daily_seq, content_json,
                    customer_name, customer_phone, delivery_address
@@ -75,11 +76,9 @@ def check_new_orders():
         try:
             cur.execute(query, (utc_start, utc_end))
         except Exception as e:
-            # Postgre 事務失敗後 rollback
             conn.rollback() 
             print(f"SQL Fallback triggered (check_new_orders): {e}")
-            
-            # ★★★ 修正 2: Fallback 查詢也要補上 NULL as delivery_address 以防欄位數量不對應 ★★★
+            # Fallback 確保欄位對齊
             query_fallback = """
                 SELECT id, table_number, items, total_price, status, created_at, lang, daily_seq, content_json,
                        NULL as customer_name, NULL as customer_phone, NULL as delivery_address
@@ -91,17 +90,10 @@ def check_new_orders():
 
         orders = cur.fetchall()
         
-        # 取得目前最大序號
+        # 取得目前最大序號 (用於前端判斷是否刷新畫面)
         cur.execute("SELECT MAX(daily_seq) FROM orders WHERE created_at >= %s AND created_at <= %s", (utc_start, utc_end))
         res_max = cur.fetchone()
         max_seq_val = res_max[0] if res_max and res_max[0] else 0
-        
-        # 找出新訂單 ID
-        new_order_ids = []
-        if current_max > 0 and max_seq_val > current_max:
-            cur.execute("SELECT id, daily_seq FROM orders WHERE daily_seq > %s AND created_at >= %s", (current_max, utc_start))
-            new_orders_data = cur.fetchall()
-            new_order_ids = [r[0] for r in new_orders_data]
         
         conn.close()
 
@@ -110,19 +102,24 @@ def check_new_orders():
             html_content = "<div id='loading-msg' style='grid-column:1/-1;text-align:center;padding:100px;font-size:1.5em;color:#888;'>🍽️ 目前沒有訂單</div>"
         
         for o in orders:
-            # ★★★ 修正 3: 解包變數加入 c_addr (第12個欄位) ★★★
+            # 解包變數 (12個欄位)
             oid, table, raw_items, total, status, created, order_lang, seq_num, c_json, c_name, c_phone, c_addr = o
             
             status_cls = status.lower()
             tw_time = created + timedelta(hours=8)
             
-            # --- 判斷是否為外送 ---
-            # 邏輯：桌號是外送 OR 有電話 OR 有地址
-            is_delivery = (str(table).strip() == '外送') or \
-                          (c_phone and str(c_phone).strip().lower() != 'none' and len(str(c_phone)) > 5) or \
-                          (c_addr and str(c_addr).strip() != '')
+            # --- [修改重點] 判斷外送與桌號顯示邏輯 ---
+            # 1. 處理 table 為 None 的情況
+            table_str = str(table).strip() if table else ""
             
-            # --- 顯示用的桌號與客戶資訊 HTML ---
+            # 2. 判斷是否為外送：桌號是外送 OR 有電話 OR 有地址
+            # 注意：這裡使用寬鬆判斷，只要有地址或電話就視為外送/外帶單
+            has_contact = (c_phone and str(c_phone).strip() != '' and str(c_phone).strip().lower() != 'none')
+            has_addr = (c_addr and str(c_addr).strip() != '' and str(c_addr).strip().lower() != 'none')
+            
+            is_delivery = (table_str == '外送') or has_contact or has_addr
+            
+            # --- 顯示 HTML 組合 ---
             if is_delivery:
                 display_table = "🛵 外送"
                 
@@ -130,28 +127,27 @@ def check_new_orders():
                 info_html = ""
                 
                 # 姓名
-                if c_name and str(c_name).strip(): 
+                if c_name and str(c_name).strip() and str(c_name).lower() != 'none': 
                     info_html += f"<div>👤 {c_name}</div>"
                 
                 # 電話
-                if c_phone and str(c_phone).strip():
+                if has_contact:
                     info_html += f"<div>📞 {c_phone}</div>"
                 
-                # ★★★ 修正 4: 顯示地址 ★★★
-                if c_addr and str(c_addr).strip():
-                    # 限制地址長度，太長換行或縮小字體
-                    addr_str = str(c_addr)
-                    info_html += f"<div style='margin-top:2px; line-height:1.2; border-top:1px dashed #aaa; padding-top:2px;'>📍 {addr_str}</div>"
+                # 地址
+                if has_addr:
+                    info_html += f"<div style='margin-top:2px; line-height:1.2; border-top:1px dashed #aaa; padding-top:2px; font-weight:bold; color:#bf360c;'>📍 {c_addr}</div>"
 
                 if info_html:
-                    display_table += f"<div style='font-size:0.55em; font-weight:normal; text-align:left; margin-top:5px; color:#333;'>{info_html}</div>"
+                    display_table += f"<div style='font-size:0.6em; font-weight:normal; text-align:left; margin-top:5px; color:#333; line-height:1.4;'>{info_html}</div>"
                 else:
-                    # 若無資訊但標記為外送
-                    display_table += "<div style='font-size:0.6em; color:red;'>無客戶資訊</div>"
+                    display_table += "<div style='font-size:0.6em; color:red;'>無詳細資訊</div>"
                     
-                table_html = f"<div class='table-num' style='color:#1565c0; border-color:#1565c0; font-size:1.4em; padding: 5px;'>{display_table}</div>"
+                table_html = f"<div class='table-num' style='color:#d84315; border-color:#d84315; font-size:1.4em; padding: 5px;'>{display_table}</div>"
             else:
-                table_html = f"<div class='table-num'>桌號 {table}</div>"
+                # 若不是外送，且 table 為空，顯示 "外帶" 或 "無桌號"
+                display_text = f"桌號 {table_str}" if table_str else "🥡 外帶/自取"
+                table_html = f"<div class='table-num'>{display_text}</div>"
 
             # 解析商品 JSON
             items_html = ""
@@ -214,14 +210,14 @@ def check_new_orders():
         return jsonify({
             'html': html_content, 
             'max_seq': max_seq_val, 
-            'new_ids': new_order_ids
+            'new_ids': []  # [修改重點] 強制回傳空陣列，停止自動列印
         })
     except Exception as e:
         traceback.print_exc()
         return jsonify({'html': f"載入錯誤: {str(e)}", 'max_seq': 0, 'new_ids': []})
 
 
-# --- 3. 核心列印路由 (已修正：解決 Transaction Aborted 錯誤) ---
+# --- 3. 核心列印路由 ---
 @kitchen_bp.route('/print_order/<int:oid>')
 def print_order(oid):
     try:
@@ -241,7 +237,6 @@ def print_order(oid):
         except Exception as e:
             conn.rollback() 
             print(f"SQL Fallback triggered (print_order): {e}")
-            
             cur.execute("""
                 SELECT table_number, total_price, daily_seq, content_json, created_at, status,
                        NULL, NULL, NULL, 0
@@ -261,10 +256,12 @@ def print_order(oid):
         
         # 資料預處理
         c_fee = int(c_fee or 0)
-        # 判斷外送
-        is_delivery = (str(table_num).strip() == '外送') or \
-                      (c_phone is not None and str(c_phone).strip() != '') or \
-                      (c_addr is not None and str(c_addr).strip() != '')
+        table_str = str(table_num).strip() if table_num else ""
+        
+        # [修改重點] 判斷外送與資訊存在 (邏輯與看板一致)
+        has_contact = (c_phone and str(c_phone).strip() != '' and str(c_phone).lower() != 'none')
+        has_addr = (c_addr and str(c_addr).strip() != '' and str(c_addr).lower() != 'none')
+        is_delivery = (table_str == '外送') or has_contact or has_addr
         
         if isinstance(content_json, str):
             items = json.loads(content_json)
@@ -300,8 +297,8 @@ def print_order(oid):
             .table-val { font-size: 42px; font-weight: 900; line-height: 1; }
             .time-row { font-size: 14px; text-align: center; margin-top: 5px; font-weight: bold; }
             
-            /* 新增外送資訊樣式 */
-            .delivery-box { border: 2px solid #000; padding: 5px; margin: 5px 0; font-size: 14px; font-weight: bold; text-align: left; }
+            /* 外送資訊樣式 */
+            .delivery-box { border: 2px solid #000; padding: 5px; margin: 5px 0; font-size: 16px; font-weight: bold; text-align: left; background: #eee; }
             
             .item-row { display: flex; justify-content: space-between; align-items: flex-start; margin-top: 10px; line-height: 1.2; }
             .name-col { width: 85%; display: flex; flex-direction: column; }
@@ -321,26 +318,28 @@ def print_order(oid):
 
             void_mark = "<div class='void-watermark'>作廢單</div>" if status == 'Cancelled' else ""
             
-            # 判斷是否顯示外送
-            display_tbl_name = "外送" if is_delivery else table_num
+            # [修改重點] 顯示桌號名稱
+            if is_delivery:
+                display_tbl_name = "外送"
+            else:
+                display_tbl_name = table_str if table_str else "外帶"
             
             h = f"<div class='ticket'>{void_mark}<div class='head'><h2>{title}</h2><h1>#{seq:03d}</h1></div>"
             h += f"<div class='info-box'><div class='table-row'><span class='table-label'>Table</span><span class='table-val'>{display_tbl_name}</span></div><div class='time-row'>{time_str}</div></div>"
             
-            # --- 在結帳單顯示詳細外送資訊 (廚房單如需要可自行移除 is_receipt 判斷) ---
-            if is_delivery:
-                addr_show = c_addr if c_addr else "未填寫地址"
-                phone_show = c_phone if c_phone else ""
-                name_show = c_name if c_name else "貴賓"
+            # [修改重點] 無論是廚房單還是結帳單，只要有資訊都顯示 (依需求調整)
+            # 這裡強制如果有外送資訊就顯示出來
+            if has_contact or has_addr or c_name:
+                name_s = c_name if c_name else ""
+                phone_s = c_phone if has_contact else ""
+                addr_s = c_addr if has_addr else ""
                 
-                # 只在結帳單顯示完整個資，或廚房單也想看可拿掉 if is_receipt
-                if is_receipt:
-                    h += f"""
-                    <div class='delivery-box'>
-                        <div>👤 {name_show} {phone_show}</div>
-                        <div style='margin-top:2px;'>📍 {addr_show}</div>
-                    </div>
-                    """
+                h += f"<div class='delivery-box'>"
+                if name_s or phone_s:
+                    h += f"<div>👤 {name_s} {phone_s}</div>"
+                if addr_s:
+                    h += f"<div style='margin-top:2px;border-top:1px solid #999;'>📍 {addr_s}</div>"
+                h += f"</div>"
             
             # 列出商品
             for i in item_list:
@@ -367,7 +366,6 @@ def print_order(oid):
             
             # --- 結帳單顯示總金額與運費 ---
             if is_receipt: 
-                # 計算純商品金額
                 subtotal = total_price - c_fee if total_price else 0
                 if c_fee > 0:
                     h += f"<div class='fee-row'>Subtotal: ${int(subtotal)}</div>"
