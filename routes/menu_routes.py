@@ -1,4 +1,3 @@
-
 from flask import Blueprint, render_template, request, jsonify, redirect, url_for, session
 from database import get_db_connection
 from translations import load_translations
@@ -57,13 +56,16 @@ def menu():
             if order_type == 'delivery':
                 table_number = "外送" # 強制覆寫桌號
                 
-                # 從表單提取詳細資訊 (需確保前端有傳送這些隱藏欄位)
+                # 從表單提取詳細資訊 (確保前端 name='delivery_address')
                 customer_name = request.form.get('customer_name')
                 customer_phone = request.form.get('customer_phone')
-                customer_address = request.form.get('delivery_address')
+                customer_address = request.form.get('delivery_address')  # 關鍵：對應前端表單欄位
                 scheduled_for = request.form.get('scheduled_for')
+
+                # debug print: 確認後端有收到地址
+                print(f"DEBUG: Processing Delivery Order. Address received: {customer_address}")
                 
-                # 組合綜合外送資訊 JSON (存入額外資訊如距離、備註)
+                # 組合綜合外送資訊 JSON (存入額外資訊如距離、備註，供日後彈性使用)
                 delivery_info = json.dumps({
                     'name': customer_name,
                     'phone': customer_phone,
@@ -107,8 +109,9 @@ def menu():
             # 4. 寫入資料庫 (含鎖定與流水號生成)
             cur.execute("LOCK TABLE orders IN SHARE ROW EXCLUSIVE MODE")
 
-            # [修改] INSERT 包含新欄位
-            cur.execute("""
+            # [修正] INSERT 包含 customer_address 與其他新欄位
+            # 請確認資料庫 orders 表已經有 customer_address 欄位
+            query = """
                 INSERT INTO orders (
                     table_number, items, total_price, lang, 
                     daily_seq, 
@@ -124,13 +127,17 @@ def menu():
                     %s, %s, %s, %s
                 )
                 RETURNING id, daily_seq
-            """, (
+            """
+            
+            # 參數 Tuple (順序必須與上方 SQL 嚴格一致)
+            params = (
                 table_number, items_str, total_price, final_lang, 
                 cart_json, need_receipt,
                 order_type, delivery_info, delivery_fee,
                 customer_name, customer_phone, customer_address, scheduled_for
-            ))
+            )
 
+            cur.execute(query, params)
             res = cur.fetchone()
             oid = res[0]
             
@@ -152,7 +159,9 @@ def menu():
             
         except Exception as e:
             conn.rollback()
-            print(f"Order Error: {e}") # 建議加上 print 方便除錯
+            print(f"Order Error: {e}") # 印出錯誤訊息
+            import traceback
+            traceback.print_exc() # 印出詳細錯誤堆疊
             return f"Order Failed: {e}", 500
         finally:
             cur.close()
@@ -229,7 +238,7 @@ def order_success():
     t = translations.get(lang, translations['zh'])
     
     conn = get_db_connection(); cur = conn.cursor()
-    # [修改] 查詢包含外送欄位
+    # [修改] 查詢包含 customer_address 等獨立欄位
     cur.execute("""
         SELECT daily_seq, content_json, total_price, created_at, 
                order_type, delivery_info, delivery_fee,
@@ -252,9 +261,10 @@ def order_success():
     is_delivery = (order_type == 'delivery')
     delivery_info = json.loads(delivery_info_json) if delivery_info_json else {}
     
-    # 準備顯示資料 (優先使用 DB 欄位，若無則 fallback 到 json)
+    # 準備顯示資料 (優先使用 DB 獨立欄位，若無則 fallback 到 json)
     d_name = c_name if c_name else delivery_info.get('name', '')
     d_phone = c_phone if c_phone else delivery_info.get('phone', '')
+    # 這裡確保地址是從 customer_address 欄位讀出
     d_addr = c_addr if c_addr else delivery_info.get('address', '')
     d_scheduled = c_time if c_time else delivery_info.get('scheduled_for', '')
     d_note = delivery_info.get('note', '')
@@ -307,6 +317,7 @@ def order_success():
         status_msg = t.get('pay_at_counter', '請至櫃檯結帳')
         wait_msg = t['kitchen_prep']
 
+    # 產生並回傳 Success 頁面 HTML
     return f"""
     <!DOCTYPE html>
     <html>
