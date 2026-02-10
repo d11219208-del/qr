@@ -60,7 +60,7 @@ def check_new_orders():
         conn = get_db_connection()
         cur = conn.cursor()
         
-        # SQL 查詢：包含所有新欄位
+        # SQL 查詢：包含所有外送相關欄位
         query = """
             SELECT id, table_number, items, total_price, status, created_at, lang, daily_seq, content_json,
                    customer_name, customer_phone, customer_address, scheduled_for, delivery_fee
@@ -77,7 +77,7 @@ def check_new_orders():
         except Exception as e:
             conn.rollback() 
             print(f"SQL Fallback triggered (check_new_orders): {e}")
-            # Fallback
+            # Fallback (防止舊資料庫結構報錯)
             query_fallback = """
                 SELECT id, table_number, items, total_price, status, created_at, lang, daily_seq, content_json,
                        NULL, NULL, NULL, NULL, 0
@@ -237,7 +237,7 @@ def print_order(oid):
         conn = get_db_connection()
         cur = conn.cursor()
         
-        # SQL 查詢
+        # SQL 查詢：包含外送詳細資料
         query = """
             SELECT table_number, total_price, daily_seq, content_json, created_at, status,
                    customer_name, customer_phone, customer_address, delivery_fee, scheduled_for
@@ -276,6 +276,7 @@ def print_order(oid):
         has_addr = (c_addr and str(c_addr).strip() != '' and str(c_addr).lower() != 'none')
         has_schedule = (c_schedule and str(c_schedule).strip() != '' and str(c_schedule).lower() != 'none')
         
+        # 核心判斷：是否為外送單
         is_delivery = (table_str == '外送') or has_addr
         
         if isinstance(content_json, str):
@@ -288,7 +289,7 @@ def print_order(oid):
         # 下單時間
         time_str = (created_at + timedelta(hours=8)).strftime('%Y-%m-%d %H:%M:%S')
 
-        # 分類邏輯
+        # 分類邏輯 (用於分單列印)
         noodle_items, soup_items, other_items = [], [], []
         for item in items:
             p_name = item.get('name_zh') or item.get('name')
@@ -297,7 +298,7 @@ def print_order(oid):
             elif p_cat == 'Soup': soup_items.append(item)
             else: other_items.append(item)
 
-        # [CSS 樣式優化]
+        # [CSS 樣式優化] - 新增 .customer-info 等樣式
         style = """
         <style>
             @page { size: 80mm auto; margin: 0mm; }
@@ -332,8 +333,10 @@ def print_order(oid):
                 margin-top: 4px; 
                 border-top: 1px dashed #666; 
                 padding-top: 4px; 
-                font-size: 20px; /* 地址加大 */
+                font-size: 24px; /* 地址特大 */
+                font-weight: 900;
                 word-wrap: break-word; /* 強制換行 */
+                line-height: 1.2;
             }
             
             .schedule-row { 
@@ -372,15 +375,13 @@ def print_order(oid):
             h += f"<div class='info-box'><div class='table-row'><span class='table-label'>Table</span><span class='table-val'>{display_tbl_name}</span></div>"
             h += f"<div class='time-row'>下單: {time_str}</div></div>"
             
-            # [重點修正] 顯示完整的 姓名/電話/地址/預約時間
-            
             # 1. 預約時間 (最優先顯示)
             if has_schedule:
                 h += f"<div class='schedule-row'>🕒 預約: {c_schedule}</div>"
 
             # 2. 客戶資料區塊 (姓名、電話、地址)
-            # 只要有任一資料就顯示區塊
-            if has_contact or has_addr or (c_name and str(c_name).strip()):
+            # 只要是外送或有聯絡資訊就顯示
+            if is_delivery or has_contact or (c_name and str(c_name).strip()):
                 h += f"<div class='customer-info'>"
                 
                 # 姓名
@@ -391,7 +392,7 @@ def print_order(oid):
                 if has_contact:
                     h += f"<div class='cust-row'>📞 {c_phone}</div>"
                 
-                # 地址 (獨立一行，加大字體)
+                # 地址 (獨立一行，特大字體)
                 if has_addr:
                     h += f"<div class='addr-row'>📍 {c_addr}</div>"
                 
@@ -445,7 +446,7 @@ def print_order(oid):
         if not has_content:
             return "<script>alert('無內容可列印');window.close();</script>", 200
 
-        # RawBT 整合
+        # RawBT 整合 (APP 列印)
         rawbt_html_source = f"<html><head>{style}</head><body>{content}</body></html>"
         b64_data = base64.b64encode(rawbt_html_source.encode('utf-8')).decode('utf-8')
         intent_url = (
