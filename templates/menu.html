@@ -1,4 +1,4 @@
-
+templates/menu.html
 <!DOCTYPE html>
 <html lang="{{ display_lang }}">
 <head>
@@ -75,6 +75,9 @@
                 <div class="di-row"><span class="di-icon">🛵</span> <b>外送訂單 (Delivery)</b></div>
                 <div class="di-row"><span class="di-icon">👤</span> {{ session_delivery.get('name', '貴賓') }} / {{ session_delivery.get('phone', '-') }}</div>
                 <div class="di-row"><span class="di-icon">📍</span> {{ session_delivery.get('address', '地址載入中') }}</div>
+                {# --- 新增：顯示外送時間 --- #}
+                <div class="di-row"><span class="di-icon">🕒</span> 預約時間: {{ session_delivery.get('scheduled_for', '盡快送達') }}</div>
+                
                 <div class="di-fee">
                     運費 Delivery Fee: ${{ session.get('delivery_info', {}).get('shipping_fee', 0) }}
                     {% if session.get('delivery_info', {}).get('note') %}
@@ -117,9 +120,9 @@
         <input type="hidden" name="order_type" value="{{ 'delivery' if is_delivery_mode else 'dine_in' }}">
         <input type="hidden" name="customer_name" value="{{ session_delivery.get('name', '') }}">
         <input type="hidden" name="customer_phone" value="{{ session_delivery.get('phone', '') }}">
-        
-        {# --- 修正：這裡改成 customer_address 以對應 database.py --- #}
         <input type="hidden" name="customer_address" value="{{ session_delivery.get('address', '') }}">
+        {# --- 新增：將預約時間傳回後端 --- #}
+        <input type="hidden" name="scheduled_for" value="{{ session_delivery.get('scheduled_for', '') }}">
         
         <input type="hidden" name="delivery_fee" value="{{ session.get('delivery_info', {}).get('shipping_fee', 0) }}">
         
