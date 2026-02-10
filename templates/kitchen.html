@@ -22,13 +22,21 @@
         .nav-links { display: flex; gap: 10px; }
 
         /* 訂單網格佈局 */
-        .order-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 20px; }
+        .order-grid { 
+            display: grid; 
+            grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); 
+            gap: 20px; 
+            /* 關鍵修改：讓卡片靠上對齊，高度隨內容自動伸縮，不會被同一列最高的卡片拉長 */
+            align-items: flex-start; 
+        }
         
         /* 卡片基礎樣式 */
         .card { 
             background: white; border-radius: 12px; border: 1px solid #ddd;
             display: flex; flex-direction: column; overflow: hidden;
             transition: transform 0.2s; position: relative; box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+            /* 關鍵修改：確保高度自動，不鎖死 */
+            height: auto;
         }
 
         /* 1. 待出餐 (Pending) */
@@ -72,11 +80,18 @@
         .badge-table { font-size: 20px; font-weight: bold; background: #333; color: white; padding: 4px 10px; border-radius: 4px; }
         .badge-delivery { font-size: 18px; font-weight: bold; background: var(--delivery-color); color: white; padding: 4px 10px; border-radius: 4px; display: inline-flex; align-items: center; gap: 4px; }
         
-        /* 外送詳細資訊區塊 */
+        /* 外送詳細資訊區塊 - 關鍵修正區域 */
         .delivery-details {
-            font-size: 0.85rem; background: #fff3e0; color: #bf360c;
+            font-size: 0.9rem; /* 稍微加大一點字體 */
+            background: #fff3e0; color: #bf360c;
             padding: 8px; margin: 0 12px 5px 12px; border-radius: 4px;
-            border: 1px dashed #ffb74d; display: flex; flex-direction: column; gap: 2px;
+            border: 1px dashed #ffb74d; 
+            display: flex; flex-direction: column; gap: 2px;
+            
+            /* 解決長地址被切掉的問題 */
+            word-break: break-all;  /* 強制斷行，避免長字串撐開或隱藏 */
+            white-space: normal;    /* 允許文字換行 */
+            overflow-wrap: break-word; /* 支援現代瀏覽器的斷詞 */
         }
 
         .items { padding: 12px; flex-grow: 1; z-index: 2; min-height: 80px; }
