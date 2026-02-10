@@ -6,177 +6,16 @@ import json
 
 menu_bp = Blueprint('menu', __name__)
 
-# --- 語言選擇首頁 ---
-@menu_bp.route('/')
-def index():
-    table_num = request.args.get('table', '')
-    return render_template('index.html', table_num=table_num)
-
-# --- 點餐頁面 (包含外送邏輯) ---
-@menu_bp.route('/menu', methods=['GET', 'POST'])
-def menu():
-    display_lang = request.args.get('lang', 'zh')
-    t_all = load_translations()
-    t = t_all.get(display_lang, t_all['zh'])
-    
+# --- 共用函數：讀取產品與設定 ---
+def get_menu_data():
     conn = get_db_connection()
-    # 重要：關閉自動提交，以便手動控制 Transaction 與 Lock
-    conn.autocommit = False 
     cur = conn.cursor()
-
-    if request.method == 'POST':
-        try:
-            # 1. 基本欄位
-            raw_table_number = request.form.get('table_number')
-            cart_json = request.form.get('cart_data')
-            need_receipt = request.form.get('need_receipt') == 'on'
-            final_lang = request.form.get('lang_input', 'zh')
-            old_order_id = request.form.get('old_order_id')
-            
-            # 2. 外送與顧客資訊欄位初始化
-            order_type = request.form.get('order_type', 'dine_in') # 預設內用
-            delivery_fee = int(float(request.form.get('delivery_fee', 0)))
-            
-            # 初始化個別欄位 (預設為 None)
-            customer_name = None
-            customer_phone = None
-            customer_address = None
-            scheduled_for = None
-            delivery_info = None
-            
-            # --- [關鍵修改] 判斷桌號與提取顧客資訊 ---
-            if order_type == 'delivery':
-                # 從表單提取詳細資訊
-                customer_name = request.form.get('customer_name')
-                customer_phone = request.form.get('customer_phone')
-                customer_address = request.form.get('delivery_address')
-                scheduled_for = request.form.get('scheduled_for') # 確保前端有傳遞此欄位(hidden input)
-
-                # 組合外送資訊 JSON (保留此欄位以容錯或儲存額外資訊如距離、備註)
-                delivery_info = json.dumps({
-                    'name': customer_name,
-                    'phone': customer_phone,
-                    'address': customer_address,
-                    'scheduled_for': scheduled_for,
-                    'distance_km': request.form.get('distance_km'),
-                    'note': request.form.get('delivery_note')
-                }, ensure_ascii=False)
-                
-                # 外送單強制設定桌號為 "外送"
-                table_number = "外送"
-            else:
-                # 非外送狀況：如果沒有桌號，預設為 "外帶"
-                if raw_table_number and raw_table_number.strip():
-                    table_number = raw_table_number
-                else:
-                    table_number = "外帶"
-            # ----------------------------
-
-            if not cart_json or cart_json == '[]': 
-                return "Empty Cart", 400
-
-            cart_items = json.loads(cart_json)
-            total_price = 0
-            display_list = []
-
-            # 如果是修改訂單，保持原本的語言
-            if old_order_id:
-                cur.execute("SELECT lang FROM orders WHERE id=%s", (old_order_id,))
-                orig_res = cur.fetchone()
-                if orig_res: final_lang = orig_res[0] 
-
-            # 3. 計算餐點總額
-            for item in cart_items:
-                price = int(float(item['unit_price']))
-                qty = int(float(item['qty']))
-                total_price += (price * qty)
-                
-                name_key = f"name_{final_lang}"
-                n_display = item.get(name_key, item.get('name_zh'))
-                opt_key = f"options_{final_lang}"
-                opts = item.get(opt_key, item.get('options_zh', []))
-                opt_str = f"({','.join(opts)})" if opts else ""
-                display_list.append(f"{n_display} {opt_str} x{qty}")
-
-            items_str = " + ".join(display_list)
-            
-            # 注意：後端只負責將運費加入總金額
-            total_price += delivery_fee
-
-            # --- 核心修正：利用資料庫鎖定解決並發流水號重複問題 ---
-            
-            # 鎖定資料表
-            cur.execute("LOCK TABLE orders IN SHARE ROW EXCLUSIVE MODE")
-
-            # 插入資料 (已加入 customer_name, customer_phone, customer_address, scheduled_for, delivery_fee)
-            cur.execute("""
-                INSERT INTO orders (
-                    table_number, items, total_price, lang, 
-                    daily_seq, 
-                    content_json, need_receipt, created_at,
-                    order_type, delivery_info, delivery_fee,
-                    customer_name, customer_phone, customer_address, scheduled_for
-                )
-                VALUES (
-                    %s, %s, %s, %s, 
-                    (SELECT COALESCE(MAX(daily_seq), 0) + 1 FROM orders WHERE created_at >= CURRENT_DATE), 
-                    %s, %s, NOW(),
-                    %s, %s, %s,
-                    %s, %s, %s, %s
-                )
-                RETURNING id, daily_seq
-            """, (
-                table_number, items_str, total_price, final_lang, 
-                cart_json, need_receipt, 
-                order_type, delivery_info, delivery_fee,
-                customer_name, customer_phone, customer_address, scheduled_for
-            ))
-
-            res = cur.fetchone()
-            oid = res[0]
-            
-            # 如果是編輯訂單，將舊單作廢
-            if old_order_id:
-                cur.execute("UPDATE orders SET status='Cancelled' WHERE id=%s", (old_order_id,))
-            
-            conn.commit()
-            
-            # 清除 Session 中的暫存 (如果有)
-            if 'delivery_data' in session:
-                session.pop('delivery_data', None)
-                session.pop('delivery_info', None)
-
-            if old_order_id: 
-                return f"<script>localStorage.removeItem('cart_cache'); alert('訂單已更新'); if(window.opener) window.opener.location.reload(); window.close();</script>"
-            
-            return redirect(url_for('menu.order_success', order_id=oid, lang=final_lang))
-            
-        except Exception as e:
-            conn.rollback()
-            print(f"Order Error: {e}") # 建議加上 print 以便除錯
-            return f"Order Failed: {e}", 500
-        finally:
-            cur.close()
-            conn.close()
-
-    # --- GET 邏輯 ---
-    url_table = request.args.get('table', '')
-    edit_oid = request.args.get('edit_oid')
-    preload_cart = "null" 
-    order_lang = display_lang 
-
-    if edit_oid:
-        cur.execute("SELECT table_number, content_json, lang FROM orders WHERE id=%s", (edit_oid,))
-        old_data = cur.fetchone()
-        if old_data:
-            if not url_table: url_table = old_data[0]
-            preload_cart = old_data[1] 
-            order_lang = old_data[2] if old_data[2] else 'zh'
-
-    # 讀取產品與設定
+    
+    # 讀取設定
     cur.execute("SELECT key, value FROM settings")
     settings = dict(cur.fetchall())
     
+    # 讀取產品
     cur.execute("""
         SELECT id, name, price, category, image_url, is_available, custom_options, sort_order,
                name_en, name_jp, name_kr, custom_options_en, custom_options_jp, custom_options_kr, 
@@ -184,7 +23,8 @@ def menu():
         FROM products ORDER BY sort_order ASC, id ASC
     """)
     products = cur.fetchall()
-    cur.close(); conn.close()
+    cur.close()
+    conn.close()
 
     p_list = []
     for p in products:
@@ -198,12 +38,208 @@ def menu():
             'custom_options_kr': p[13].split(',') if p[13] else (p[6].split(',') if p[6] else []),
             'print_category': p[14] or 'Noodle'
         })
-    
-    return render_template('menu.html', products=p_list, texts=t, table_num=url_table, 
-                           display_lang=display_lang, order_lang=order_lang, 
-                           preload_cart=preload_cart, edit_oid=edit_oid, config=settings)
+    return settings, p_list
 
-# --- 下單成功頁面 ---
+# --- 共用函數：處理訂單提交 (核心邏輯) ---
+def process_order_submission(request, order_type_override=None):
+    display_lang = request.form.get('lang_input', 'zh')
+    
+    try:
+        conn = get_db_connection()
+        conn.autocommit = False 
+        cur = conn.cursor()
+
+        # 1. 基本欄位
+        raw_table_number = request.form.get('table_number')
+        cart_json = request.form.get('cart_data')
+        need_receipt = request.form.get('need_receipt') == 'on'
+        final_lang = request.form.get('lang_input', 'zh')
+        old_order_id = request.form.get('old_order_id')
+        
+        # 2. 判斷訂單類型 (優先使用傳入的 override 參數)
+        order_type = order_type_override if order_type_override else request.form.get('order_type', 'dine_in')
+        delivery_fee = int(float(request.form.get('delivery_fee', 0)))
+        
+        # 初始化欄位
+        customer_name = None
+        customer_phone = None
+        customer_address = None
+        scheduled_for = None
+        delivery_info = None
+        
+        # --- 判斷邏輯 ---
+        if order_type == 'delivery':
+            # 外送邏輯
+            customer_name = request.form.get('customer_name')
+            customer_phone = request.form.get('customer_phone')
+            customer_address = request.form.get('delivery_address')
+            scheduled_for = request.form.get('scheduled_for')
+            
+            delivery_info = json.dumps({
+                'name': customer_name,
+                'phone': customer_phone,
+                'address': customer_address,
+                'scheduled_for': scheduled_for,
+                'distance_km': request.form.get('distance_km'),
+                'note': request.form.get('delivery_note')
+            }, ensure_ascii=False)
+            
+            table_number = "外送"
+        else:
+            # 內用/外帶邏輯
+            if raw_table_number and raw_table_number.strip():
+                table_number = raw_table_number
+                order_type = 'dine_in' # 確保資料庫紀錄正確
+            else:
+                table_number = "外帶"
+                order_type = 'takeout'
+
+        if not cart_json or cart_json == '[]': 
+            return "Empty Cart", 400
+
+        # 計算金額與項目字串
+        cart_items = json.loads(cart_json)
+        total_price = 0
+        display_list = []
+
+        if old_order_id:
+            cur.execute("SELECT lang FROM orders WHERE id=%s", (old_order_id,))
+            orig_res = cur.fetchone()
+            if orig_res: final_lang = orig_res[0] 
+
+        for item in cart_items:
+            price = int(float(item['unit_price']))
+            qty = int(float(item['qty']))
+            total_price += (price * qty)
+            
+            name_key = f"name_{final_lang}"
+            n_display = item.get(name_key, item.get('name_zh'))
+            opt_key = f"options_{final_lang}"
+            opts = item.get(opt_key, item.get('options_zh', []))
+            opt_str = f"({','.join(opts)})" if opts else ""
+            display_list.append(f"{n_display} {opt_str} x{qty}")
+
+        items_str = " + ".join(display_list)
+        total_price += delivery_fee
+
+        # --- DB Transaction ---
+        cur.execute("LOCK TABLE orders IN SHARE ROW EXCLUSIVE MODE")
+
+        cur.execute("""
+            INSERT INTO orders (
+                table_number, items, total_price, lang, 
+                daily_seq, 
+                content_json, need_receipt, created_at,
+                order_type, delivery_info, delivery_fee,
+                customer_name, customer_phone, customer_address, scheduled_for
+            )
+            VALUES (
+                %s, %s, %s, %s, 
+                (SELECT COALESCE(MAX(daily_seq), 0) + 1 FROM orders WHERE created_at >= CURRENT_DATE), 
+                %s, %s, NOW(),
+                %s, %s, %s,
+                %s, %s, %s, %s
+            )
+            RETURNING id, daily_seq
+        """, (
+            table_number, items_str, total_price, final_lang, 
+            cart_json, need_receipt, 
+            order_type, delivery_info, delivery_fee,
+            customer_name, customer_phone, customer_address, scheduled_for
+        ))
+
+        res = cur.fetchone()
+        oid = res[0]
+        
+        if old_order_id:
+            cur.execute("UPDATE orders SET status='Cancelled' WHERE id=%s", (old_order_id,))
+        
+        conn.commit()
+        
+        if 'delivery_data' in session:
+            session.pop('delivery_data', None)
+
+        if old_order_id: 
+            return f"<script>localStorage.removeItem('cart_cache'); alert('訂單已更新'); if(window.opener) window.opener.location.reload(); window.close();</script>"
+        
+        return redirect(url_for('menu.order_success', order_id=oid, lang=final_lang))
+
+    except Exception as e:
+        conn.rollback()
+        print(f"Order Error: {e}")
+        return f"Order Failed: {e}", 500
+    finally:
+        if 'cur' in locals(): cur.close()
+        if 'conn' in locals(): conn.close()
+
+# --- 1. 首頁 (不變) ---
+@menu_bp.route('/')
+def index():
+    table_num = request.args.get('table', '')
+    return render_template('index.html', table_num=table_num)
+
+# --- 2. 內用/外帶 專用路由 ---
+# URL: /menu?table=1&lang=zh
+@menu_bp.route('/menu', methods=['GET', 'POST'])
+def menu():
+    # 處理 POST (送單)
+    if request.method == 'POST':
+        return process_order_submission(request, order_type_override='dine_in')
+
+    # 處理 GET (顯示菜單)
+    display_lang = request.args.get('lang', 'zh')
+    t_all = load_translations()
+    t = t_all.get(display_lang, t_all['zh'])
+
+    url_table = request.args.get('table', '')
+    edit_oid = request.args.get('edit_oid')
+    preload_cart = "null" 
+    order_lang = display_lang 
+
+    # 如果是編輯模式
+    if edit_oid:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT table_number, content_json, lang FROM orders WHERE id=%s", (edit_oid,))
+        old_data = cur.fetchone()
+        cur.close(); conn.close()
+        if old_data:
+            if not url_table: url_table = old_data[0]
+            preload_cart = old_data[1] 
+            order_lang = old_data[2] if old_data[2] else 'zh'
+
+    settings, products = get_menu_data()
+    
+    # 關鍵：這裡強制告訴前端這是 "dine_in" 模式
+    return render_template('menu.html', 
+                           products=products, texts=t, table_num=url_table, 
+                           display_lang=display_lang, order_lang=order_lang, 
+                           preload_cart=preload_cart, edit_oid=edit_oid, config=settings,
+                           current_mode='dine_in') # 新增參數
+
+# --- 3. 外送 專用路由 ---
+# URL: /delivery?lang=zh
+@menu_bp.route('/delivery', methods=['GET', 'POST'])
+def delivery_menu():
+    # 處理 POST (送單)
+    if request.method == 'POST':
+        return process_order_submission(request, order_type_override='delivery')
+
+    # 處理 GET (顯示菜單)
+    display_lang = request.args.get('lang', 'zh')
+    t_all = load_translations()
+    t = t_all.get(display_lang, t_all['zh'])
+    
+    settings, products = get_menu_data()
+
+    # 關鍵：這裡強制告訴前端這是 "delivery" 模式，table_num 強制為空或特定值
+    return render_template('menu.html', 
+                           products=products, texts=t, table_num="外送", 
+                           display_lang=display_lang, order_lang=display_lang, 
+                           preload_cart="null", edit_oid=None, config=settings,
+                           current_mode='delivery') # 新增參數
+
+# --- 4. 下單成功頁面 (與原本相同，略作清理) ---
 @menu_bp.route('/success')
 def order_success():
     oid = request.args.get('order_id')
@@ -212,7 +248,6 @@ def order_success():
     t = translations.get(lang, translations['zh'])
     
     conn = get_db_connection(); cur = conn.cursor()
-    # 同步讀取新增的欄位
     cur.execute("""
         SELECT daily_seq, content_json, total_price, created_at, 
                order_type, delivery_info, delivery_fee,
@@ -224,7 +259,6 @@ def order_success():
     
     if not row: return "Order Not Found", 404
     
-    # 解包資料
     seq, json_str, total, created_at, order_type, delivery_info_json, delivery_fee, c_name, c_phone, c_addr, c_time = row
     
     tw_time = created_at + timedelta(hours=8)
@@ -232,16 +266,13 @@ def order_success():
     items = json.loads(json_str) if json_str else []
     
     is_delivery = (order_type == 'delivery')
-    
-    # 嘗試從 delivery_info_json 讀取 (相容舊資料)，如果欄位是 NULL 則嘗試讀取 JSON
     delivery_info = json.loads(delivery_info_json) if delivery_info_json else {}
     
-    # 優先使用獨立欄位，若無則使用 JSON 內資料
     d_name = c_name if c_name else delivery_info.get('name', '')
     d_phone = c_phone if c_phone else delivery_info.get('phone', '')
     d_addr = c_addr if c_addr else delivery_info.get('address', '')
     d_scheduled = c_time if c_time else delivery_info.get('scheduled_for', '')
-    d_note = delivery_info.get('note', '') # 備註通常只存在 JSON 中
+    d_note = delivery_info.get('note', '')
     
     items_html = ""
     subtotal = 0
@@ -273,8 +304,6 @@ def order_success():
             <div style="font-weight:bold; font-size:1.1em;">${delivery_fee}</div>
         </div>
         """
-        
-        # 顯示預約時間 (如果有)
         time_display = f"<div style='margin-bottom:5px; color:#d32f2f;'><b>Scheduled:</b> {d_scheduled}</div>" if d_scheduled else ""
 
         delivery_html = f"""
@@ -291,7 +320,11 @@ def order_success():
         wait_msg = "Please wait for confirmation call.<br>請留意電話，我們可能與您確認。"
     else:
         status_msg = t.get('pay_at_counter', '請至櫃檯結帳')
-        wait_msg = t['kitchen_prep']
+        wait_msg = t.get('kitchen_prep', 'Kitchen is preparing your meal.')
+
+    # 回首頁按鈕：檢查當前訂單類型，決定回到哪個首頁
+    back_link = url_for('menu.delivery_menu', lang=lang) if is_delivery else url_for('menu.index', lang=lang)
+    back_text = "Back to Delivery" if is_delivery else "Back to Menu"
 
     return f"""
     <!DOCTYPE html>
@@ -341,7 +374,7 @@ def order_success():
                 </div>
                 
                 <p style="color:#999; font-size:0.85em; margin: 20px 0;">下單時間: {time_str}</p>
-                <a href="{url_for('menu.index')}?lang={lang}" class="home-btn">回首頁 / Back to Menu</a>
+                <a href="{back_link}" class="home-btn">{back_text}</a>
             </div>
         </div>
     </body>
