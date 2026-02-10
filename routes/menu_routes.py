@@ -1,4 +1,4 @@
-from flask import Blueprint, render_template, request, jsonify, redirect, url_for
+from flask import Blueprint, render_template, request, jsonify, redirect, url_for, session
 from database import get_db_connection
 from translations import load_translations
 from datetime import timedelta, datetime
@@ -33,19 +33,31 @@ def menu():
             final_lang = request.form.get('lang_input', 'zh')
             old_order_id = request.form.get('old_order_id')
             
-            # 2. 外送欄位與桌號邏輯
+            # 2. 外送與顧客資訊欄位初始化
             order_type = request.form.get('order_type', 'dine_in') # 預設內用
             delivery_fee = int(float(request.form.get('delivery_fee', 0)))
             
+            # 初始化個別欄位 (預設為 None)
+            customer_name = None
+            customer_phone = None
+            customer_address = None
+            scheduled_for = None
             delivery_info = None
             
-            # --- [關鍵修改] 判斷桌號邏輯 ---
+            # --- [關鍵修改] 判斷桌號與提取顧客資訊 ---
             if order_type == 'delivery':
-                # 組合外送資訊 JSON
+                # 從表單提取詳細資訊
+                customer_name = request.form.get('customer_name')
+                customer_phone = request.form.get('customer_phone')
+                customer_address = request.form.get('delivery_address')
+                scheduled_for = request.form.get('scheduled_for') # 確保前端有傳遞此欄位(hidden input)
+
+                # 組合外送資訊 JSON (保留此欄位以容錯或儲存額外資訊如距離、備註)
                 delivery_info = json.dumps({
-                    'name': request.form.get('customer_name'),
-                    'phone': request.form.get('customer_phone'),
-                    'address': request.form.get('delivery_address'),
+                    'name': customer_name,
+                    'phone': customer_phone,
+                    'address': customer_address,
+                    'scheduled_for': scheduled_for,
                     'distance_km': request.form.get('distance_km'),
                     'note': request.form.get('delivery_note')
                 }, ensure_ascii=False)
@@ -96,25 +108,28 @@ def menu():
             # 鎖定資料表
             cur.execute("LOCK TABLE orders IN SHARE ROW EXCLUSIVE MODE")
 
-            # 插入資料
+            # 插入資料 (已加入 customer_name, customer_phone, customer_address, scheduled_for, delivery_fee)
             cur.execute("""
                 INSERT INTO orders (
                     table_number, items, total_price, lang, 
                     daily_seq, 
                     content_json, need_receipt, created_at,
-                    order_type, delivery_info, delivery_fee
+                    order_type, delivery_info, delivery_fee,
+                    customer_name, customer_phone, customer_address, scheduled_for
                 )
                 VALUES (
                     %s, %s, %s, %s, 
                     (SELECT COALESCE(MAX(daily_seq), 0) + 1 FROM orders WHERE created_at >= CURRENT_DATE), 
                     %s, %s, NOW(),
-                    %s, %s, %s
+                    %s, %s, %s,
+                    %s, %s, %s, %s
                 )
                 RETURNING id, daily_seq
             """, (
                 table_number, items_str, total_price, final_lang, 
                 cart_json, need_receipt, 
-                order_type, delivery_info, delivery_fee
+                order_type, delivery_info, delivery_fee,
+                customer_name, customer_phone, customer_address, scheduled_for
             ))
 
             res = cur.fetchone()
@@ -126,6 +141,11 @@ def menu():
             
             conn.commit()
             
+            # 清除 Session 中的暫存 (如果有)
+            if 'delivery_data' in session:
+                session.pop('delivery_data', None)
+                session.pop('delivery_info', None)
+
             if old_order_id: 
                 return f"<script>localStorage.removeItem('cart_cache'); alert('訂單已更新'); if(window.opener) window.opener.location.reload(); window.close();</script>"
             
@@ -133,6 +153,7 @@ def menu():
             
         except Exception as e:
             conn.rollback()
+            print(f"Order Error: {e}") # 建議加上 print 以便除錯
             return f"Order Failed: {e}", 500
         finally:
             cur.close()
@@ -182,7 +203,7 @@ def menu():
                            display_lang=display_lang, order_lang=order_lang, 
                            preload_cart=preload_cart, edit_oid=edit_oid, config=settings)
 
-# --- 下單成功頁面 (保持不變) ---
+# --- 下單成功頁面 ---
 @menu_bp.route('/success')
 def order_success():
     oid = request.args.get('order_id')
@@ -191,8 +212,11 @@ def order_success():
     t = translations.get(lang, translations['zh'])
     
     conn = get_db_connection(); cur = conn.cursor()
+    # 同步讀取新增的欄位
     cur.execute("""
-        SELECT daily_seq, content_json, total_price, created_at, order_type, delivery_info, delivery_fee 
+        SELECT daily_seq, content_json, total_price, created_at, 
+               order_type, delivery_info, delivery_fee,
+               customer_name, customer_phone, customer_address, scheduled_for
         FROM orders WHERE id=%s
     """, (oid,))
     row = cur.fetchone()
@@ -200,13 +224,24 @@ def order_success():
     
     if not row: return "Order Not Found", 404
     
-    seq, json_str, total, created_at, order_type, delivery_info_json, delivery_fee = row
+    # 解包資料
+    seq, json_str, total, created_at, order_type, delivery_info_json, delivery_fee, c_name, c_phone, c_addr, c_time = row
+    
     tw_time = created_at + timedelta(hours=8)
     time_str = tw_time.strftime('%Y-%m-%d %H:%M:%S')
     items = json.loads(json_str) if json_str else []
     
     is_delivery = (order_type == 'delivery')
+    
+    # 嘗試從 delivery_info_json 讀取 (相容舊資料)，如果欄位是 NULL 則嘗試讀取 JSON
     delivery_info = json.loads(delivery_info_json) if delivery_info_json else {}
+    
+    # 優先使用獨立欄位，若無則使用 JSON 內資料
+    d_name = c_name if c_name else delivery_info.get('name', '')
+    d_phone = c_phone if c_phone else delivery_info.get('phone', '')
+    d_addr = c_addr if c_addr else delivery_info.get('address', '')
+    d_scheduled = c_time if c_time else delivery_info.get('scheduled_for', '')
+    d_note = delivery_info.get('note', '') # 備註通常只存在 JSON 中
     
     items_html = ""
     subtotal = 0
@@ -214,13 +249,13 @@ def order_success():
     for i in items:
         price = i['unit_price'] * i['qty']
         subtotal += price
-        d_name = i.get(f'name_{lang}', i.get('name_zh', 'Product'))
+        d_name_prod = i.get(f'name_{lang}', i.get('name_zh', 'Product'))
         ops = i.get(f'options_{lang}', i.get('options_zh', []))
         opt_str = f"<br><small style='color:#777; font-size:0.9em;'>└ {', '.join(ops)}</small>" if ops else ""
         items_html += f"""
         <div style='display:flex; justify-content:space-between; align-items: flex-start; border-bottom:1px solid #eee; padding:15px 0;'>
             <div style="text-align: left; padding-right: 10px;">
-                <div style="font-size:1.1em; font-weight:bold; color:#333;">{d_name} <span style="color:#888; font-weight:normal;">x{i['qty']}</span></div>
+                <div style="font-size:1.1em; font-weight:bold; color:#333;">{d_name_prod} <span style="color:#888; font-weight:normal;">x{i['qty']}</span></div>
                 {opt_str}
             </div>
             <div style="font-weight:bold; font-size:1.1em; white-space:nowrap;">${price}</div>
@@ -238,13 +273,14 @@ def order_success():
             <div style="font-weight:bold; font-size:1.1em;">${delivery_fee}</div>
         </div>
         """
-        d_name = delivery_info.get('name', '')
-        d_phone = delivery_info.get('phone', '')
-        d_addr = delivery_info.get('address', '')
-        d_note = delivery_info.get('note', '')
+        
+        # 顯示預約時間 (如果有)
+        time_display = f"<div style='margin-bottom:5px; color:#d32f2f;'><b>Scheduled:</b> {d_scheduled}</div>" if d_scheduled else ""
+
         delivery_html = f"""
         <div style="background:#e3f2fd; padding:15px; border-radius:10px; margin-bottom:20px; text-align:left; border:1px solid #90caf9;">
             <h4 style="margin:0 0 10px 0; color:#1565c0;">🛵 Delivery Info / 外送資訊</h4>
+            {time_display}
             <div style="margin-bottom:5px;"><b>Name:</b> {d_name}</div>
             <div style="margin-bottom:5px;"><b>Phone:</b> <a href="tel:{d_phone}">{d_phone}</a></div>
             <div style="margin-bottom:5px;"><b>Address:</b> {d_addr}</div>
