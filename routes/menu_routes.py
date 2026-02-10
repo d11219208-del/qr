@@ -6,23 +6,24 @@ import json
 
 menu_bp = Blueprint('menu', __name__)
 
-# --- 首頁 (單純導航) ---
+# --- 語言選擇首頁 ---
 @menu_bp.route('/')
 def index():
-    # 這裡只負責傳遞桌號 (如果是掃碼進來的)
     table_num = request.args.get('table', '')
-    # 清除舊的外送 Session，避免混亂
-    if 'delivery_info' in session:
-        session.pop('delivery_info')
+    # 如果回到首頁，清除外送相關 Session，避免混亂
+    if 'delivery_data' in session: session.pop('delivery_data', None)
+    if 'delivery_info' in session: session.pop('delivery_info', None)
+    if 'table_num' in session: session.pop('table_num', None)
+    
     return render_template('index.html', table_num=table_num)
 
-# --- 點餐頁面 ---
+# --- 點餐頁面 (核心邏輯) ---
 @menu_bp.route('/menu', methods=['GET', 'POST'])
 def menu():
     display_lang = request.args.get('lang', 'zh')
-    # 透過網址參數強制指定類型 (例如 ?type=delivery)
+    # 支援透過網址強制指定類型 (例如 ?type=delivery)
     url_order_type = request.args.get('type', 'dine_in')
-    
+
     t_all = load_translations()
     t = t_all.get(display_lang, t_all['zh'])
     
@@ -33,8 +34,7 @@ def menu():
     # --- POST: 處理訂單提交 ---
     if request.method == 'POST':
         try:
-            # 1. 基本欄位
-            raw_table_number = request.form.get('table_number')
+            # 1. 取得基本欄位
             cart_json = request.form.get('cart_data')
             need_receipt = request.form.get('need_receipt') == 'on'
             final_lang = request.form.get('lang_input', 'zh')
@@ -42,6 +42,8 @@ def menu():
             
             # 2. 判斷訂單類型 (由前端 hidden input 傳來)
             order_type = request.form.get('order_type', 'dine_in')
+            
+            # 取得運費 (前端傳來的數值，或者後端重新計算更安全，這裡先用前端傳來的)
             delivery_fee = int(float(request.form.get('delivery_fee', 0)))
             
             # 初始化變數
@@ -50,30 +52,36 @@ def menu():
             customer_address = None
             scheduled_for = None
             delivery_info = None
-
-            # 3. 處理外送/內用邏輯
+            
+            # --- [關鍵修改] 判斷桌號與提取顧客資訊 ---
             if order_type == 'delivery':
-                # 外送：直接從 Form 拿資料 (Form 的資料是 render 時從 session 填入的)
+                # --- 強制設定桌號為 "外送" ---
+                table_number = "外送"
+                
+                # 從表單提取詳細資訊 (這些是 hidden input)
                 customer_name = request.form.get('customer_name')
                 customer_phone = request.form.get('customer_phone')
                 customer_address = request.form.get('delivery_address')
                 scheduled_for = request.form.get('scheduled_for')
                 
+                # 組合外送資訊 JSON
                 delivery_info = json.dumps({
                     'name': customer_name,
                     'phone': customer_phone,
                     'address': customer_address,
                     'scheduled_for': scheduled_for,
+                    'distance_km': request.form.get('distance_km'), # 如果前端有傳
                     'note': request.form.get('delivery_note')
                 }, ensure_ascii=False)
-                
-                table_number = "外送"
+
             else:
-                # 內用/外帶
+                # 非外送 (內用/外帶)
+                raw_table_number = request.form.get('table_number')
                 if raw_table_number and raw_table_number.strip():
                     table_number = raw_table_number
                 else:
                     table_number = "外帶"
+            # ----------------------------
 
             if not cart_json or cart_json == '[]': 
                 return "Empty Cart", 400
@@ -82,7 +90,13 @@ def menu():
             total_price = 0
             display_list = []
 
-            # 4. 計算金額與生成字串
+            # 如果是修改訂單，保持原本的語言
+            if old_order_id:
+                cur.execute("SELECT lang FROM orders WHERE id=%s", (old_order_id,))
+                orig_res = cur.fetchone()
+                if orig_res: final_lang = orig_res[0] 
+
+            # 3. 計算餐點總額
             for item in cart_items:
                 price = int(float(item['unit_price']))
                 qty = int(float(item['qty']))
@@ -96,15 +110,18 @@ def menu():
                 display_list.append(f"{n_display} {opt_str} x{qty}")
 
             items_str = " + ".join(display_list)
+            
+            # 加入運費
             total_price += delivery_fee
 
-            # 5. 寫入資料庫
+            # 4. 寫入資料庫
             cur.execute("LOCK TABLE orders IN SHARE ROW EXCLUSIVE MODE")
-            
+
             cur.execute("""
                 INSERT INTO orders (
                     table_number, items, total_price, lang, 
-                    daily_seq, content_json, need_receipt, created_at,
+                    daily_seq, 
+                    content_json, need_receipt, created_at,
                     order_type, delivery_info, delivery_fee,
                     customer_name, customer_phone, customer_address, scheduled_for
                 )
@@ -126,14 +143,16 @@ def menu():
             res = cur.fetchone()
             oid = res[0]
             
+            # 如果是編輯訂單，將舊單作廢
             if old_order_id:
                 cur.execute("UPDATE orders SET status='Cancelled' WHERE id=%s", (old_order_id,))
             
             conn.commit()
             
-            # 下單成功後，清除 Session 中的外送資料
-            if 'delivery_info' in session:
-                session.pop('delivery_info', None)
+            # 下單成功後，清除 Session 中的暫存
+            session.pop('delivery_data', None)
+            session.pop('delivery_info', None)
+            session.pop('table_num', None)
 
             if old_order_id: 
                 return f"<script>localStorage.removeItem('cart_cache'); alert('訂單已更新'); if(window.opener) window.opener.location.reload(); window.close();</script>"
@@ -148,23 +167,27 @@ def menu():
             cur.close()
             conn.close()
 
-    # --- GET: 顯示菜單 ---
+    # --- GET: 顯示菜單頁面 ---
     
-    # 判斷是否為外送模式
+    # 1. 處理外送模式邏輯
     is_delivery_mode = False
-    delivery_data = {}
+    delivery_data_for_template = {}
+    delivery_fee_for_template = 0
     
-    # 如果網址帶有 type=delivery 且 Session 有資料
-    if url_order_type == 'delivery':
-        if 'delivery_info' in session:
-            is_delivery_mode = True
-            delivery_data = session['delivery_info']
-        else:
-            # 如果是外送模式但 Session 沒資料（可能逾時或直接輸入網址），踢回設定頁
-            return redirect(url_for('delivery.setup'))
-    
-    # 處理編輯訂單邏輯 (略，保持原樣)
-    url_table = request.args.get('table', '')
+    # 檢查 Session 是否有外送資料 (由 delivery_routes 寫入)
+    if 'delivery_data' in session and 'delivery_info' in session:
+        is_delivery_mode = True
+        # 合併兩個字典傳給前端
+        delivery_data_for_template = {**session['delivery_data'], **session['delivery_info']}
+        delivery_fee_for_template = session['delivery_info'].get('shipping_fee', 0)
+        
+        # 如果是外送模式，強制覆寫網址列的 table 參數
+        url_table = "外送"
+    else:
+        # 非外送模式
+        url_table = request.args.get('table', '')
+
+    # 2. 編輯訂單邏輯
     edit_oid = request.args.get('edit_oid')
     preload_cart = "null" 
     order_lang = display_lang 
@@ -173,11 +196,13 @@ def menu():
         cur.execute("SELECT table_number, content_json, lang FROM orders WHERE id=%s", (edit_oid,))
         old_data = cur.fetchone()
         if old_data:
-            if not url_table: url_table = old_data[0]
+            # 如果不是編輯外送單，才使用舊單的桌號
+            if not is_delivery_mode:
+                if not url_table: url_table = old_data[0]
             preload_cart = old_data[1] 
             order_lang = old_data[2] if old_data[2] else 'zh'
 
-    # 讀取產品 (保持原樣)
+    # 3. 讀取產品與設定
     cur.execute("SELECT key, value FROM settings")
     settings = dict(cur.fetchall())
     
@@ -203,17 +228,17 @@ def menu():
             'print_category': p[14] or 'Noodle'
         })
     
-    # 傳遞 delivery_data 與 is_delivery_mode 到前端
     return render_template('menu.html', products=p_list, texts=t, table_num=url_table, 
                            display_lang=display_lang, order_lang=order_lang, 
                            preload_cart=preload_cart, edit_oid=edit_oid, config=settings,
-                           is_delivery=is_delivery_mode, delivery_data=delivery_data)
+                           # 傳遞外送參數
+                           is_delivery=is_delivery_mode, 
+                           delivery_data=delivery_data_for_template,
+                           delivery_fee=delivery_fee_for_template)
 
-# --- 下單成功頁面 (保持不變) ---
+# --- 下單成功頁面 ---
 @menu_bp.route('/success')
 def order_success():
-    # ... (保持原本的 success 代碼不變) ...
-    # 這裡可以直接複製你原本的 success function
     oid = request.args.get('order_id')
     lang = request.args.get('lang', 'zh')
     translations = load_translations()
@@ -238,6 +263,7 @@ def order_success():
     items = json.loads(json_str) if json_str else []
     
     is_delivery = (order_type == 'delivery')
+    
     delivery_info = json.loads(delivery_info_json) if delivery_info_json else {}
     
     d_name = c_name if c_name else delivery_info.get('name', '')
@@ -248,6 +274,7 @@ def order_success():
     
     items_html = ""
     subtotal = 0
+    
     for i in items:
         price = i['unit_price'] * i['qty']
         subtotal += price
@@ -275,7 +302,9 @@ def order_success():
             <div style="font-weight:bold; font-size:1.1em;">${delivery_fee}</div>
         </div>
         """
+        
         time_display = f"<div style='margin-bottom:5px; color:#d32f2f;'><b>Scheduled:</b> {d_scheduled}</div>" if d_scheduled else ""
+
         delivery_html = f"""
         <div style="background:#e3f2fd; padding:15px; border-radius:10px; margin-bottom:20px; text-align:left; border:1px solid #90caf9;">
             <h4 style="margin:0 0 10px 0; color:#1565c0;">🛵 Delivery Info / 外送資訊</h4>
@@ -297,29 +326,50 @@ def order_success():
     <html>
     <head>
         <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Success</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+        <title>Order Success</title>
         <style>
-             body {{ margin: 0; padding: 0; background: #fdfdfd; font-family: sans-serif; }}
-            .container {{ padding: 20px; text-align: center; }}
-            .card {{ background: #fff; border-radius: 20px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); padding: 30px 20px; }}
-            .home-btn {{ display: block; padding: 15px; background: #007bff; color: white; text-decoration: none; border-radius: 10px; margin-top: 20px; }}
+            body {{ margin: 0; padding: 0; background: #fdfdfd; font-family: 'Microsoft JhengHei', -apple-system, sans-serif; }}
+            .container {{ min-height: 100vh; display: flex; flex-direction: column; padding: 20px; box-sizing: border-box; }}
+            .card {{ background: #fff; flex-grow: 1; border-radius: 20px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); padding: 30px 20px; text-align: center; display: flex; flex-direction: column; }}
+            .success-icon {{ font-size: 60px; margin-bottom: 10px; }}
+            .status-title {{ color: #28a745; margin: 0 0 20px 0; font-size: 1.8em; }}
+            .seq-box {{ background: #fff5f8; border-radius: 15px; padding: 20px; margin-bottom: 25px; border: 2px solid #ffeef2; }}
+            .seq-label {{ font-size: 1em; color: #e91e63; font-weight: bold; margin-bottom: 8px; letter-spacing: 1px; }}
+            .seq-number {{ font-size: 5em; font-weight: 900; color: #e91e63; line-height: 1; }}
+            .notice-box {{ background: #fdf6e3; padding: 18px; border-left: 6px solid #ff9800; border-radius: 8px; margin-bottom: 30px; text-align: left; }}
+            .details-area {{ text-align: left; margin-bottom: 30px; }}
+            .total-row {{ text-align: right; font-weight: 900; font-size: 1.8em; margin-top: 20px; color: #d32f2f; border-top: 2px solid #ddd; padding-top: 15px; }}
+            .home-btn {{ display: block; padding: 18px; background: #007bff; color: white !important; text-decoration: none; border-radius: 12px; font-weight: bold; font-size: 1.2em; margin-top: auto; box-shadow: 0 4px 10px rgba(0,123,255,0.3); }}
         </style>
     </head>
     <body>
         <div class="container">
             <div class="card">
-                <h1 style="color:#28a745">✅ {t['order_success']}</h1>
-                <div style="font-size:3em; font-weight:bold; color:#e91e63">#{seq:03d}</div>
-                <div style="background:#fff3cd; padding:10px; margin:10px 0;">{status_msg}<br>{wait_msg}</div>
+                <div class="success-icon">✅</div>
+                <h1 class="status-title">{t['order_success']}</h1>
+                
+                <div class="seq-box">
+                    <div class="seq-label">取餐單號 / ORDER NO.</div>
+                    <div class="seq-number">#{seq:03d}</div>
+                </div>
+
+                <div class="notice-box">
+                    <div style="font-weight:bold; color:#856404; font-size:1.3em; margin-bottom:5px;">⚠️ {status_msg}</div>
+                    <div style="color:#856404; font-size:1em; line-height:1.4;">{wait_msg}</div>
+                </div>
+
                 {delivery_html}
-                <div style="text-align:left;">
-                    <h3>🧾 {t.get('order_details', '訂單明細')}</h3>
+
+                <div class="details-area">
+                    <h3 style="border-bottom:2px solid #eee; padding-bottom:10px; margin-bottom:10px; color:#444;">🧾 {t.get('order_details', '訂單明細')}</h3>
                     {items_html}
                     {fee_row_html}
-                    <div style="text-align:right; font-size:1.5em; font-weight:bold; margin-top:10px;">{t['total']}: ${total}</div>
+                    <div class="total-row">{t['total']}: ${total}</div>
                 </div>
-                <a href="{url_for('menu.index')}?lang={lang}" class="home-btn">回首頁 / Back to Home</a>
+                
+                <p style="color:#999; font-size:0.85em; margin: 20px 0;">下單時間: {time_str}</p>
+                <a href="{url_for('menu.index')}?lang={lang}" class="home-btn">回首頁 / Back to Menu</a>
             </div>
         </div>
     </body>
