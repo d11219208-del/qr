@@ -27,17 +27,19 @@ def menu():
     if request.method == 'POST':
         try:
             # 1. 基本欄位
-            table_number = request.form.get('table_number')
+            raw_table_number = request.form.get('table_number')
             cart_json = request.form.get('cart_data')
             need_receipt = request.form.get('need_receipt') == 'on'
             final_lang = request.form.get('lang_input', 'zh')
             old_order_id = request.form.get('old_order_id')
             
-            # 2. 外送欄位
+            # 2. 外送欄位與桌號邏輯
             order_type = request.form.get('order_type', 'dine_in') # 預設內用
             delivery_fee = int(float(request.form.get('delivery_fee', 0)))
             
             delivery_info = None
+            
+            # --- [關鍵修改] 判斷桌號邏輯 ---
             if order_type == 'delivery':
                 # 組合外送資訊 JSON
                 delivery_info = json.dumps({
@@ -47,8 +49,16 @@ def menu():
                     'distance_km': request.form.get('distance_km'),
                     'note': request.form.get('delivery_note')
                 }, ensure_ascii=False)
-                # 外送單沒有桌號
-                table_number = None 
+                
+                # 外送單強制設定桌號為 "外送"
+                table_number = "外送"
+            else:
+                # 非外送狀況：如果沒有桌號，預設為 "外帶"
+                if raw_table_number and raw_table_number.strip():
+                    table_number = raw_table_number
+                else:
+                    table_number = "外帶"
+            # ----------------------------
 
             if not cart_json or cart_json == '[]': 
                 return "Empty Cart", 400
@@ -78,7 +88,7 @@ def menu():
 
             items_str = " + ".join(display_list)
             
-            # 注意：後端只負責將運費加入總金額，不再阻擋低消，交由前端判斷
+            # 注意：後端只負責將運費加入總金額
             total_price += delivery_fee
 
             # --- 核心修正：利用資料庫鎖定解決並發流水號重複問題 ---
