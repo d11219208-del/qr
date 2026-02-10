@@ -33,7 +33,7 @@ def menu():
             final_lang = request.form.get('lang_input', 'zh')
             old_order_id = request.form.get('old_order_id')
             
-            # 2. 外送欄位 (新增)
+            # 2. 外送欄位
             order_type = request.form.get('order_type', 'dine_in') # 預設內用
             delivery_fee = int(float(request.form.get('delivery_fee', 0)))
             
@@ -47,7 +47,7 @@ def menu():
                     'distance_km': request.form.get('distance_km'),
                     'note': request.form.get('delivery_note')
                 }, ensure_ascii=False)
-                # 外送單沒有桌號，設為 None 或特定標示
+                # 外送單沒有桌號
                 table_number = None 
 
             if not cart_json or cart_json == '[]': 
@@ -78,23 +78,7 @@ def menu():
 
             items_str = " + ".join(display_list)
             
-            # --- [修改點] 新增外送低消檢查邏輯 ---
-            # 判斷條件：如果是外送 (delivery) 且 餐點總額 (total_price) 小於 1000
-            if order_type == 'delivery' and total_price < 1000:
-                cur.close()
-                conn.close()
-                # 回傳 Script 讓瀏覽器跳出警告並返回上一頁
-                # 這樣不會觸發成功頁面的清除購物車邏輯
-                return """
-                <script>
-                    alert('外送金額未達到 1000 元，請再加點商品。');
-                    window.history.back();
-                </script>
-                """
-            # ----------------------------------
-
-            # 4. 加入運費到總金額 (如果是外送)
-            # 注意：這裡才加運費，代表 1000 元門檻是指「餐點費用」不含運費
+            # 注意：後端只負責將運費加入總金額，不再阻擋低消，交由前端判斷
             total_price += delivery_fee
 
             # --- 核心修正：利用資料庫鎖定解決並發流水號重複問題 ---
@@ -102,7 +86,7 @@ def menu():
             # 鎖定資料表
             cur.execute("LOCK TABLE orders IN SHARE ROW EXCLUSIVE MODE")
 
-            # 插入資料 (新增 order_type, delivery_info, delivery_fee)
+            # 插入資料
             cur.execute("""
                 INSERT INTO orders (
                     table_number, items, total_price, lang, 
@@ -158,7 +142,7 @@ def menu():
             preload_cart = old_data[1] 
             order_lang = old_data[2] if old_data[2] else 'zh'
 
-    # 讀取產品與設定 (設定用來判斷外送是否開啟)
+    # 讀取產品與設定
     cur.execute("SELECT key, value FROM settings")
     settings = dict(cur.fetchall())
     
@@ -184,12 +168,11 @@ def menu():
             'print_category': p[14] or 'Noodle'
         })
     
-    # 將 settings 傳入 template
     return render_template('menu.html', products=p_list, texts=t, table_num=url_table, 
                            display_lang=display_lang, order_lang=order_lang, 
                            preload_cart=preload_cart, edit_oid=edit_oid, config=settings)
 
-# --- 下單成功頁面 (包含外送資訊顯示) ---
+# --- 下單成功頁面 (保持不變) ---
 @menu_bp.route('/success')
 def order_success():
     oid = request.args.get('order_id')
@@ -198,7 +181,6 @@ def order_success():
     t = translations.get(lang, translations['zh'])
     
     conn = get_db_connection(); cur = conn.cursor()
-    # 讀取 order_type, delivery_info, delivery_fee
     cur.execute("""
         SELECT daily_seq, content_json, total_price, created_at, order_type, delivery_info, delivery_fee 
         FROM orders WHERE id=%s
@@ -213,23 +195,18 @@ def order_success():
     time_str = tw_time.strftime('%Y-%m-%d %H:%M:%S')
     items = json.loads(json_str) if json_str else []
     
-    # 解析外送資訊
     is_delivery = (order_type == 'delivery')
     delivery_info = json.loads(delivery_info_json) if delivery_info_json else {}
     
-    # 產生餐點 HTML
     items_html = ""
-    # 餐點小計
     subtotal = 0
     
     for i in items:
         price = i['unit_price'] * i['qty']
         subtotal += price
-        
         d_name = i.get(f'name_{lang}', i.get('name_zh', 'Product'))
         ops = i.get(f'options_{lang}', i.get('options_zh', []))
         opt_str = f"<br><small style='color:#777; font-size:0.9em;'>└ {', '.join(ops)}</small>" if ops else ""
-        
         items_html += f"""
         <div style='display:flex; justify-content:space-between; align-items: flex-start; border-bottom:1px solid #eee; padding:15px 0;'>
             <div style="text-align: left; padding-right: 10px;">
@@ -240,12 +217,10 @@ def order_success():
         </div>
         """
     
-    # 產生外送資訊 HTML
     delivery_html = ""
     fee_row_html = ""
     
     if is_delivery:
-        # 運費欄位
         fee_label = "Delivery Fee" if lang == 'en' else "運費"
         fee_row_html = f"""
         <div style='display:flex; justify-content:space-between; align-items: center; border-bottom:2px solid #333; padding:15px 0; color:#007bff;'>
@@ -253,13 +228,10 @@ def order_success():
             <div style="font-weight:bold; font-size:1.1em;">${delivery_fee}</div>
         </div>
         """
-        
-        # 客戶資訊欄位
         d_name = delivery_info.get('name', '')
         d_phone = delivery_info.get('phone', '')
         d_addr = delivery_info.get('address', '')
         d_note = delivery_info.get('note', '')
-        
         delivery_html = f"""
         <div style="background:#e3f2fd; padding:15px; border-radius:10px; margin-bottom:20px; text-align:left; border:1px solid #90caf9;">
             <h4 style="margin:0 0 10px 0; color:#1565c0;">🛵 Delivery Info / 外送資訊</h4>
@@ -269,12 +241,9 @@ def order_success():
             <div style="font-size:0.9em; color:#555;"><b>Note:</b> {d_note}</div>
         </div>
         """
-        
-        # 外送的提示訊息
         status_msg = "Order Received / 訂單已收到"
         wait_msg = "Please wait for confirmation call.<br>請留意電話，我們可能與您確認。"
     else:
-        # 內用的提示訊息
         status_msg = t.get('pay_at_counter', '請至櫃檯結帳')
         wait_msg = t['kitchen_prep']
 
