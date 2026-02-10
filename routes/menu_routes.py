@@ -33,7 +33,7 @@ def menu():
             final_lang = request.form.get('lang_input', 'zh')
             old_order_id = request.form.get('old_order_id')
             
-            # 2. 外送欄位 (新增)
+            # 2. 外送欄位
             order_type = request.form.get('order_type', 'dine_in') # 預設內用
             delivery_fee = int(float(request.form.get('delivery_fee', 0)))
             
@@ -63,7 +63,7 @@ def menu():
                 orig_res = cur.fetchone()
                 if orig_res: final_lang = orig_res[0] 
 
-            # 3. 計算餐點總額
+            # 3. 計算餐點總額 (純餐點費，不含運費)
             for item in cart_items:
                 price = int(float(item['unit_price']))
                 qty = int(float(item['qty']))
@@ -78,18 +78,21 @@ def menu():
 
             items_str = " + ".join(display_list)
             
-            # --- [新增邏輯] 外送低消檢查 ---
-            # 必須在加入運費之前檢查，確保是「餐點金額」滿 1000
+            # --- [新增功能] 外送低消檢查 ---
+            # 檢查邏輯：如果是外送 (delivery) 且 餐點總額 (total_price) 小於 1000
+            # 注意：這裡通常是指「餐點金額」需滿1000，不包含運費。
             if order_type == 'delivery' and total_price < 1000:
-                # 回傳一段 JS，跳出警告並回到上一頁 (保留購物車內容)
+                conn.rollback() # 尚未寫入，但習慣上 rollback 確保乾淨
+                # 回傳一段 script：跳出警告 -> 回上一頁 (保留表單與購物車狀態)
                 return """
                 <script>
-                    alert('金額未達到1000元 (外送低消)');
+                    alert('金額未達到1000元');
                     window.history.back();
                 </script>
                 """
 
             # 4. 加入運費到總金額 (如果是外送)
+            # 通過檢查後，才將運費加到最後要寫入資料庫的總金額中
             total_price += delivery_fee
 
             # --- 核心修正：利用資料庫鎖定解決並發流水號重複問題 ---
