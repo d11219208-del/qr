@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="{{ display_lang }}">
 <head>
@@ -49,7 +50,7 @@
     </style>
 </head>
 <body>
-    {# --- 1. 強制從 Session 讀取資料 (即使後端變數沒傳也不怕) --- #}
+    {# --- 1. 強制從 Session 讀取資料 --- #}
     {% set session_delivery = session.get('delivery_data', {}) %}
     {% set session_table = session.get('table_num') %}
     
@@ -82,7 +83,7 @@
                 </div>
             </div>
             
-            {# --- 鎖定的外送桌號欄位 --- #}
+            {# --- 鎖定的外送桌號欄位 (唯讀) --- #}
             <div style="margin-bottom: 10px;">
                 <label style="font-weight:bold; color:#1565c0;">{{ texts['table_placeholder'] }}</label>
                 <input type="text" id="visible_table" value="外送" readonly
@@ -109,13 +110,17 @@
         <input type="hidden" name="old_order_id" value="{{ edit_oid }}">
         {% endif %}
         
+        {# --- 這裡對應 database.py 的 orders 表 table_number 欄位 --- #}
         <input type="hidden" name="table_number" id="tbl_input">
         
-        {# --- 表單欄位也強制從 Session 讀取 --- #}
+        {# --- 外送資料欄位 (名稱已對應 database.py 欄位) --- #}
         <input type="hidden" name="order_type" value="{{ 'delivery' if is_delivery_mode else 'dine_in' }}">
         <input type="hidden" name="customer_name" value="{{ session_delivery.get('name', '') }}">
         <input type="hidden" name="customer_phone" value="{{ session_delivery.get('phone', '') }}">
-        <input type="hidden" name="delivery_address" value="{{ session_delivery.get('address', '') }}">
+        
+        {# --- 修正：這裡改成 customer_address 以對應 database.py --- #}
+        <input type="hidden" name="customer_address" value="{{ session_delivery.get('address', '') }}">
+        
         <input type="hidden" name="delivery_fee" value="{{ session.get('delivery_info', {}).get('shipping_fee', 0) }}">
         
         <div class="cart-bar" id="bar">
@@ -382,23 +387,20 @@
     }
 
     function sub() {
-        // --- [新增] 外送低消檢查邏輯 ---
+        // --- 1. 外送低消檢查 ---
         if (IS_DELIVERY) {
-            // 計算餐點總額 (不含運費)
             let foodTotal = C.reduce((a, b) => a + (b.unit_price * b.qty), 0);
-            
-            // 檢查是否小於 1000
             if (foodTotal < 1000) {
                 alert("⚠️ 外送訂單金額未滿 $1000 元 (不含運費)\n請再加點商品。\n\nMinimum order for delivery is $1000.");
-                return; // 終止函式，不送出表單
+                return; 
             }
         }
-        // -----------------------------
 
+        // --- 2. 決定桌號 (關鍵修改) ---
         let tableVal = document.getElementById('visible_table').value;
         
-        // 防呆：如果是外送模式，強制把 value 設為外送 (避免 JS 讀到空值)
         if (IS_DELIVERY) {
+            // 強制設定為 '外送'，確保傳入 database.py orders 表的 table_number 欄位是正確的字串
             tableVal = '外送';
         }
 
@@ -406,6 +408,7 @@
             return alert(T.table_placeholder || '請輸入桌號');
         }
         
+        // 填入 hidden input (name="table_number")
         document.getElementById('tbl_input').value = tableVal;
 
         if(confirm(T.confirm_order)) {
