@@ -1,5 +1,5 @@
 from flask import Blueprint, render_template, request, jsonify, session, redirect, url_for
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time
 from geopy.geocoders import Nominatim
 from geopy.exc import GeocoderTimedOut, GeocoderUnavailable
 from haversine import haversine, Unit
@@ -48,6 +48,49 @@ def extract_road_only(addr):
         return match_simple.group(0)
     return addr # 真的沒招了，回傳原值
 
+def generate_time_slots(base_date):
+    """
+    產生單日可外送時段
+    營業時間: 10:30 ~ 20:30
+    禁止時段: 11:30 ~ 13:30 (台灣時間)
+    """
+    slots = []
+    
+    # 定義營業時間與禁止時間
+    start_time = time(10, 30)
+    end_time = time(20, 30)
+    block_start = time(11, 30)
+    block_end = time(13, 30)
+    
+    # 從當天 10:30 開始，每 30 分鐘一個區間
+    current_dt = datetime.combine(base_date, start_time)
+    end_dt = datetime.combine(base_date, end_time)
+    
+    # 取得現在的台灣時間
+    now_tw = datetime.utcnow() + timedelta(hours=8)
+    
+    while current_dt <= end_dt:
+        t = current_dt.time()
+        
+        # 1. 必須是未來時間 (加上一點緩衝，例如至少 30 分鐘後才能送)
+        # 如果是「今天」，過期的時間不能選
+        if base_date == now_tw.date() and current_dt < (now_tw + timedelta(minutes=30)):
+            current_dt += timedelta(minutes=30)
+            continue
+            
+        # 2. 檢查是否在禁止時段內 (11:30 <= t < 13:30)
+        # 注意：禁止時段通常是不含結束點，或者是說 13:30 可以開始送?
+        # 這裡設定為：只要時間點落在 11:30 (含) 到 13:30 (不含) 之間就不顯示
+        in_forbidden_zone = (t >= block_start and t < block_end)
+        
+        if not in_forbidden_zone:
+            time_str = current_dt.strftime("%H:%M")
+            slots.append(time_str)
+            
+        current_dt += timedelta(minutes=30)
+        
+    return slots
+
 @delivery_bp.route('/setup')
 def setup():
     settings = get_delivery_settings()
@@ -56,13 +99,25 @@ def setup():
 
     date_options = []
     now = datetime.utcnow() + timedelta(hours=8)
+    
+    # 產生日期選項 (今天、明天、後天)
     for i in range(3):
-        d = now + timedelta(days=i)
+        d = (now + timedelta(days=i)).date()
         val = d.strftime("%Y-%m-%d")
         weekdays = ["一", "二", "三", "四", "五", "六", "日"]
-        label = f"{d.strftime('%m/%d')} ({weekdays[d.weekday()]})"
-        if i == 0: label += " (今天)"
-        date_options.append({'value': val, 'label': label})
+        label_date = f"{d.strftime('%m/%d')} ({weekdays[d.weekday()]})"
+        if i == 0: label_date += " (今天)"
+        
+        # 產生該日期的可用時段
+        slots = generate_time_slots(d)
+        
+        # 如果該天有可用時段才加入選項
+        if slots:
+            date_options.append({
+                'value': val, 
+                'label': label_date,
+                'slots': slots
+            })
 
     return render_template('delivery_setup.html', dates=date_options)
 
@@ -73,8 +128,12 @@ def check_address():
     name = data.get('name')
     phone = data.get('phone')
     
-    if not raw_address or not name or not phone:
-        return jsonify({'success': False, 'msg': '請填寫完整資訊'})
+    # 新增接收日期與時間
+    delivery_date = data.get('date')
+    delivery_time = data.get('time')
+    
+    if not raw_address or not name or not phone or not delivery_date or not delivery_time:
+        return jsonify({'success': False, 'msg': '請填寫完整資訊 (含日期與時間)'})
     
     geolocator = Nominatim(user_agent="tw_food_delivery_final_v4")
     
@@ -130,10 +189,14 @@ def check_address():
         shipping_fee = settings['base_fee'] + int(dist * settings['fee_per_km'])
         
         # 存入 Session
+        # 組合完整的預約時間字串
+        scheduled_for = f"{delivery_date} {delivery_time}"
+        
         session['delivery_data'] = {
             'name': name,
             'phone': phone,
-            'address': raw_address # 使用者原始輸入 (含樓層)
+            'address': raw_address, # 使用者原始輸入 (含樓層)
+            'scheduled_for': scheduled_for # 存入預約時間
         }
 
         # 根據 fallback 等級，給予不同的精準度提示 (可選)
