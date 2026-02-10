@@ -52,13 +52,15 @@ def generate_time_slots(base_date):
     """
     產生單日可外送時段
     營業時間: 10:30 ~ 20:30
-    禁止時段: 11:30 ~ 13:30 (台灣時間)
+    禁止時段: 11:30 ~ 13:30 (含 11:30 與 13:30 皆不可選)
     """
     slots = []
     
     # 定義營業時間與禁止時間
     start_time = time(10, 30)
     end_time = time(20, 30)
+    
+    # 禁止區間設定
     block_start = time(11, 30)
     block_end = time(13, 30)
     
@@ -72,16 +74,16 @@ def generate_time_slots(base_date):
     while current_dt <= end_dt:
         t = current_dt.time()
         
-        # 1. 必須是未來時間 (加上一點緩衝，例如至少 30 分鐘後才能送)
-        # 如果是「今天」，過期的時間不能選
+        # 1. 必須是未來時間 (加上 30 分鐘緩衝)
         if base_date == now_tw.date() and current_dt < (now_tw + timedelta(minutes=30)):
             current_dt += timedelta(minutes=30)
             continue
             
-        # 2. 檢查是否在禁止時段內 (11:30 <= t < 13:30)
-        # 注意：禁止時段通常是不含結束點，或者是說 13:30 可以開始送?
-        # 這裡設定為：只要時間點落在 11:30 (含) 到 13:30 (不含) 之間就不顯示
-        in_forbidden_zone = (t >= block_start and t < block_end)
+        # 2. 檢查是否在禁止時段內
+        # 修改重點：將 < 改為 <=，讓 13:30 也被視為禁止
+        # 這樣 11:30, 12:00, 12:30, 13:00, 13:30 都會是 True (不可選)
+        # 下一個可選的時間會是 14:00
+        in_forbidden_zone = (t >= block_start and t <= block_end)
         
         if not in_forbidden_zone:
             time_str = current_dt.strftime("%H:%M")
