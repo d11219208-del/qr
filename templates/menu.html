@@ -382,6 +382,19 @@
     }
 
     function sub() {
+        // --- [新增] 外送低消檢查邏輯 ---
+        if (IS_DELIVERY) {
+            // 計算餐點總額 (不含運費)
+            let foodTotal = C.reduce((a, b) => a + (b.unit_price * b.qty), 0);
+            
+            // 檢查是否小於 1000
+            if (foodTotal < 1000) {
+                alert("⚠️ 外送訂單金額未滿 $1000 元 (不含運費)\n請再加點商品。\n\nMinimum order for delivery is $1000.");
+                return; // 終止函式，不送出表單
+            }
+        }
+        // -----------------------------
+
         let tableVal = document.getElementById('visible_table').value;
         
         // 防呆：如果是外送模式，強制把 value 設為外送 (避免 JS 讀到空值)
