@@ -1,4 +1,3 @@
-# routes/kitchen_routes.py
 from flask import Blueprint, render_template, request, jsonify
 import json
 import base64  # 用於 RawBT 編碼
@@ -60,10 +59,10 @@ def check_new_orders():
         conn = get_db_connection()
         cur = conn.cursor()
         
-        # SQL 查詢：包含所有外送相關欄位
+        # SQL 查詢：確保包含 customer_address
         query = """
             SELECT id, table_number, items, total_price, status, created_at, lang, daily_seq, content_json,
-                   customer_name, customer_phone, customer_address, scheduled_for, delivery_fee
+                   customer_name, customer_phone, customer_address, scheduled_for, delivery_fee, order_type
             FROM orders 
             WHERE created_at >= %s AND created_at <= %s
             ORDER BY 
@@ -77,10 +76,10 @@ def check_new_orders():
         except Exception as e:
             conn.rollback() 
             print(f"SQL Fallback triggered (check_new_orders): {e}")
-            # Fallback (防止舊資料庫結構報錯)
+            # Fallback (防止舊資料庫結構缺少 order_type 報錯)
             query_fallback = """
                 SELECT id, table_number, items, total_price, status, created_at, lang, daily_seq, content_json,
-                       NULL, NULL, NULL, NULL, 0
+                       customer_name, customer_phone, customer_address, scheduled_for, delivery_fee, 'unknown'
                 FROM orders 
                 WHERE created_at >= %s AND created_at <= %s
                 ORDER BY status, daily_seq DESC
@@ -101,9 +100,9 @@ def check_new_orders():
             html_content = "<div id='loading-msg' style='grid-column:1/-1;text-align:center;padding:100px;font-size:1.5em;color:#888;'>🍽️ 目前沒有訂單</div>"
         
         for o in orders:
-            # 解包變數 (確保變數數量 = 14)
+            # 解包變數 (確保變數數量 = 15)
             oid, table, raw_items, total, status, created, order_lang, seq_num, c_json, \
-            c_name, c_phone, c_addr, c_schedule, c_fee = o
+            c_name, c_phone, c_addr, c_schedule, c_fee, c_type = o
             
             status_cls = status.lower()
             tw_time = created + timedelta(hours=8)
@@ -111,23 +110,32 @@ def check_new_orders():
             # 資料預處理
             table_str = str(table).strip() if table else ""
             c_fee = int(c_fee or 0)
+            c_type = str(c_type).lower() if c_type else 'unknown'
             
             # 判斷是否為外送/外帶/預約
             has_contact = (c_phone and str(c_phone).strip() != '' and str(c_phone).strip().lower() != 'none')
             has_addr = (c_addr and str(c_addr).strip() != '' and str(c_addr).strip().lower() != 'none')
             has_schedule = (c_schedule and str(c_schedule).strip() != '' and str(c_schedule).lower() != 'none')
 
-            is_delivery = (table_str == '外送') or has_addr
-            
-            # --- 顯示 HTML 組合 ---
-            display_table = ""
-            
-            if is_delivery:
+            # 邏輯判斷
+            if c_type == 'delivery':
+                is_delivery = True
                 display_table = "🛵 外送"
-            elif table_str:
+            elif c_type == 'takeout':
+                is_delivery = False
+                display_table = "🥡 自取/外帶"
+            elif c_type == 'dine_in':
+                is_delivery = False
                 display_table = f"桌號 {table_str}"
             else:
-                display_table = "🥡 外帶"
+                # 舊邏輯 Fallback
+                is_delivery = (table_str == '外送') or has_addr
+                if is_delivery:
+                    display_table = "🛵 外送"
+                elif table_str:
+                    display_table = f"桌號 {table_str}"
+                else:
+                    display_table = "🥡 外帶"
 
             # 組合詳細資訊 (HTML)
             info_html = ""
@@ -144,7 +152,7 @@ def check_new_orders():
             if has_contact:
                 info_html += f"<div>📞 {c_phone}</div>"
             
-            # 地址
+            # --- 地址顯示 (在此處處理) ---
             if has_addr:
                 info_html += f"<div style='margin-top:2px; line-height:1.2; border-top:1px dashed #aaa; padding-top:2px; font-weight:bold; color:#bf360c;'>📍 {c_addr}</div>"
 
@@ -228,7 +236,7 @@ def check_new_orders():
         return jsonify({'html': f"載入錯誤: {str(e)}", 'max_seq': 0, 'new_ids': []})
 
 
-# --- 3. 核心列印路由 (已修正：包含完整外送資訊) ---
+# --- 3. 核心列印路由 ---
 @kitchen_bp.route('/print_order/<int:oid>')
 def print_order(oid):
     try:
@@ -237,10 +245,10 @@ def print_order(oid):
         conn = get_db_connection()
         cur = conn.cursor()
         
-        # SQL 查詢：包含外送詳細資料
+        # SQL 查詢：包含 order_type 與外送詳細資料
         query = """
             SELECT table_number, total_price, daily_seq, content_json, created_at, status,
-                   customer_name, customer_phone, customer_address, delivery_fee, scheduled_for
+                   customer_name, customer_phone, customer_address, delivery_fee, scheduled_for, order_type
             FROM orders WHERE id=%s
         """
         try:
@@ -249,9 +257,10 @@ def print_order(oid):
         except Exception as e:
             conn.rollback() 
             print(f"SQL Fallback triggered (print_order): {e}")
+            # Fallback for missing columns
             cur.execute("""
                 SELECT table_number, total_price, daily_seq, content_json, created_at, status,
-                       NULL, NULL, NULL, 0, NULL
+                       customer_name, customer_phone, customer_address, delivery_fee, scheduled_for, 'unknown'
                 FROM orders WHERE id=%s
             """, (oid,))
             order = cur.fetchone()
@@ -265,20 +274,33 @@ def print_order(oid):
         
         # 解包資料
         table_num, total_price, seq, content_json, created_at, status, \
-        c_name, c_phone, c_addr, c_fee, c_schedule = order
+        c_name, c_phone, c_addr, c_fee, c_schedule, c_type = order
         
         # 資料預處理
         c_fee = int(c_fee or 0)
         table_str = str(table_num).strip() if table_num else ""
+        c_type = str(c_type).lower() if c_type else 'unknown'
         
         # 判斷資訊存在
         has_contact = (c_phone and str(c_phone).strip() != '' and str(c_phone).lower() != 'none')
         has_addr = (c_addr and str(c_addr).strip() != '' and str(c_addr).lower() != 'none')
         has_schedule = (c_schedule and str(c_schedule).strip() != '' and str(c_schedule).lower() != 'none')
         
-        # 核心判斷：是否為外送單
-        is_delivery = (table_str == '外送') or has_addr
-        
+        # 顯示名稱邏輯
+        if c_type == 'delivery':
+            display_tbl_name = "🛵 外送"
+            is_delivery = True
+        elif c_type == 'takeout':
+            display_tbl_name = "🥡 自取"
+            is_delivery = False
+        elif c_type == 'dine_in':
+            display_tbl_name = f"桌號 {table_str}"
+            is_delivery = False
+        else:
+            # Fallback logic
+            is_delivery = (table_str == '外送') or has_addr
+            display_tbl_name = "外送" if is_delivery else (table_str if table_str else "外帶")
+
         if isinstance(content_json, str):
             items = json.loads(content_json)
         elif isinstance(content_json, (list, dict)):
@@ -298,7 +320,7 @@ def print_order(oid):
             elif p_cat == 'Soup': soup_items.append(item)
             else: other_items.append(item)
 
-        # [CSS 樣式優化] - 新增 .customer-info 等樣式
+        # CSS 樣式
         style = """
         <style>
             @page { size: 80mm auto; margin: 0mm; }
@@ -368,11 +390,9 @@ def print_order(oid):
 
             void_mark = "<div class='void-watermark'>作廢單</div>" if status == 'Cancelled' else ""
             
-            display_tbl_name = "外送" if is_delivery else (table_str if table_str else "外帶")
-            
             # 頭部與基本資訊
             h = f"<div class='ticket'>{void_mark}<div class='head'><h2>{title}</h2><h1>#{seq:03d}</h1></div>"
-            h += f"<div class='info-box'><div class='table-row'><span class='table-label'>Table</span><span class='table-val'>{display_tbl_name}</span></div>"
+            h += f"<div class='info-box'><div class='table-row'><span class='table-label'>Type</span><span class='table-val'>{display_tbl_name}</span></div>"
             h += f"<div class='time-row'>下單: {time_str}</div></div>"
             
             # 1. 預約時間 (最優先顯示)
@@ -544,7 +564,7 @@ def sales_ranking():
     return jsonify(sorted_data)
 
 
-# --- 6. 日結報表 (HTML) ---
+# --- 6. 日結報表 (HTML) - 補完部分 ---
 @kitchen_bp.route('/report')
 def daily_report():
     target_date_str = request.args.get('date') or (datetime.utcnow() + timedelta(hours=8)).strftime('%Y-%m-%d')
@@ -552,9 +572,12 @@ def daily_report():
     
     conn = get_db_connection()
     cur = conn.cursor()
+    
+    # 取得產品價格表
     cur.execute("SELECT name, price FROM products")
     price_map = {row[0]: row[1] for row in cur.fetchall()}
     
+    # 統計：有效訂單 (Pending + Completed)
     cur.execute("""
         SELECT COUNT(*), SUM(total_price), content_json 
         FROM orders 
@@ -567,6 +590,7 @@ def daily_report():
     v_count = len(v_rows)
     v_total = sum([r[1] for r in v_rows if r[1]])
 
+    # 統計：作廢訂單 (Cancelled)
     cur.execute("""
         SELECT COUNT(*), SUM(total_price), content_json 
         FROM orders 
@@ -580,6 +604,7 @@ def daily_report():
     x_total = sum([r[1] for r in x_rows if r[1]])
     conn.close()
 
+    # 聚合商品統計函式
     def agg(rows):
         res = {}
         for r in rows:
@@ -591,7 +616,9 @@ def daily_report():
                     name = i.get('name_zh', i.get('name', '商品'))
                     qty = int(float(i.get('qty', 1)))
                     price_val = i.get('price')
+                    # 如果訂單內沒存價格，查價格表
                     price = int(float(price_val)) if price_val is not None else price_map.get(name, 0)
+                    
                     if name not in res: res[name] = {'qty':0, 'amt':0}
                     res[name]['qty'] += qty
                     res[name]['amt'] += (qty * price)
@@ -601,6 +628,7 @@ def daily_report():
     v_stats = agg(v_rows)
     x_stats = agg(x_rows)
 
+    # 產生表格 HTML 函式
     def tbl(stats_dict):
         if not stats_dict: return "<p style='text-align:center;color:#888;'>無數據</p>"
         h = "<table style='width:100%; border-collapse:collapse; margin-top:10px;'><thead><tr style='border-bottom:2px solid #333;'><th style='text-align:left;'>品項</th><th style='text-align:right;'>數</th><th style='text-align:right;'>額</th></tr></thead><tbody>"
@@ -608,28 +636,77 @@ def daily_report():
             h += f"<tr style='border-bottom:1px solid #eee;'><td>{k}</td><td style='text-align:right;'>{v['qty']}</td><td style='text-align:right;'>${v['amt']:,}</td></tr>"
         return h + "</tbody></table>"
 
+    # 最終 HTML 輸出
     return f"""
-    <!DOCTYPE html><html><head><meta charset="UTF-8"><title>日結報表_{target_date_str}</title>
-    <style>
-        body {{ font-family: sans-serif; background: #f4f4f4; display:flex; flex-direction:column; align-items:center; padding:20px; }}
-        .ticket {{ background: white; width: 80mm; padding: 15px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); border-radius: 5px; }}
-        .summary {{ background: #e8f5e9; padding: 10px; border-radius: 5px; margin: 10px 0; border-left: 5px solid #2e7d32; }}
-        .void-sum {{ background: #ffebee; border-left-color: #c62828; }}
-        @media print {{ .no-print {{ display: none; }} body {{ background: white; padding: 0; }} .ticket {{ box-shadow: none; width: 100%; }} }}
-    </style></head>
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>日結報表_{target_date_str}</title>
+        <style>
+            body {{ font-family: 'Microsoft JhengHei', sans-serif; background: #f4f4f4; display:flex; flex-direction:column; align-items:center; padding:20px; }}
+            .ticket {{ background: white; width: 80mm; padding: 15px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); border-radius: 5px; min-height: 500px; }}
+            .summary {{ background: #e8f5e9; padding: 10px; border-radius: 5px; margin: 10px 0; border-left: 5px solid #2e7d32; }}
+            .void-sum {{ background: #ffebee; padding: 10px; border-radius: 5px; margin: 10px 0; border-left: 5px solid #c62828; }}
+            .header {{ text-align:center; border-bottom:2px dashed #333; padding-bottom:10px; margin-bottom:10px; }}
+            .section-title {{ font-size:18px; font-weight:bold; margin-top:15px; border-bottom:1px solid #ccc; padding-bottom:5px; }}
+            h1 {{ margin:0; font-size:24px; }}
+            p {{ margin:5px 0; }}
+            .big-num {{ font-size:20px; font-weight:bold; }}
+            
+            @media print {{ 
+                .no-print {{ display: none; }} 
+                body {{ background: white; padding: 0; }} 
+                .ticket {{ box-shadow: none; width: 100%; }} 
+            }}
+        </style>
+    </head>
     <body>
-        <div class="no-print" style="margin-bottom:20px;">
-            <input type="date" id="dateInput" value="{target_date_str}" onchange="location.href='/kitchen/report?date='+this.value">
-            <button onclick="window.print()">列印</button> <button onclick="location.href='/kitchen'">返回</button>
+        <div class="no-print" style="margin-bottom:20px; text-align:center;">
+            <div style="margin-bottom:10px;">
+                <label>選擇日期：</label>
+                <input type="date" id="dateInput" value="{target_date_str}" onchange="location.href='/kitchen/report?date='+this.value">
+            </div>
+            <button onclick="window.print()" style="padding:10px 20px; font-size:16px; background:#2196F3; color:white; border:none; border-radius:5px; cursor:pointer;">🖨️ 列印報表</button>
+            <button onclick="location.href='/kitchen'" style="padding:10px 20px; font-size:16px; background:#607D8B; color:white; border:none; border-radius:5px; cursor:pointer; margin-left:10px;">🔙 返回看板</button>
         </div>
+
         <div class="ticket">
-            <h2 style="text-align:center; margin:0;">日結營收報表</h2>
-            <p style="text-align:center; font-size:14px;">日期: {target_date_str}</p>
-            <div class="summary"><b>✅ 有效營收 (含進行中)</b><br>單數: {v_count} | 總計: <span style="font-size:1.2em; color:#2e7d32;">${int(v_total):,}</span></div>
+            <div class="header">
+                <h1>日結營收報表</h1>
+                <p>{target_date_str}</p>
+                <p style="font-size:12px; color:#666;">列印時間: {datetime.now().strftime('%H:%M:%S')}</p>
+            </div>
+
+            <div class="summary">
+                <div style="font-weight:bold; color:#2e7d32;">✅ 有效營收 (Pending+Completed)</div>
+                <div style="display:flex; justify-content:space-between; margin-top:5px;">
+                    <span>訂單數: <span class="big-num">{v_count}</span> 單</span>
+                    <span>總金額: <span class="big-num">${v_total:,}</span></span>
+                </div>
+            </div>
+
+            <div class="void-sum">
+                <div style="font-weight:bold; color:#c62828;">❌ 作廢統計 (Cancelled)</div>
+                <div style="display:flex; justify-content:space-between; margin-top:5px;">
+                    <span>作廢數: {x_count} 單</span>
+                    <span>作廢額: ${x_total:,}</span>
+                </div>
+            </div>
+
+            <div class="section-title">📊 商品銷售明細</div>
             {tbl(v_stats)}
-            <div class="summary void-sum" style="margin-top:20px;"><b>❌ 作廢統計</b><br>單數: {x_count} | 金額: ${int(x_total):,}</div>
-            {tbl(x_stats)}
-            <p style="text-align:center; font-size:10px; color:#999; margin-top:20px;">列印時間: {datetime.now().strftime('%Y-%m-%d %H:%M')}</p>
+
+            <div class="section-title" style="color:#888; margin-top:30px;">🗑️ 作廢商品明細</div>
+            <div style="color:#888; font-size:0.9em;">
+                {tbl(x_stats)}
+            </div>
+
+            <div style="margin-top:40px; text-align:center; border-top:2px dashed #000; padding-top:10px;">
+                <p>簽名: ________________</p>
+            </div>
         </div>
-    </body></html>
+    </body>
+    </html>
     """
