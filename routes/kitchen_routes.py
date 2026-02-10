@@ -60,9 +60,7 @@ def check_new_orders():
         conn = get_db_connection()
         cur = conn.cursor()
         
-        # [更新] SQL 查詢：包含所有新欄位
-        # 欄位順序: 1.id, 2.table, 3.items, 4.total, 5.status, 6.created, 7.lang, 8.seq, 9.json, 
-        #          10.name, 11.phone, 12.addr, 13.schedule, 14.fee
+        # SQL 查詢：包含所有新欄位
         query = """
             SELECT id, table_number, items, total_price, status, created_at, lang, daily_seq, content_json,
                    customer_name, customer_phone, customer_address, scheduled_for, delivery_fee
@@ -79,7 +77,7 @@ def check_new_orders():
         except Exception as e:
             conn.rollback() 
             print(f"SQL Fallback triggered (check_new_orders): {e}")
-            # Fallback: 確保欄位數量與主要查詢一致 (補 NULL 或 0)
+            # Fallback
             query_fallback = """
                 SELECT id, table_number, items, total_price, status, created_at, lang, daily_seq, content_json,
                        NULL, NULL, NULL, NULL, 0
@@ -103,7 +101,7 @@ def check_new_orders():
             html_content = "<div id='loading-msg' style='grid-column:1/-1;text-align:center;padding:100px;font-size:1.5em;color:#888;'>🍽️ 目前沒有訂單</div>"
         
         for o in orders:
-            # [修正] 解包變數 (確保變數數量 = 14)
+            # 解包變數 (確保變數數量 = 14)
             oid, table, raw_items, total, status, created, order_lang, seq_num, c_json, \
             c_name, c_phone, c_addr, c_schedule, c_fee = o
             
@@ -134,7 +132,7 @@ def check_new_orders():
             # 組合詳細資訊 (HTML)
             info_html = ""
             
-            # [新增] 預約時間顯示 (醒目)
+            # 預約時間顯示 (醒目)
             if has_schedule:
                 info_html += f"<div style='background:#fff9c4; color:#f57f17; padding:4px; border-radius:4px; margin-bottom:4px; font-weight:bold; border:1px solid #fbc02d;'>🕒 預約: {c_schedule}</div>"
 
@@ -152,7 +150,6 @@ def check_new_orders():
 
             # 將詳細資訊嵌入桌號區塊
             if info_html:
-                 # 如果是外送/外帶/有預約，排版調整
                 table_html = f"<div class='table-num' style='flex-direction:column; padding:5px;'><div>{display_table}</div><div style='font-size:0.5em; font-weight:normal; text-align:left; width:100%; margin-top:5px; color:#333; word-break:break-all;'>{info_html}</div></div>"
             else:
                 table_html = f"<div class='table-num'>{display_table}</div>"
@@ -178,7 +175,7 @@ def check_new_orders():
 
             formatted_total = f"{int(total or 0)}" 
             
-            # [新增] 運費顯示邏輯
+            # 運費顯示邏輯
             fee_html = ""
             if c_fee > 0:
                 fee_html = f"<span style='font-size:12px; color:#888; margin-right:5px;'>(含運 ${c_fee})</span>"
@@ -231,7 +228,7 @@ def check_new_orders():
         return jsonify({'html': f"載入錯誤: {str(e)}", 'max_seq': 0, 'new_ids': []})
 
 
-# --- 3. 核心列印路由 ---
+# --- 3. 核心列印路由 (已修正：包含完整外送資訊) ---
 @kitchen_bp.route('/print_order/<int:oid>')
 def print_order(oid):
     try:
@@ -240,7 +237,7 @@ def print_order(oid):
         conn = get_db_connection()
         cur = conn.cursor()
         
-        # [更新] SQL 查詢：包含所有新欄位
+        # SQL 查詢
         query = """
             SELECT table_number, total_price, daily_seq, content_json, created_at, status,
                    customer_name, customer_phone, customer_address, delivery_fee, scheduled_for
@@ -252,7 +249,6 @@ def print_order(oid):
         except Exception as e:
             conn.rollback() 
             print(f"SQL Fallback triggered (print_order): {e}")
-            # Fallback
             cur.execute("""
                 SELECT table_number, total_price, daily_seq, content_json, created_at, status,
                        NULL, NULL, NULL, 0, NULL
@@ -267,7 +263,7 @@ def print_order(oid):
         if not order:
             return "訂單不存在", 404
         
-        # [修正] 解包資料 (11個欄位)
+        # 解包資料
         table_num, total_price, seq, content_json, created_at, status, \
         c_name, c_phone, c_addr, c_fee, c_schedule = order
         
@@ -289,6 +285,7 @@ def print_order(oid):
         else:
             items = []
         
+        # 下單時間
         time_str = (created_at + timedelta(hours=8)).strftime('%Y-%m-%d %H:%M:%S')
 
         # 分類邏輯
@@ -300,6 +297,7 @@ def print_order(oid):
             elif p_cat == 'Soup': soup_items.append(item)
             else: other_items.append(item)
 
+        # [CSS 樣式優化]
         style = """
         <style>
             @page { size: 80mm auto; margin: 0mm; }
@@ -307,28 +305,57 @@ def print_order(oid):
             .ticket { border-bottom: 3px dashed #000; padding: 10px 0 30px 0; margin-bottom: 10px; page-break-after: always; position: relative; }
             .ticket:last-child { page-break-after: auto; }
             .void-watermark { position: absolute; top: 30%; left: 5%; font-size: 50px; color: #000; opacity: 0.2; transform: rotate(-30deg); border: 5px solid #000; padding: 10px; z-index: 100; font-weight: 900; }
-            .head { text-align: center; margin-bottom: 15px; }
-            .head h2 { font-size: 26px; margin: 0; border: 3px solid #000; padding: 6px 12px; border-radius: 4px; display: inline-block; font-weight: 900; }
-            .head h1 { font-size: 48px; margin: 5px 0; line-height: 1; font-weight: 900; }
-            .info-box { border-bottom: 3px solid #000; padding-bottom: 5px; margin-bottom: 10px; }
-            .table-row { display: flex; justify-content: center; align-items: baseline; gap: 15px; }
-            .table-label { font-size: 24px; font-weight: bold; }
-            .table-val { font-size: 42px; font-weight: 900; line-height: 1; }
-            .time-row { font-size: 14px; text-align: center; margin-top: 5px; font-weight: bold; }
             
-            /* 外送與預約資訊樣式 */
-            .delivery-box { border: 2px solid #000; padding: 5px; margin: 5px 0; font-size: 16px; font-weight: bold; text-align: left; background: #eee; }
-            .schedule-row { font-size: 22px; font-weight: 900; text-align: center; background: #000; color: #fff; margin: 5px 0; padding: 5px; border-radius: 4px; }
+            .head { text-align: center; margin-bottom: 10px; }
+            .head h2 { font-size: 24px; margin: 0; border: 2px solid #000; padding: 4px 10px; border-radius: 4px; display: inline-block; font-weight: 900; }
+            .head h1 { font-size: 42px; margin: 5px 0; line-height: 1; font-weight: 900; }
             
-            .item-row { display: flex; justify-content: space-between; align-items: flex-start; margin-top: 10px; line-height: 1.2; }
+            .info-box { border-bottom: 2px solid #000; padding-bottom: 5px; margin-bottom: 5px; }
+            .table-row { display: flex; justify-content: center; align-items: baseline; gap: 10px; }
+            .table-label { font-size: 20px; font-weight: bold; }
+            .table-val { font-size: 36px; font-weight: 900; line-height: 1; }
+            .time-row { font-size: 14px; text-align: center; margin-top: 2px; color: #333; }
+            
+            /* 客戶與外送詳細資訊樣式 */
+            .customer-info { 
+                border: 2px solid #000; 
+                padding: 6px; 
+                margin: 5px 0 10px 0; 
+                font-size: 18px; 
+                font-weight: bold; 
+                text-align: left; 
+                background: #f8f8f8; 
+                line-height: 1.3;
+            }
+            .cust-row { margin-bottom: 2px; }
+            .addr-row { 
+                margin-top: 4px; 
+                border-top: 1px dashed #666; 
+                padding-top: 4px; 
+                font-size: 20px; /* 地址加大 */
+                word-wrap: break-word; /* 強制換行 */
+            }
+            
+            .schedule-row { 
+                font-size: 22px; 
+                font-weight: 900; 
+                text-align: center; 
+                background: #000; 
+                color: #fff; 
+                margin: 5px 0; 
+                padding: 5px; 
+                border-radius: 0; 
+            }
+            
+            .item-row { display: flex; justify-content: space-between; align-items: flex-start; margin-top: 8px; line-height: 1.1; }
             .name-col { width: 85%; display: flex; flex-direction: column; }
-            .item-name-main { font-size: 24px; font-weight: 900; word-wrap: break-word; line-height: 1.1; }
-            .item-name-sub { font-size: 16px; font-weight: bold; color: #000; margin-top: 2px; }
-            .item-qty { font-size: 24px; font-weight: 900; white-space: nowrap; }
-            .opt { font-size: 18px; font-weight: bold; padding-left: 15px; margin-top: 2px; }
-            .opt-sub { font-size: 14px; margin-top: -2px; }
-            .total { text-align: right; font-size: 24px; font-weight: 900; margin-top: 15px; padding-top: 10px; border-top: 3px solid #000; }
-            .fee-row { text-align: right; font-size: 16px; font-weight: bold; margin-top: 5px; color: #333; }
+            .item-name-main { font-size: 22px; font-weight: 900; word-wrap: break-word; }
+            .item-name-sub { font-size: 16px; font-weight: bold; color: #000; }
+            .item-qty { font-size: 22px; font-weight: 900; white-space: nowrap; }
+            .opt { font-size: 16px; font-weight: bold; padding-left: 10px; color: #333; }
+            
+            .total { text-align: right; font-size: 24px; font-weight: 900; margin-top: 10px; padding-top: 5px; border-top: 2px solid #000; }
+            .fee-row { text-align: right; font-size: 16px; font-weight: bold; color: #333; }
         </style>
         """
 
@@ -338,29 +365,36 @@ def print_order(oid):
 
             void_mark = "<div class='void-watermark'>作廢單</div>" if status == 'Cancelled' else ""
             
-            if is_delivery:
-                display_tbl_name = "外送"
-            else:
-                display_tbl_name = table_str if table_str else "外帶"
+            display_tbl_name = "外送" if is_delivery else (table_str if table_str else "外帶")
             
+            # 頭部與基本資訊
             h = f"<div class='ticket'>{void_mark}<div class='head'><h2>{title}</h2><h1>#{seq:03d}</h1></div>"
-            h += f"<div class='info-box'><div class='table-row'><span class='table-label'>Table</span><span class='table-val'>{display_tbl_name}</span></div><div class='time-row'>{time_str}</div></div>"
+            h += f"<div class='info-box'><div class='table-row'><span class='table-label'>Table</span><span class='table-val'>{display_tbl_name}</span></div>"
+            h += f"<div class='time-row'>下單: {time_str}</div></div>"
             
-            # [新增] 顯示預約時間 (非常醒目)
+            # [重點修正] 顯示完整的 姓名/電話/地址/預約時間
+            
+            # 1. 預約時間 (最優先顯示)
             if has_schedule:
                 h += f"<div class='schedule-row'>🕒 預約: {c_schedule}</div>"
 
-            # 顯示客戶/外送資訊
-            if has_contact or has_addr or c_name:
-                name_s = c_name if c_name else ""
-                phone_s = c_phone if has_contact else ""
-                addr_s = c_addr if has_addr else ""
+            # 2. 客戶資料區塊 (姓名、電話、地址)
+            # 只要有任一資料就顯示區塊
+            if has_contact or has_addr or (c_name and str(c_name).strip()):
+                h += f"<div class='customer-info'>"
                 
-                h += f"<div class='delivery-box'>"
-                if name_s or phone_s:
-                    h += f"<div>👤 {name_s} {phone_s}</div>"
-                if addr_s:
-                    h += f"<div style='margin-top:2px;border-top:1px solid #999; padding-top:2px;'>📍 {addr_s}</div>"
+                # 姓名
+                if c_name and str(c_name).strip():
+                    h += f"<div class='cust-row'>👤 {c_name}</div>"
+                
+                # 電話
+                if has_contact:
+                    h += f"<div class='cust-row'>📞 {c_phone}</div>"
+                
+                # 地址 (獨立一行，加大字體)
+                if has_addr:
+                    h += f"<div class='addr-row'>📍 {c_addr}</div>"
+                
                 h += f"</div>"
             
             # 列出商品
@@ -383,14 +417,14 @@ def print_order(oid):
                 
                 if opts_main: h += f"<div class='opt'>└ {', '.join(opts_main)}</div>"
                 if is_receipt and opts_sub and opts_sub != opts_main:
-                    h += f"<div class='opt opt-sub'>({', '.join(opts_sub)})</div>"
+                    h += f"<div class='opt' style='font-size:14px;'>({', '.join(opts_sub)})</div>"
             
-            # --- 結帳單顯示總金額與運費 ---
+            # 結帳單顯示總金額與運費
             if is_receipt: 
                 subtotal = total_price - c_fee if total_price else 0
                 if c_fee > 0:
-                    h += f"<div class='fee-row'>Subtotal: ${int(subtotal)}</div>"
-                    h += f"<div class='fee-row'>Delivery Fee: ${c_fee}</div>"
+                    h += f"<div class='fee-row'>小計: ${int(subtotal)}</div>"
+                    h += f"<div class='fee-row'>運費: ${c_fee}</div>"
                 
                 h += f"<div class='total'>Total: ${int(total_price or 0)}</div>"
             
