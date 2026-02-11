@@ -75,13 +75,14 @@ templates/menu.html
                 <div class="di-row"><span class="di-icon">🛵</span> <b>外送訂單 (Delivery)</b></div>
                 <div class="di-row"><span class="di-icon">👤</span> {{ session_delivery.get('name', '貴賓') }} / {{ session_delivery.get('phone', '-') }}</div>
                 <div class="di-row"><span class="di-icon">📍</span> {{ session_delivery.get('address', '地址載入中') }}</div>
-                {# --- 新增：顯示外送時間 --- #}
+                {# --- 顯示外送時間 --- #}
                 <div class="di-row"><span class="di-icon">🕒</span> 預約時間: {{ session_delivery.get('scheduled_for', '盡快送達') }}</div>
                 
                 <div class="di-fee">
                     運費 Delivery Fee: ${{ session.get('delivery_info', {}).get('shipping_fee', 0) }}
-                    {% if session.get('delivery_info', {}).get('note') %}
-                        <br><small style="color:#666;font-weight:normal;">{{ session.get('delivery_info', {}).get('note') }}</small>
+                    {% set d_note = session_delivery.get('note') or session.get('delivery_info', {}).get('note') %}
+                    {% if d_note %}
+                        <br><small style="color:#666;font-weight:normal;">註: {{ d_note }}</small>
                     {% endif %}
                 </div>
             </div>
@@ -116,14 +117,20 @@ templates/menu.html
         {# --- 這裡對應 database.py 的 orders 表 table_number 欄位 --- #}
         <input type="hidden" name="table_number" id="tbl_input">
         
-        {# --- 外送資料欄位 (名稱已對應 database.py 欄位) --- #}
+        {# --- 外送資料欄位 (關鍵修正區) --- #}
         <input type="hidden" name="order_type" value="{{ 'delivery' if is_delivery_mode else 'dine_in' }}">
+        
+        {# 修正：name 必須與 Python request.form.get() 內的字串完全一致 #}
         <input type="hidden" name="customer_name" value="{{ session_delivery.get('name', '') }}">
         <input type="hidden" name="customer_phone" value="{{ session_delivery.get('phone', '') }}">
-        <input type="hidden" name="customer_address" value="{{ session_delivery.get('address', '') }}">
-        {# --- 新增：將預約時間傳回後端 --- #}
-        <input type="hidden" name="scheduled_for" value="{{ session_delivery.get('scheduled_for', '') }}">
         
+        {# 修正：Python 使用 'delivery_address' 來抓取地址 #}
+        <input type="hidden" name="delivery_address" value="{{ session_delivery.get('address', '') }}">
+        
+        {# 修正：新增備註欄位 (從 session 抓取) #}
+        <input type="hidden" name="delivery_note" value="{{ session_delivery.get('note', '') }}">
+        
+        <input type="hidden" name="scheduled_for" value="{{ session_delivery.get('scheduled_for', '') }}">
         <input type="hidden" name="delivery_fee" value="{{ session.get('delivery_info', {}).get('shipping_fee', 0) }}">
         
         <div class="cart-bar" id="bar">
