@@ -372,7 +372,7 @@ def order_success():
         <div class="container">
             <div class="card">
                 <div class="success-icon">✅</div>
-                <h1 class="status-title">{t['order_success']}</h1>
+                <h1 class="status-title">{t.get('order_success', '下單成功')}</h1>
                 
                 <div class="seq-box">
                     <div class="seq-label">取餐單號 / ORDER NO.</div>
@@ -390,7 +390,7 @@ def order_success():
                     <h3 style="border-bottom:2px solid #eee; padding-bottom:10px; margin-bottom:10px; color:#444;">🧾 {t.get('order_details', '訂單明細')}</h3>
                     {items_html}
                     {fee_row_html}
-                    <div class="total-row">{t['total']}: ${total}</div>
+                    <div class="total-row">{t.get('total', 'Total')}: ${total}</div>
                 </div>
                 
                 <p style="color:#999; font-size:0.85em; margin: 20px 0;">下單時間: {time_str}</p>
