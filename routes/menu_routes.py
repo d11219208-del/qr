@@ -46,7 +46,6 @@ def process_order_submission(request, order_type_override=None):
     display_lang = request.form.get('lang_input', 'zh')
     
     conn = get_db_connection()
-    # 重要：關閉自動提交，以便手動控制 Transaction 與 Lock
     conn.autocommit = False 
     cur = conn.cursor()
 
@@ -75,19 +74,15 @@ def process_order_submission(request, order_type_override=None):
             customer_name = request.form.get('customer_name')
             customer_phone = request.form.get('customer_phone')
             
-            # [修正重點] 同時嘗試讀取 'delivery_address' 和 'address'
-            # 這是造成顯示 None 的主要原因：前端可能傳送 'address' 但後端只收 'delivery_address'
+            # 防呆：同時嘗試讀取 'delivery_address' 和 'address'
             customer_address = request.form.get('delivery_address') or request.form.get('address')
             
             scheduled_for = request.form.get('scheduled_for')
             
-            # debug print
-            print(f"DEBUG: Submission Address: {customer_address}")
-
             delivery_info = json.dumps({
                 'name': customer_name,
                 'phone': customer_phone,
-                'address': customer_address, # 確保這裡也存入
+                'address': customer_address,
                 'scheduled_for': scheduled_for,
                 'distance_km': request.form.get('distance_km'),
                 'note': request.form.get('delivery_note')
@@ -98,7 +93,7 @@ def process_order_submission(request, order_type_override=None):
             # 內用/外帶邏輯
             if raw_table_number and raw_table_number.strip():
                 table_number = raw_table_number
-                order_type = 'dine_in' # 確保資料庫紀錄正確
+                order_type = 'dine_in'
             else:
                 table_number = "外帶"
                 order_type = 'takeout'
@@ -182,25 +177,20 @@ def process_order_submission(request, order_type_override=None):
         cur.close()
         conn.close()
 
-# --- 1. 首頁 (不變) ---
+# --- 1. 首頁 ---
 @menu_bp.route('/')
 def index():
     table_num = request.args.get('table', '')
-    # 清除 Session 防止混亂
     if 'delivery_data' in session: session.pop('delivery_data', None)
     if 'delivery_info' in session: session.pop('delivery_info', None)
-    
     return render_template('index.html', table_num=table_num)
 
 # --- 2. 內用/外帶 專用路由 ---
-# URL: /menu?table=1&lang=zh
 @menu_bp.route('/menu', methods=['GET', 'POST'])
 def menu():
-    # 處理 POST (送單)
     if request.method == 'POST':
         return process_order_submission(request, order_type_override='dine_in')
 
-    # 處理 GET (顯示菜單)
     display_lang = request.args.get('lang', 'zh')
     t_all = load_translations()
     t = t_all.get(display_lang, t_all['zh'])
@@ -210,7 +200,6 @@ def menu():
     preload_cart = "null" 
     order_lang = display_lang 
 
-    # 如果是編輯模式
     if edit_oid:
         conn = get_db_connection()
         cur = conn.cursor()
@@ -224,34 +213,29 @@ def menu():
 
     settings, products = get_menu_data()
     
-    # 關鍵：這裡強制告訴前端這是 "dine_in" 模式
     return render_template('menu.html', 
                            products=products, texts=t, table_num=url_table, 
                            display_lang=display_lang, order_lang=order_lang, 
                            preload_cart=preload_cart, edit_oid=edit_oid, config=settings,
-                           current_mode='dine_in') # 新增參數
+                           current_mode='dine_in')
 
 # --- 3. 外送 專用路由 ---
-# URL: /delivery?lang=zh
 @menu_bp.route('/delivery', methods=['GET', 'POST'])
 def delivery_menu():
-    # 處理 POST (送單)
     if request.method == 'POST':
         return process_order_submission(request, order_type_override='delivery')
 
-    # 處理 GET (顯示菜單)
     display_lang = request.args.get('lang', 'zh')
     t_all = load_translations()
     t = t_all.get(display_lang, t_all['zh'])
     
     settings, products = get_menu_data()
 
-    # 關鍵：這裡強制告訴前端這是 "delivery" 模式，table_num 強制為空或特定值
     return render_template('menu.html', 
                            products=products, texts=t, table_num="外送", 
                            display_lang=display_lang, order_lang=display_lang, 
                            preload_cart="null", edit_oid=None, config=settings,
-                           current_mode='delivery') # 新增參數
+                           current_mode='delivery')
 
 # --- 4. 下單成功頁面 ---
 @menu_bp.route('/success')
@@ -275,18 +259,18 @@ def order_success():
     
     seq, json_str, total, created_at, order_type, delivery_info_json, delivery_fee, c_name, c_phone, c_addr, c_time = row
     
+    # [修正重點 1] 嚴格判斷 delivery，並去除空白 (解決 DB CHAR 類型補空白問題)
+    is_delivery = (str(order_type).strip() == 'delivery')
+    
     tw_time = created_at + timedelta(hours=8)
     time_str = tw_time.strftime('%Y-%m-%d %H:%M:%S')
     items = json.loads(json_str) if json_str else []
     
-    is_delivery = (order_type == 'delivery')
     delivery_info = json.loads(delivery_info_json) if delivery_info_json else {}
     
-    # [修正重點] 確保不會顯示 None
+    # [修正重點 2] 確保資料讀取不為 None
     d_name = c_name if c_name else delivery_info.get('name', '')
     d_phone = c_phone if c_phone else delivery_info.get('phone', '')
-    
-    # 優先從資料庫欄位讀取，若無則從 JSON 讀取，再無則為空字串 (防止 None)
     raw_addr = c_addr if c_addr else delivery_info.get('address')
     d_addr = raw_addr if raw_addr else '' 
 
@@ -341,7 +325,6 @@ def order_success():
         status_msg = t.get('pay_at_counter', '請至櫃檯結帳')
         wait_msg = t.get('kitchen_prep', 'Kitchen is preparing your meal.')
 
-    # 回首頁按鈕：檢查當前訂單類型，決定回到哪個首頁
     back_link = url_for('menu.delivery_menu', lang=lang) if is_delivery else url_for('menu.index', lang=lang)
     back_text = "Back to Delivery" if is_delivery else "Back to Menu"
 
