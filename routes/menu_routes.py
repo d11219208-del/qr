@@ -74,15 +74,16 @@ def process_order_submission(request, order_type_override=None):
             customer_name = request.form.get('customer_name')
             customer_phone = request.form.get('customer_phone')
             
-            # 防呆：同時嘗試讀取 'delivery_address' 和 'address'
+            # [關鍵修復] 確保能抓到地址，無論前端是用 delivery_address 還是 address
             customer_address = request.form.get('delivery_address') or request.form.get('address')
             
             scheduled_for = request.form.get('scheduled_for')
             
+            # 建立完整的 delivery_info JSON
             delivery_info = json.dumps({
                 'name': customer_name,
                 'phone': customer_phone,
-                'address': customer_address,
+                'address': customer_address, 
                 'scheduled_for': scheduled_for,
                 'distance_km': request.form.get('distance_km'),
                 'note': request.form.get('delivery_note')
@@ -246,10 +247,12 @@ def order_success():
     t = translations.get(lang, translations['zh'])
     
     conn = get_db_connection(); cur = conn.cursor()
+    # [修正 1] 新增 table_number 到查詢中，作為判斷的雙重保險
     cur.execute("""
         SELECT daily_seq, content_json, total_price, created_at, 
                order_type, delivery_info, delivery_fee,
-               customer_name, customer_phone, customer_address, scheduled_for
+               customer_name, customer_phone, customer_address, scheduled_for,
+               table_number
         FROM orders WHERE id=%s
     """, (oid,))
     row = cur.fetchone()
@@ -257,18 +260,25 @@ def order_success():
     
     if not row: return "Order Not Found", 404
     
-    seq, json_str, total, created_at, order_type, delivery_info_json, delivery_fee, c_name, c_phone, c_addr, c_time = row
+    # 解構回傳資料
+    seq, json_str, total, created_at, order_type, delivery_info_json, delivery_fee, c_name, c_phone, c_addr, c_time, table_num_db = row
     
-    # [修正重點 1] 嚴格判斷 delivery，並去除空白 (解決 DB CHAR 類型補空白問題)
-    is_delivery = (str(order_type).strip() == 'delivery')
+    # [修正 2] 強力判斷是否為外送：
+    # 條件A: order_type 是 "delivery" (忽略大小寫與空白)
+    # 條件B: table_number 是 "外送" (這是最穩的，因為外送單一定會寫入這個桌號)
+    type_is_delivery = (str(order_type or '').strip().lower() == 'delivery')
+    table_is_delivery = (str(table_num_db or '').strip() == '外送')
+    
+    is_delivery = type_is_delivery or table_is_delivery
     
     tw_time = created_at + timedelta(hours=8)
     time_str = tw_time.strftime('%Y-%m-%d %H:%M:%S')
     items = json.loads(json_str) if json_str else []
     
+    # 讀取 JSON 作為備用資料源
     delivery_info = json.loads(delivery_info_json) if delivery_info_json else {}
     
-    # [修正重點 2] 確保資料讀取不為 None
+    # [修正 3] 優先讀取 DB 欄位，若無則讀取 JSON，最後給空字串 (避免 None 錯誤)
     d_name = c_name if c_name else delivery_info.get('name', '')
     d_phone = c_phone if c_phone else delivery_info.get('phone', '')
     raw_addr = c_addr if c_addr else delivery_info.get('address')
@@ -299,6 +309,7 @@ def order_success():
     delivery_html = ""
     fee_row_html = ""
     
+    # [修正 4] 只要是外送模式，就一定要生成 delivery_html，即使資料有缺也顯示空欄位
     if is_delivery:
         fee_label = "Delivery Fee" if lang == 'en' else "運費"
         fee_row_html = f"""
@@ -307,16 +318,23 @@ def order_success():
             <div style="font-weight:bold; font-size:1.1em;">${delivery_fee}</div>
         </div>
         """
+        
+        # 處理 None 值顯示為空字串，防止 Python 報錯
+        disp_name = d_name or ''
+        disp_phone = d_phone or ''
+        disp_addr = d_addr or ''
+        disp_note = d_note or ''
+        
         time_display = f"<div style='margin-bottom:5px; color:#d32f2f;'><b>Scheduled:</b> {d_scheduled}</div>" if d_scheduled else ""
 
         delivery_html = f"""
         <div style="background:#e3f2fd; padding:15px; border-radius:10px; margin-bottom:20px; text-align:left; border:1px solid #90caf9;">
             <h4 style="margin:0 0 10px 0; color:#1565c0;">🛵 Delivery Info / 外送資訊</h4>
             {time_display}
-            <div style="margin-bottom:5px;"><b>Name:</b> {d_name}</div>
-            <div style="margin-bottom:5px;"><b>Phone:</b> <a href="tel:{d_phone}">{d_phone}</a></div>
-            <div style="margin-bottom:5px;"><b>Address:</b> {d_addr}</div>
-            <div style="font-size:0.9em; color:#555;"><b>Note:</b> {d_note}</div>
+            <div style="margin-bottom:5px;"><b>Name:</b> {disp_name}</div>
+            <div style="margin-bottom:5px;"><b>Phone:</b> <a href="tel:{disp_phone}">{disp_phone}</a></div>
+            <div style="margin-bottom:5px;"><b>Address:</b> {disp_addr}</div>
+            <div style="font-size:0.9em; color:#555;"><b>Note:</b> {disp_note}</div>
         </div>
         """
         status_msg = "Order Received / 訂單已收到"
