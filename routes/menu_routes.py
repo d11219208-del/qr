@@ -57,41 +57,66 @@ def process_order_submission(request, order_type_override=None):
         final_lang = request.form.get('lang_input', 'zh')
         old_order_id = request.form.get('old_order_id')
         
-        # 2. 判斷訂單類型 (優先使用傳入的 override 參數)
+        # 2. 判斷訂單類型
         order_type = order_type_override if order_type_override else request.form.get('order_type', 'dine_in')
-        delivery_fee = int(float(request.form.get('delivery_fee', 0)))
         
-        # 初始化欄位
+        # 初始化變數
         customer_name = None
         customer_phone = None
         customer_address = None
         scheduled_for = None
         delivery_info = None
+        delivery_fee = 0
         
         # --- 判斷邏輯 ---
         if order_type == 'delivery':
-            # 外送邏輯
-            customer_name = request.form.get('customer_name')
-            customer_phone = request.form.get('customer_phone')
+            # ★ 重點修改：嘗試從 Form 抓取，若無則從 Session 抓取 (雙重保險)
+            # 這是為了配合你在 menu.html 使用 session_delivery 的邏輯
+            sess_data = session.get('delivery_data', {})
+            sess_info = session.get('delivery_info', {})
             
-            # [關鍵修復] 確保能抓到地址，無論前端是用 delivery_address 還是 address
-            customer_address = request.form.get('delivery_address') or request.form.get('address')
+            # 優先讀取表單 (request.form)，如果為空則讀取 Session
+            customer_name = request.form.get('customer_name') or sess_data.get('name')
+            customer_phone = request.form.get('customer_phone') or sess_data.get('phone')
             
-            scheduled_for = request.form.get('scheduled_for')
+            # 地址處理 (相容多種變數名稱)
+            customer_address = (
+                request.form.get('delivery_address') or 
+                request.form.get('address') or 
+                sess_data.get('address')
+            )
             
+            # 備註與時間
+            note = request.form.get('delivery_note') or sess_data.get('note') or sess_info.get('note')
+            scheduled_for = request.form.get('scheduled_for') or sess_data.get('scheduled_for')
+            
+            # 運費處理：優先讀取 Session 計算好的運費 (最準確)
+            # 因為 HTML 顯示的是 session['delivery_info']['shipping_fee']
+            sess_fee = sess_info.get('shipping_fee', 0)
+            form_fee = request.form.get('delivery_fee')
+            
+            if sess_fee:
+                delivery_fee = int(float(sess_fee))
+            elif form_fee:
+                delivery_fee = int(float(form_fee))
+            else:
+                delivery_fee = 0
+
             # 建立完整的 delivery_info JSON
             delivery_info = json.dumps({
                 'name': customer_name,
                 'phone': customer_phone,
                 'address': customer_address, 
                 'scheduled_for': scheduled_for,
-                'distance_km': request.form.get('distance_km'),
-                'note': request.form.get('delivery_note')
+                'distance_km': sess_info.get('distance_km') or request.form.get('distance_km'),
+                'note': note,
+                'shipping_fee': delivery_fee
             }, ensure_ascii=False)
             
             table_number = "外送"
         else:
             # 內用/外帶邏輯
+            delivery_fee = int(float(request.form.get('delivery_fee', 0)))
             if raw_table_number and raw_table_number.strip():
                 table_number = raw_table_number
                 order_type = 'dine_in'
@@ -125,6 +150,8 @@ def process_order_submission(request, order_type_override=None):
             display_list.append(f"{n_display} {opt_str} x{qty}")
 
         items_str = " + ".join(display_list)
+        
+        # 加上運費
         total_price += delivery_fee
 
         # --- DB Transaction ---
@@ -161,8 +188,9 @@ def process_order_submission(request, order_type_override=None):
         
         conn.commit()
         
-        if 'delivery_data' in session:
-            session.pop('delivery_data', None)
+        # 下單成功後，通常可以保留 session 讓用戶方便再次下單，或者清除
+        # 這裡選擇保留 delivery_data (地址電話)，但可以清除 delivery_info (運費計算)
+        # if 'delivery_info' in session: session.pop('delivery_info', None)
 
         if old_order_id: 
             return f"<script>localStorage.removeItem('cart_cache'); alert('訂單已更新'); if(window.opener) window.opener.location.reload(); window.close();</script>"
@@ -182,8 +210,7 @@ def process_order_submission(request, order_type_override=None):
 @menu_bp.route('/')
 def index():
     table_num = request.args.get('table', '')
-    if 'delivery_data' in session: session.pop('delivery_data', None)
-    if 'delivery_info' in session: session.pop('delivery_info', None)
+    # 這裡可以決定回到首頁是否要清除外送 Session，暫時保留比較方便
     return render_template('index.html', table_num=table_num)
 
 # --- 2. 內用/外帶 專用路由 ---
@@ -214,11 +241,13 @@ def menu():
 
     settings, products = get_menu_data()
     
+    # 內用模式不傳送 session_delivery
     return render_template('menu.html', 
                            products=products, texts=t, table_num=url_table, 
                            display_lang=display_lang, order_lang=order_lang, 
                            preload_cart=preload_cart, edit_oid=edit_oid, config=settings,
-                           current_mode='dine_in')
+                           current_mode='dine_in',
+                           is_delivery_mode=False)
 
 # --- 3. 外送 專用路由 ---
 @menu_bp.route('/delivery', methods=['GET', 'POST'])
@@ -232,11 +261,20 @@ def delivery_menu():
     
     settings, products = get_menu_data()
 
+    # ★ 重點修改：準備模板需要的資料 ★
+    # 1. session_delivery: 用於顯示姓名、電話、地址、備註
+    session_delivery = session.get('delivery_data', {})
+    
+    # 2. session['delivery_info']: 用於顯示運費 (模板會直接用 session.get 讀取，這裡不用特別傳，但要確保 session 存在)
+    
     return render_template('menu.html', 
                            products=products, texts=t, table_num="外送", 
                            display_lang=display_lang, order_lang=display_lang, 
                            preload_cart="null", edit_oid=None, config=settings,
-                           current_mode='delivery')
+                           current_mode='delivery',
+                           # ★ 傳入變數以配合你的 HTML ★
+                           is_delivery_mode=True,
+                           session_delivery=session_delivery)
 
 # --- 4. 下單成功頁面 ---
 @menu_bp.route('/success')
@@ -247,7 +285,6 @@ def order_success():
     t = translations.get(lang, translations['zh'])
     
     conn = get_db_connection(); cur = conn.cursor()
-    # [修正 1] 新增 table_number 到查詢中，作為判斷的雙重保險
     cur.execute("""
         SELECT daily_seq, content_json, total_price, created_at, 
                order_type, delivery_info, delivery_fee,
@@ -263,22 +300,19 @@ def order_success():
     # 解構回傳資料
     seq, json_str, total, created_at, order_type, delivery_info_json, delivery_fee, c_name, c_phone, c_addr, c_time, table_num_db = row
     
-    # [修正 2] 強力判斷是否為外送：
-    # 條件A: order_type 是 "delivery" (忽略大小寫與空白)
-    # 條件B: table_number 是 "外送" (這是最穩的，因為外送單一定會寫入這個桌號)
+    # 判斷外送
     type_is_delivery = (str(order_type or '').strip().lower() == 'delivery')
     table_is_delivery = (str(table_num_db or '').strip() == '外送')
-    
     is_delivery = type_is_delivery or table_is_delivery
     
     tw_time = created_at + timedelta(hours=8)
     time_str = tw_time.strftime('%Y-%m-%d %H:%M:%S')
     items = json.loads(json_str) if json_str else []
     
-    # 讀取 JSON 作為備用資料源
+    # 讀取 JSON
     delivery_info = json.loads(delivery_info_json) if delivery_info_json else {}
     
-    # [修正 3] 優先讀取 DB 欄位，若無則讀取 JSON，最後給空字串 (避免 None 錯誤)
+    # 資料讀取 (DB優先，JSON備用)
     d_name = c_name if c_name else delivery_info.get('name', '')
     d_phone = c_phone if c_phone else delivery_info.get('phone', '')
     raw_addr = c_addr if c_addr else delivery_info.get('address')
@@ -309,7 +343,6 @@ def order_success():
     delivery_html = ""
     fee_row_html = ""
     
-    # [修正 4] 只要是外送模式，就一定要生成 delivery_html，即使資料有缺也顯示空欄位
     if is_delivery:
         fee_label = "Delivery Fee" if lang == 'en' else "運費"
         fee_row_html = f"""
@@ -319,7 +352,6 @@ def order_success():
         </div>
         """
         
-        # 處理 None 值顯示為空字串，防止 Python 報錯
         disp_name = d_name or ''
         disp_phone = d_phone or ''
         disp_addr = d_addr or ''
