@@ -60,36 +60,37 @@ def process_order_submission(request, order_type_override=None):
         # 2. 判斷訂單類型
         order_type = order_type_override if order_type_override else request.form.get('order_type', 'dine_in')
         
-        # 初始化變數
+        # 初始化變數 (給予預設值確保不會報錯)
         customer_name = None
         customer_phone = None
         customer_address = None
         scheduled_for = None
-        delivery_info = None
+        delivery_info_json_str = None
         delivery_fee = 0
         
         # --- 判斷邏輯 ---
         if order_type == 'delivery':
-            # ★ 重點修改：嘗試從 Form 抓取，若無則從 Session 抓取 (雙重保險)
+            # 讀取 Session 資料
             sess_data = session.get('delivery_data', {})
             sess_info = session.get('delivery_info', {})
             
-            # 優先讀取表單 (request.form)，如果為空字串或 None，則讀取 Session
-            customer_name = request.form.get('customer_name') or sess_data.get('name')
-            customer_phone = request.form.get('customer_phone') or sess_data.get('phone')
+            # 【關鍵修正】資料抓取順序：表單 > Session > 空字串
+            # 這樣確保如果表單有送出資料，就用表單的；若無，則用 Session 備份
+            customer_name = request.form.get('customer_name') or sess_data.get('name') or ''
+            customer_phone = request.form.get('customer_phone') or sess_data.get('phone') or ''
             
             # 地址處理 (相容多種變數名稱)
             customer_address = (
                 request.form.get('delivery_address') or 
                 request.form.get('address') or 
-                sess_data.get('address')
+                sess_data.get('address') or ''
             )
             
             # 備註與時間
             note = request.form.get('delivery_note') or sess_data.get('note') or sess_info.get('note') or ''
-            scheduled_for = request.form.get('scheduled_for') or sess_data.get('scheduled_for')
+            scheduled_for = request.form.get('scheduled_for') or sess_data.get('scheduled_for') or ''
             
-            # 運費處理：優先讀取 Session 計算好的運費 (最準確)
+            # 運費處理
             sess_fee = sess_info.get('shipping_fee')
             form_fee = request.form.get('delivery_fee')
             
@@ -100,7 +101,7 @@ def process_order_submission(request, order_type_override=None):
             else:
                 delivery_fee = 0
 
-            # 建立完整的 delivery_info JSON
+            # 建立完整的 delivery_info Dict
             delivery_info_dict = {
                 'name': customer_name,
                 'phone': customer_phone,
@@ -110,7 +111,8 @@ def process_order_submission(request, order_type_override=None):
                 'note': note,
                 'shipping_fee': delivery_fee
             }
-            delivery_info = json.dumps(delivery_info_dict, ensure_ascii=False)
+            # 轉成 JSON 字串存入 DB 的 delivery_info 欄位
+            delivery_info_json_str = json.dumps(delivery_info_dict, ensure_ascii=False)
             
             table_number = "外送"
         else:
@@ -156,7 +158,8 @@ def process_order_submission(request, order_type_override=None):
         # --- DB Transaction ---
         cur.execute("LOCK TABLE orders IN SHARE ROW EXCLUSIVE MODE")
 
-        # 這裡的寫入非常重要，確保 customer_name 等欄位有被寫入
+        # 【關鍵修正】INSERT 語句
+        # 這裡明確將變數寫入 database.py 中定義的 columns (customer_name, customer_phone, etc.)
         cur.execute("""
             INSERT INTO orders (
                 table_number, items, total_price, lang, 
@@ -176,7 +179,7 @@ def process_order_submission(request, order_type_override=None):
         """, (
             table_number, items_str, total_price, final_lang, 
             cart_json, need_receipt, 
-            order_type, delivery_info, delivery_fee,
+            order_type, delivery_info_json_str, delivery_fee,
             customer_name, customer_phone, customer_address, scheduled_for
         ))
 
@@ -188,7 +191,9 @@ def process_order_submission(request, order_type_override=None):
         
         conn.commit()
         
-        # 下單成功後，保留 session 以便重複下單或返回查看，不強制清除
+        # 下單成功後清除相關 Session 避免重複 (可選，這裡保留以防 user 返回)
+        # session.pop('delivery_data', None)
+        
         if old_order_id: 
             return f"<script>localStorage.removeItem('cart_cache'); alert('訂單已更新'); if(window.opener) window.opener.location.reload(); window.close();</script>"
         
@@ -278,7 +283,8 @@ def order_success():
     conn = get_db_connection()
     cur = conn.cursor()
     
-    # 這裡的欄位順序必須與下方 row unpacking 完全一致
+    # 【關鍵修正】讀取資料庫的真實欄位
+    # 對應 database.py 中定義的 columns
     cur.execute("""
         SELECT daily_seq, content_json, total_price, created_at, 
                order_type, delivery_info, delivery_fee,
@@ -291,45 +297,44 @@ def order_success():
     
     if not row: return "Order Not Found", 404
     
-    # 解構資料
+    # 解構資料 (順序必須與 SQL SELECT 一致)
     seq, json_str, total, created_at, order_type, delivery_info_json, delivery_fee, c_name, c_phone, c_addr, c_time, table_num_db = row
     
     # 1. 判斷是否為外送
-    # 只要 order_type 是 delivery 或者桌號是 外送，都算外送
     type_is_delivery = (str(order_type or '').strip().lower() == 'delivery')
     table_is_delivery = (str(table_num_db or '').strip() == '外送')
     is_delivery = type_is_delivery or table_is_delivery
     
-    # 2. 處理外送資訊
-    delivery_info = {}
+    # 2. 處理外送資訊 (Fallback 機制)
+    # 如果 DB 實體欄位 (c_name 等) 有值，優先使用；否則嘗試解析 JSON
+    delivery_info_dict = {}
     if delivery_info_json:
         try:
-            delivery_info = json.loads(delivery_info_json)
+            delivery_info_dict = json.loads(delivery_info_json)
         except:
-            delivery_info = {}
+            delivery_info_dict = {}
 
-    # 3. 優先取 DB 欄位，若空則取 JSON 內的資料
-    d_name = c_name if c_name else delivery_info.get('name', '')
-    d_phone = c_phone if c_phone else delivery_info.get('phone', '')
-    d_addr = c_addr if c_addr else delivery_info.get('address', '')
+    d_name = c_name if c_name else delivery_info_dict.get('name', 'N/A')
+    d_phone = c_phone if c_phone else delivery_info_dict.get('phone', 'N/A')
+    d_addr = c_addr if c_addr else delivery_info_dict.get('address', 'N/A')
+    d_note = delivery_info_dict.get('note', '')
     
-    # 時間處理：DB取出來可能是 datetime 物件或字串
+    # 時間處理：優先使用 DB 欄位 scheduled_for
+    d_scheduled = ""
     if c_time:
         d_scheduled = str(c_time)
-        # 如果格式是 2026-02-12 18:30:00，稍微美化一下
-        if len(d_scheduled) > 16: d_scheduled = d_scheduled[:16]
-    else:
-        d_scheduled = delivery_info.get('scheduled_for', '')
-
-    d_note = delivery_info.get('note', '')
+    elif delivery_info_dict.get('scheduled_for'):
+        d_scheduled = str(delivery_info_dict.get('scheduled_for'))
+        
+    # 美化時間字串 (去掉秒數)
+    if d_scheduled and len(d_scheduled) > 16:
+        d_scheduled = d_scheduled[:16]
 
     # 4. 生成商品列表 HTML
     items = json.loads(json_str) if json_str else []
     items_html = ""
     
     for i in items:
-        # price = i['unit_price'] * i['qty'] # 這裡只顯示單品總價
-        # 顯示單價 x 數量 = 小計 會更清楚，但依照你的原始風格：
         row_total = int(float(i['unit_price'])) * int(float(i['qty']))
         
         d_name_prod = i.get(f'name_{lang}', i.get('name_zh', 'Product'))
@@ -363,23 +368,17 @@ def order_success():
         </div>
         """
         
-        # 準備顯示變數 (處理 None 的情況)
-        disp_name = d_name if d_name else 'N/A'
-        disp_phone = d_phone if d_phone else 'N/A'
-        disp_addr = d_addr if d_addr else 'N/A'
-        
         time_display = ""
         if d_scheduled:
             time_display = f"<div style='margin-bottom:8px; color:#d32f2f; font-size:1.1em;'><b>📅 預約時間:</b> {d_scheduled}</div>"
 
-        # 這裡組合 HTML，請注意 f-string 內的變數名稱
         delivery_html = f"""
         <div style="background:#e3f2fd; padding:15px; border-radius:10px; margin-bottom:20px; text-align:left; border:1px solid #90caf9;">
             <h4 style="margin:0 0 10px 0; color:#1565c0; border-bottom: 1px solid #bbdefb; padding-bottom:5px;">🛵 外送資訊 / Delivery Info</h4>
             {time_display}
-            <div style="margin-bottom:5px;"><b>姓名:</b> {disp_name}</div>
-            <div style="margin-bottom:5px;"><b>電話:</b> <a href="tel:{disp_phone}">{disp_phone}</a></div>
-            <div style="margin-bottom:5px;"><b>地址:</b> {disp_addr}</div>
+            <div style="margin-bottom:5px;"><b>姓名:</b> {d_name}</div>
+            <div style="margin-bottom:5px;"><b>電話:</b> <a href="tel:{d_phone}">{d_phone}</a></div>
+            <div style="margin-bottom:5px;"><b>地址:</b> {d_addr}</div>
             <div style="font-size:0.95em; color:#555; margin-top:5px; background:#fff; padding:5px; border-radius:5px;"><b>備註:</b> {d_note}</div>
         </div>
         """
