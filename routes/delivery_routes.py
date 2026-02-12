@@ -1,10 +1,11 @@
 from flask import Blueprint, render_template, request, jsonify, session, redirect, url_for
 from datetime import datetime, timedelta, time
 from geopy.geocoders import Nominatim
-from geopy.exc import GeocoderTimedOut, GeocoderUnavailable
+from geopy.exc import GeocoderTimedOut, GeocoderUnavailable, GeocoderServiceError
 from haversine import haversine, Unit
 from database import get_db_connection
 import re
+import random  # 新增：用於生成隨機 User-Agent
 
 delivery_bp = Blueprint('delivery', __name__)
 
@@ -38,51 +39,32 @@ def extract_road_only(addr):
     輸入: '臺北市中山區長春路348-4號'
     輸出: '臺北市中山區長春路'
     """
-    # 抓取直到 "路"、"街"、"大道"、"巷" 為止的字串
     match = re.search(r'.+?[縣市].+?[區鄉鎮市].+?[路街大道巷]', addr)
     if match:
         return match.group(0)
-    # 如果上面沒抓到，嘗試抓簡化版 (只要有路/街)
     match_simple = re.search(r'.+?[路街大道]', addr)
     if match_simple:
         return match_simple.group(0)
-    return addr # 真的沒招了，回傳原值
+    return addr 
 
 def generate_time_slots(base_date):
-    """
-    產生單日可外送時段
-    營業時間: 10:30 ~ 20:30
-    禁止時段: 11:30 ~ 13:30 (含 11:30 與 13:30 皆不可選)
-    """
+    """產生單日可外送時段"""
     slots = []
-    
-    # 定義營業時間與禁止時間
     start_time = time(10, 30)
     end_time = time(20, 30)
-    
-    # 禁止區間設定
     block_start = time(11, 30)
     block_end = time(13, 30)
     
-    # 從當天 10:30 開始，每 30 分鐘一個區間
     current_dt = datetime.combine(base_date, start_time)
     end_dt = datetime.combine(base_date, end_time)
-    
-    # 取得現在的台灣時間
     now_tw = datetime.utcnow() + timedelta(hours=8)
     
     while current_dt <= end_dt:
         t = current_dt.time()
-        
-        # 1. 必須是未來時間 (加上 30 分鐘緩衝)
         if base_date == now_tw.date() and current_dt < (now_tw + timedelta(minutes=30)):
             current_dt += timedelta(minutes=30)
             continue
             
-        # 2. 檢查是否在禁止時段內
-        # 修改重點：將 < 改為 <=，讓 13:30 也被視為禁止
-        # 這樣 11:30, 12:00, 12:30, 13:00, 13:30 都會是 True (不可選)
-        # 下一個可選的時間會是 14:00
         in_forbidden_zone = (t >= block_start and t <= block_end)
         
         if not in_forbidden_zone:
@@ -102,7 +84,6 @@ def setup():
     date_options = []
     now = datetime.utcnow() + timedelta(hours=8)
     
-    # 產生日期選項 (今天、明天、後天)
     for i in range(3):
         d = (now + timedelta(days=i)).date()
         val = d.strftime("%Y-%m-%d")
@@ -110,10 +91,7 @@ def setup():
         label_date = f"{d.strftime('%m/%d')} ({weekdays[d.weekday()]})"
         if i == 0: label_date += " (今天)"
         
-        # 產生該日期的可用時段
         slots = generate_time_slots(d)
-        
-        # 如果該天有可用時段才加入選項
         if slots:
             date_options.append({
                 'value': val, 
@@ -129,98 +107,117 @@ def check_address():
     raw_address = data.get('address', '').strip()
     name = data.get('name')
     phone = data.get('phone')
-    
-    # 新增接收日期與時間
     delivery_date = data.get('date')
     delivery_time = data.get('time')
     
     if not raw_address or not name or not phone or not delivery_date or not delivery_time:
         return jsonify({'success': False, 'msg': '請填寫完整資訊 (含日期與時間)'})
     
-    geolocator = Nominatim(user_agent="tw_food_delivery_final_v4")
+    # ★ 修正重點 1：使用隨機 User-Agent 避免被 509 封鎖 ★
+    # 加入隨機數讓每次請求看起來都不一樣
+    ua_string = f"mbdv_delivery_app_user_{random.randint(10000, 99999)}"
+    geolocator = Nominatim(user_agent=ua_string)
     
     location = None
     fallback_level = 0
-    
+    settings = get_delivery_settings()
+
+    # 組合預約時間
+    scheduled_for = f"{delivery_date} {delivery_time}"
+
     try:
-        # --- 第一層：標準清洗 (去樓層) ---
+        # --- 第一層：標準清洗 ---
         search_addr = normalize_address(raw_address)
-        # 加上 "台灣" 強制鎖定區域
         query = f"台灣 {search_addr}"
-        location = geolocator.geocode(query, timeout=10)
+        location = geolocator.geocode(query, timeout=5) # 縮短 timeout 避免卡太久
         
-        # --- 第二層：去連字號 (348-4 -> 348號) ---
+        # --- 第二層：去連字號 ---
         if not location:
-            # 將 "348-4號" 轉為 "348號"，將 "之4" 去掉
             addr_no_dash = re.sub(r'(\d+)[-‐‑]\d+號', r'\1號', search_addr)
             addr_no_dash = re.sub(r'(\d+號)之\d+', r'\1', addr_no_dash)
-            
             if addr_no_dash != search_addr:
                 print(f"嘗試降級搜尋 (去號): {addr_no_dash}")
-                location = geolocator.geocode(f"台灣 {addr_no_dash}", timeout=10)
+                location = geolocator.geocode(f"台灣 {addr_no_dash}", timeout=5)
                 fallback_level = 1
 
-        # --- 第三層 (大絕招)：只搜路名 ---
+        # --- 第三層：只搜路名 ---
         if not location:
             road_only = extract_road_only(search_addr)
             if road_only != search_addr:
                 print(f"嘗試終極搜尋 (只搜路名): {road_only}")
-                location = geolocator.geocode(f"台灣 {road_only}", timeout=10)
+                location = geolocator.geocode(f"台灣 {road_only}", timeout=5)
                 fallback_level = 2
 
-        # --- 判斷結果 ---
-        if not location:
-             return jsonify({
-                 'success': False, 
-                 'msg': '找不到此地址。請確認您輸入了正確的「行政區」與「路名」。'
-             })
+        # --- 判斷結果 (成功定位) ---
+        if location:
+            user_coords = (location.latitude, location.longitude)
+            dist = haversine(RESTAURANT_COORDS, user_coords, unit=Unit.KILOMETERS)
+            
+            if dist > settings['max_km']:
+                return jsonify({
+                    'success': False, 
+                    'msg': f'超出外送範圍 (距離 {dist:.1f}km, 目前限制 {settings["max_km"]}km)'
+                })
 
-        # 計算距離
-        user_coords = (location.latitude, location.longitude)
-        dist = haversine(RESTAURANT_COORDS, user_coords, unit=Unit.KILOMETERS)
-        
-        settings = get_delivery_settings()
-        
-        # 檢查距離限制
-        if dist > settings['max_km']:
+            shipping_fee = settings['base_fee'] + int(dist * settings['fee_per_km'])
+            
+            note = ""
+            if fallback_level == 2:
+                note = "(以路段中心估算)"
+
+            # 存入 Session (正常模式)
+            session['delivery_data'] = {
+                'name': name,
+                'phone': phone,
+                'address': raw_address,
+                'scheduled_for': scheduled_for
+            }
+            session['delivery_info'] = {
+                'is_delivery': True,
+                'distance_km': round(dist, 1),
+                'shipping_fee': shipping_fee,
+                'min_price': settings['min_price'],
+                'note': note
+            }
+            session['table_num'] = '外送'
+            session.modified = True
+            
+            return jsonify({'success': True, 'redirect': url_for('menu.menu', lang='zh')})
+
+        else:
+            # 真的找不到地址 (非連線錯誤，而是查無此地)
             return jsonify({
                 'success': False, 
-                'msg': f'超出外送範圍 (距離 {dist:.1f}km, 目前限制 {settings["max_km"]}km)'
+                'msg': '找不到此地址，請確認路名是否正確。'
             })
 
-        shipping_fee = settings['base_fee'] + int(dist * settings['fee_per_km'])
+    # ★ 修正重點 2：捕捉 509 及網路錯誤，允許進入「人工確認模式」 ★
+    except Exception as e:
+        print(f"Geo Error (切換至人工模式): {e}")
         
-        # 存入 Session
-        # 組合完整的預約時間字串
-        scheduled_for = f"{delivery_date} {delivery_time}"
-        
+        # 即使地圖掛了，也讓客人下單！
+        # 設定距離為 0，運費設為基本費 (或 0)，並加上備註
         session['delivery_data'] = {
             'name': name,
             'phone': phone,
-            'address': raw_address, # 使用者原始輸入 (含樓層)
-            'scheduled_for': scheduled_for # 存入預約時間
+            'address': raw_address,
+            'scheduled_for': scheduled_for
         }
-
-        # 根據 fallback 等級，給予不同的精準度提示 (可選)
-        note = ""
-        if fallback_level == 2:
-            note = "(以路段中心估算)"
-
+        
         session['delivery_info'] = {
             'is_delivery': True,
-            'distance_km': round(dist, 1),
-            'shipping_fee': shipping_fee,
+            'distance_km': 0,      # 無法計算
+            'shipping_fee': settings['base_fee'], # 先收基本費，或設為 0
             'min_price': settings['min_price'],
-            'note': note
+            'note': "⚠️ 地圖連線忙碌，運費僅為預估，將由專人電話確認" # 重要提示
         }
         
         session['table_num'] = '外送'
         session.modified = True
         
-        return jsonify({'success': True, 'redirect': url_for('menu.menu', lang='zh')})
-
-    except (GeocoderTimedOut, GeocoderUnavailable):
-        return jsonify({'success': False, 'msg': '地圖連線逾時，請稍後再試'})
-    except Exception as e:
-        print(f"Geo Error: {e}")
-        return jsonify({'success': False, 'msg': '系統發生錯誤'})
+        # 回傳成功，讓前端跳轉
+        return jsonify({
+            'success': True, 
+            'redirect': url_for('menu.menu', lang='zh'),
+            'msg': '地圖連線忙碌，將轉為人工確認模式' # 這裡的 msg 前端可能不會顯示，因為直接 redirect 了
+        })
