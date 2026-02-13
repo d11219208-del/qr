@@ -30,7 +30,7 @@
         }
 
         /* 狀態與按鈕 */
-        .btn-sm { padding: 0 10px; height: 28px; line-height: 26px; font-size: 1.2rem; }
+        .btn-sm { padding: 0 10px; height: 28px; line-height: 26px; font-size: 1.2rem; cursor: pointer; transition: all 0.3s; }
         .status-on { background: #e6ffed; color: #28a745; border-color: #b7eb8f; }
         .status-off { background: #fff1f0; color: #f5222d; border-color: #ffa39e; }
         .alert { padding: 12px; background: #e6f7ff; color: #0050b3; border-radius: 6px; margin-bottom: 20px; border-left: 5px solid #1890ff; }
@@ -62,6 +62,28 @@
 
         <div class="card">
             <h4>⚙️ 系統與通知設定</h4>
+            
+            <div class="row" style="border-bottom: 1px solid #eee; padding-bottom: 20px; margin-bottom: 20px;">
+                <div class="column">
+                    <label>🏪 全店營業狀態 (Shop Status)</label>
+                    {% set shop_open = config.get('shop_open', 1) %}
+                    <button type="button" 
+                            class="btn-sm {{ 'status-on' if shop_open else 'status-off' }}"
+                            onclick="toggleConfig('shop_open', this, '營業中', '休息中')">
+                        {{ '營業中' if shop_open else '休息中' }}
+                    </button>
+                    <small style="color: #888; margin-left: 8px;">控制顧客端是否能進入點餐</small>
+                </div>
+                <div class="column">
+                    <label>🛵 外送功能 (Delivery Mode)</label>
+                    {% set delivery_on = config.get('enable_delivery', 0) %}
+                    <button type="button" 
+                            class="btn-sm {{ 'status-on' if delivery_on else 'status-off' }}"
+                            onclick="toggleConfig('enable_delivery', this, '已開啟', '已關閉')">
+                        {{ '已開啟' if delivery_on else '已關閉' }}
+                    </button>
+                </div>
+            </div>
             <form method="POST">
                 <div class="row">
                     <div class="column"><label>收件 Email</label><input type="email" name="report_email" value="{{ config.get('report_email','') }}" placeholder="接收日結單"></div>
@@ -70,7 +92,7 @@
                 </div>
                 <div class="row">
                     <div class="column column-33">
-                        <label>🛵 外送運費 (Delivery Fee)</label>
+                        <label>💰 外送運費 (Delivery Fee)</label>
                         <input type="number" name="delivery_fee" value="{{ config.get('delivery_fee', 0) }}" placeholder="0" min="0">
                     </div>
                 </div>
@@ -196,7 +218,37 @@
             setTimeout(() => { msg.style.display = 'none'; }, 3000);
         }
 
-        // 上下架切換
+        // [新增] 通用設定開關 (如：全店營業狀態、外送開關)
+        // 後端需在 routes/admin_routes.py 實作 '/admin/toggle_config' 路由
+        function toggleConfig(key, btn, textOn, textOff) {
+            // 讓使用者知道正在處理中 (可選)
+            btn.style.opacity = '0.7';
+            
+            fetch('/admin/toggle_config', { 
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ key: key }) 
+            })
+            .then(r => r.json())
+            .then(d => {
+                btn.style.opacity = '1';
+                if(d.status === 'success') {
+                    // d.new_value 應該回傳 boolean
+                    const isOn = d.new_value; 
+                    btn.className = isOn ? 'btn-sm status-on' : 'btn-sm status-off';
+                    btn.innerText = isOn ? textOn : textOff;
+                } else {
+                    alert('設定更新失敗：' + d.message);
+                }
+            })
+            .catch(err => {
+                btn.style.opacity = '1';
+                console.error(err);
+                alert('連線錯誤，請稍後再試');
+            });
+        }
+
+        // 產品上下架切換
         function toggleProduct(pid, btn) {
             fetch('/admin/toggle_product/' + pid, { method: 'POST' })
             .then(r => r.json()).then(d => {
