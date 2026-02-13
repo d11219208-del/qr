@@ -24,19 +24,18 @@ def admin_panel():
     if request.method == 'POST':
         action = request.form.get('action')
         
-        # --- 功能 1: 儲存設定 & 測試連線 (合併處理) ---
-        # 監聽 'save_settings' (儲存鈕) 與 'test_email' (測試鈕)
+        # --- 功能 1: 儲存一般設定 & 測試連線 (合併處理) ---
         if action == 'save_settings' or action == 'test_email':
             try:
                 # 1. 取得表單資料
                 new_config = {
                     'report_email': request.form.get('report_email'),
                     'resend_api_key': request.form.get('resend_api_key'),
-                    # 如果未填寫 Sender，預設使用 Resend 測試帳號以避免 403 錯誤
+                    # 如果未填寫 Sender，預設使用 Resend 測試帳號
                     'sender_email': request.form.get('sender_email') or 'onboarding@resend.dev'
                 }
 
-                # 2. 寫入資料庫 (無論是儲存還是測試，都先更新 DB)
+                # 2. 寫入資料庫
                 for k, v in new_config.items():
                     cur.execute("""
                         INSERT INTO settings (key, value) 
@@ -46,14 +45,11 @@ def admin_panel():
                 conn.commit()
                 
                 # 3. 判斷是否執行測試
-                # 邏輯：如果勾選了 "test_connection" 或者 按下的是 "test_email" 按鈕
                 should_test = (request.form.get('test_connection') == 'on') or (action == 'test_email')
 
                 if should_test:
                     try:
-                        # 傳入 current_app._get_current_object() 以支援 Thread 環境
                         app_obj = current_app._get_current_object()
-                        # 使用 manual_config 確保測試使用當下表單填寫的值
                         result_msg = send_daily_report(app_obj, manual_config=new_config, is_test=True)
                         
                         if "✅" in result_msg:
@@ -78,12 +74,8 @@ def admin_panel():
         # --- 功能 2: 手動觸發日結報表 (背景執行) ---
         elif action == 'send_report_now':
             try:
-                # 取得 app 實體 (Thread 內無法直接用 current_app)
                 app_obj = current_app._get_current_object()
-                
-                # 將 app_obj 作為參數 (args) 傳入
                 threading.Thread(target=send_daily_report, args=(app_obj,), kwargs={'is_test': False}).start()
-                
                 msg = "🚀 報表正在背景發送中，請稍候檢查信箱"
             except Exception as e:
                 msg = f"❌ 無法啟動背景任務: {e}"
@@ -119,6 +111,7 @@ def admin_panel():
 
     # --- GET: 讀取資料顯示頁面 ---
     try:
+        # 讀取設定檔，這裡會包含 delivery_fee_base 和 delivery_enabled
         cur.execute("SELECT key, value FROM settings")
         config = dict(cur.fetchall())
         
@@ -135,33 +128,34 @@ def admin_panel():
     return render_template('admin.html', config=config, prods=prods, msg=msg)
 
 # ==========================================
-# 新增功能：外送設定儲存路由
+# 重點修改：外送設定儲存路由
 # ==========================================
 @admin_bp.route('/settings/delivery', methods=['POST'])
 def update_delivery_settings():
     conn = get_db_connection()
     cur = conn.cursor()
     try:
-        # 處理 Checkbox：沒勾選時 form 不會送出值，所以預設為 '0'
+        # 1. 處理 Checkbox 狀態 (開啟為 '1', 關閉為 '0')
+        # 前端 Checkbox 被勾選時會送出值 (例如 'on' 或 '1')，沒勾選則不會送出 key
         is_enabled = '1' if request.form.get('delivery_enabled') else '0'
 
+        # 2. 準備寫入資料庫的設定 (對應 database.py 的欄位)
         settings = {
-            'delivery_enabled': is_enabled,                # 是否啟用外送 (對應 database.py)
-            'delivery_min_price': request.form.get('delivery_min_price'), # 外送起送價
-            'delivery_fee_base': request.form.get('delivery_fee_base'),   # 基礎外送費 (對應 database.py)
-            # 以下為保留欄位，若前端有傳則儲存，無傳則跳過
-            'delivery_max_km': request.form.get('delivery_max_km'),
-            'delivery_fee_per_km': request.form.get('delivery_fee_per_km')
+            'delivery_enabled': is_enabled,
+            'delivery_min_price': request.form.get('delivery_min_price'),
+            'delivery_fee_base': request.form.get('delivery_fee_base'), # 修正：這裡使用 delivery_fee_base
+            'delivery_max_km': request.form.get('delivery_max_km'),     # 若資料庫有擴充此欄位則保留
+            'delivery_fee_per_km': request.form.get('delivery_fee_per_km') # 若資料庫有擴充此欄位則保留
         }
 
         for key, val in settings.items():
-            if val is not None: # 只更新有值的欄位
-                # 使用 ON CONFLICT 更新現有設定
+            # 過濾掉 None 的值，避免把空值寫入造成錯誤 (視需求而定)
+            if val is not None:
                 cur.execute("""
                     INSERT INTO settings (key, value) 
                     VALUES (%s, %s) 
                     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
-                """, (key, val))
+                """, (key, str(val)))
         
         conn.commit()
         msg = "✅ 外送設定已更新"
@@ -173,6 +167,38 @@ def update_delivery_settings():
         conn.close()
 
     return redirect(url_for('admin.admin_panel', msg=msg))
+
+# ==========================================
+# 新增功能：外送開關快速切換 (AJAX API)
+# 說明：供前端開關按鈕使用，不需刷新頁面
+# ==========================================
+@admin_bp.route('/settings/toggle_delivery', methods=['POST'])
+def toggle_delivery_status():
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        # 讀取當前狀態
+        cur.execute("SELECT value FROM settings WHERE key = 'delivery_enabled'")
+        row = cur.fetchone()
+        
+        # 判斷當前狀態並反轉
+        current_status = row[0] if row else '0'
+        new_status = '0' if current_status == '1' else '1'
+        
+        # 更新資料庫
+        cur.execute("""
+            INSERT INTO settings (key, value) 
+            VALUES ('delivery_enabled', %s) 
+            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+        """, (new_status,))
+        
+        conn.commit()
+        return jsonify({'status': 'success', 'enabled': new_status == '1'})
+    except Exception as e:
+        conn.rollback()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+    finally:
+        cur.close(); conn.close()
 
 # ==========================================
 # 編輯產品 (獨立頁面)
@@ -221,7 +247,6 @@ def edit_product(pid):
     p = dict(zip(columns, row))
     def v(key): return p.get(key) if p.get(key) is not None else ""
 
-    # 這裡直接回傳簡易的編輯 HTML
     return f"""
     <!DOCTYPE html><html><head><meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -287,7 +312,6 @@ def edit_product(pid):
             </form>
         </div>
     </body></html>"""
-
 
 # ==========================================
 # 匯入 / 匯出 / 重置 / 其他
