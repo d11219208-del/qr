@@ -1,6 +1,6 @@
 import os  # 匯入作業系統模組，用於讀取環境變數
 import psycopg2  # 匯入 PostgreSQL 資料庫驅動模組
-from urllib.parse import urlparse  # 匯入網址解析工具（此處程式碼暫未用到，但可用於拆解連線字串）
+from urllib.parse import urlparse  # 匯入網址解析工具
 
 # --- 資料庫基礎連線 --- 
 def get_db_connection():
@@ -78,21 +78,27 @@ def init_db():
         # 3. 建立系統設定表 (settings)
         cur.execute('''CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);''')
         
-        # 4. 插入預設設定
+        # 4. 插入預設設定 (新增了 shop_open 與其他外送參數)
         default_settings = [
             ('sender_email', 'onboarding@resend.dev'), # 預設發信人郵件
-            ('delivery_enabled', '1'),                 # 是否啟用外送功能 (1 為開啟)
+            ('shop_open', '1'),                        # 預設全店營業中 (1: 開啟)
+            ('delivery_enabled', '1'),                 # 是否啟用外送功能 (後端用)
+            ('enable_delivery', '1'),                  # 前端按鈕可能使用的 key (保持相容)
             ('delivery_min_price', '500'),             # 外送起送價
-            ('delivery_fee_base', '60')                # 基礎外送費
+            ('delivery_fee_base', '60'),               # 基礎外送費
+            ('delivery_max_km', '5'),                  # 最大外送距離 (公里)
+            ('delivery_fee_per_km', '10')              # 超過基礎距離後的每公里加價
         ]
         
         for k, v in default_settings:
             # 插入設定值，如果 Key 已經存在則跳過 (ON CONFLICT DO NOTHING)
+            # 這樣可以確保新增加的設定 (如 shop_open) 會被寫入，而已存在的設定不會被覆蓋
             cur.execute("INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT DO NOTHING", (k, v))
 
         # 5. 【關鍵】欄位自動補全 (Migration)
         # 此段確保如果資料表已經存在，但缺少新開發的欄位時，會自動新增欄位
         alters = [
+            # --- Orders 表格補全 ---
             "ALTER TABLE orders ADD COLUMN IF NOT EXISTS lang VARCHAR(10) DEFAULT 'zh';",
             "ALTER TABLE orders ADD COLUMN IF NOT EXISTS content_json TEXT;",
             "ALTER TABLE orders ADD COLUMN IF NOT EXISTS order_type VARCHAR(50) DEFAULT 'dine_in';",
@@ -101,7 +107,20 @@ def init_db():
             "ALTER TABLE orders ADD COLUMN IF NOT EXISTS customer_phone TEXT;",
             "ALTER TABLE orders ADD COLUMN IF NOT EXISTS customer_address TEXT;",
             "ALTER TABLE orders ADD COLUMN IF NOT EXISTS scheduled_for TEXT;",
-            "ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_fee INTEGER DEFAULT 0;"
+            "ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_fee INTEGER DEFAULT 0;",
+            
+            # --- Products 表格補全 (防止舊資料庫缺少多語系欄位) ---
+            "ALTER TABLE products ADD COLUMN IF NOT EXISTS sort_order INTEGER DEFAULT 100;",
+            "ALTER TABLE products ADD COLUMN IF NOT EXISTS print_category VARCHAR(20) DEFAULT 'Noodle';",
+            "ALTER TABLE products ADD COLUMN IF NOT EXISTS name_en VARCHAR(100);",
+            "ALTER TABLE products ADD COLUMN IF NOT EXISTS name_jp VARCHAR(100);",
+            "ALTER TABLE products ADD COLUMN IF NOT EXISTS name_kr VARCHAR(100);",
+            "ALTER TABLE products ADD COLUMN IF NOT EXISTS category_en VARCHAR(50);",
+            "ALTER TABLE products ADD COLUMN IF NOT EXISTS category_jp VARCHAR(50);",
+            "ALTER TABLE products ADD COLUMN IF NOT EXISTS category_kr VARCHAR(50);",
+            "ALTER TABLE products ADD COLUMN IF NOT EXISTS custom_options_en TEXT;",
+            "ALTER TABLE products ADD COLUMN IF NOT EXISTS custom_options_jp TEXT;",
+            "ALTER TABLE products ADD COLUMN IF NOT EXISTS custom_options_kr TEXT;"
         ]
         
         print("🔄 正在檢查資料庫欄位結構...")
@@ -110,10 +129,12 @@ def init_db():
                 cur.execute(cmd) # 執行增加欄位的指令
             except Exception as e:
                 # 攔截錯誤，如果是「重複欄位」或「已存在」的報錯則忽略，其餘印出警告
+                # PostgreSQL 的 ADD COLUMN IF NOT EXISTS 在舊版本可能不支援，
+                # 所以這裡保留 try-except 以確保相容性
                 if 'duplicate' not in str(e).lower() and 'exists' not in str(e).lower():
                     print(f"⚠️ Warning during migration: {e}")
 
-        print("✅ 資料庫初始化檢查完成 (含 order_type 與 delivery_info)")
+        print("✅ 資料庫初始化檢查完成 (含 order_type, delivery_info, products 多語系欄位)")
         return True
 
     except Exception as e:
