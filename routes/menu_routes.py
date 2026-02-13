@@ -45,6 +45,12 @@ def get_menu_data():
 def process_order_submission(request, order_type_override=None):
     display_lang = request.form.get('lang_input', 'zh')
     
+    # ★ Debug: 印出所有接收到的表單資料 (請查看終端機)
+    print("--- DEBUG: Form Data Received ---")
+    # print(request.form) # 如果資料太多可註解掉
+    print(f"Type: {request.form.get('order_type')}, Name: {request.form.get('customer_name')}, Phone: {request.form.get('customer_phone')}")
+    print("---------------------------------")
+
     conn = get_db_connection()
     conn.autocommit = False 
     cur = conn.cursor()
@@ -57,38 +63,47 @@ def process_order_submission(request, order_type_override=None):
         final_lang = request.form.get('lang_input', 'zh')
         old_order_id = request.form.get('old_order_id')
         
-        # 2. 判斷訂單類型
+        # 2. 判斷訂單類型 (優先順序：覆寫值 > 表單值 > 預設 dine_in)
         order_type = order_type_override if order_type_override else request.form.get('order_type', 'dine_in')
         
-        # 初始化變數 (給予預設值確保不會報錯)
-        customer_name = None
-        customer_phone = None
-        customer_address = None
-        scheduled_for = None
+        # 3. ★ 強力抓取外送資訊 (無論訂單類型為何，先嘗試抓取所有可能的欄位名稱)
+        # 這是為了解決 HTML name 屬性可能是 'name' 或 'customer_name' 的問題
+        sess_data = session.get('delivery_data', {})
+        sess_info = session.get('delivery_info', {})
+
+        # 姓名：嘗試抓取 'customer_name' 或 'name'
+        customer_name = (
+            request.form.get('customer_name') or 
+            request.form.get('name') or 
+            sess_data.get('name') or ''
+        )
+        
+        # 電話：嘗試抓取 'customer_phone' 或 'phone'
+        customer_phone = (
+            request.form.get('customer_phone') or 
+            request.form.get('phone') or 
+            sess_data.get('phone') or ''
+        )
+        
+        # 地址：嘗試抓取 'delivery_address' 或 'address'
+        customer_address = (
+            request.form.get('delivery_address') or 
+            request.form.get('address') or 
+            sess_data.get('address') or ''
+        )
+
+        # 備註與時間
+        note = request.form.get('delivery_note') or request.form.get('note') or sess_data.get('note') or sess_info.get('note') or ''
+        scheduled_for = request.form.get('scheduled_for') or sess_data.get('scheduled_for') or ''
+        
+        # 初始化外送相關變數
         delivery_info_json_str = None
         delivery_fee = 0
         
         # --- 判斷邏輯 ---
-        if order_type == 'delivery':
-            # 讀取 Session 資料
-            sess_data = session.get('delivery_data', {})
-            sess_info = session.get('delivery_info', {})
-            
-            # 【關鍵修正】資料抓取順序：表單 > Session > 空字串
-            # 這樣確保如果表單有送出資料，就用表單的；若無，則用 Session 備份
-            customer_name = request.form.get('customer_name') or sess_data.get('name') or ''
-            customer_phone = request.form.get('customer_phone') or sess_data.get('phone') or ''
-            
-            # 地址處理 (相容多種變數名稱)
-            customer_address = (
-                request.form.get('delivery_address') or 
-                request.form.get('address') or 
-                sess_data.get('address') or ''
-            )
-            
-            # 備註與時間
-            note = request.form.get('delivery_note') or sess_data.get('note') or sess_info.get('note') or ''
-            scheduled_for = request.form.get('scheduled_for') or sess_data.get('scheduled_for') or ''
+        # 如果有填寫地址或選取外送，強制視為外送處理
+        if order_type == 'delivery' or (customer_address and len(customer_address) > 2):
+            order_type = 'delivery' # 修正 order_type 確保寫入正確
             
             # 運費處理
             sess_fee = sess_info.get('shipping_fee')
@@ -101,7 +116,7 @@ def process_order_submission(request, order_type_override=None):
             else:
                 delivery_fee = 0
 
-            # 建立完整的 delivery_info Dict
+            # 建立完整的 delivery_info Dict (作為 JSON 備份)
             delivery_info_dict = {
                 'name': customer_name,
                 'phone': customer_phone,
@@ -111,7 +126,6 @@ def process_order_submission(request, order_type_override=None):
                 'note': note,
                 'shipping_fee': delivery_fee
             }
-            # 轉成 JSON 字串存入 DB 的 delivery_info 欄位
             delivery_info_json_str = json.dumps(delivery_info_dict, ensure_ascii=False)
             
             table_number = "外送"
@@ -158,8 +172,8 @@ def process_order_submission(request, order_type_override=None):
         # --- DB Transaction ---
         cur.execute("LOCK TABLE orders IN SHARE ROW EXCLUSIVE MODE")
 
-        # 【關鍵修正】INSERT 語句
-        # 這裡明確將變數寫入 database.py 中定義的 columns (customer_name, customer_phone, etc.)
+        # 這裡的寫入非常重要，確保 customer_name 等欄位有被寫入
+        # 使用 %s 參數化查詢防止 SQL Injection，同時處理 None 值
         cur.execute("""
             INSERT INTO orders (
                 table_number, items, total_price, lang, 
@@ -190,9 +204,6 @@ def process_order_submission(request, order_type_override=None):
             cur.execute("UPDATE orders SET status='Cancelled' WHERE id=%s", (old_order_id,))
         
         conn.commit()
-        
-        # 下單成功後清除相關 Session 避免重複 (可選，這裡保留以防 user 返回)
-        # session.pop('delivery_data', None)
         
         if old_order_id: 
             return f"<script>localStorage.removeItem('cart_cache'); alert('訂單已更新'); if(window.opener) window.opener.location.reload(); window.close();</script>"
@@ -449,3 +460,4 @@ def order_success():
     </body>
     </html>
     """
+
