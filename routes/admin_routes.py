@@ -25,7 +25,7 @@ def admin_panel():
         action = request.form.get('action')
         
         # --- 功能 1: 儲存設定 & 測試連線 (合併處理) ---
-        # 【修正】: 監聽 'save_settings' (儲存鈕) 與 'test_email' (測試鈕)
+        # 監聽 'save_settings' (儲存鈕) 與 'test_email' (測試鈕)
         if action == 'save_settings' or action == 'test_email':
             try:
                 # 1. 取得表單資料
@@ -146,20 +146,22 @@ def update_delivery_settings():
         is_enabled = '1' if request.form.get('delivery_enabled') else '0'
 
         settings = {
-            'delivery_enabled': is_enabled,
-            'delivery_min_price': request.form.get('delivery_min_price'),
+            'delivery_enabled': is_enabled,                # 是否啟用外送 (對應 database.py)
+            'delivery_min_price': request.form.get('delivery_min_price'), # 外送起送價
+            'delivery_fee_base': request.form.get('delivery_fee_base'),   # 基礎外送費 (對應 database.py)
+            # 以下為保留欄位，若前端有傳則儲存，無傳則跳過
             'delivery_max_km': request.form.get('delivery_max_km'),
-            'delivery_base_fee': request.form.get('delivery_base_fee'),
             'delivery_fee_per_km': request.form.get('delivery_fee_per_km')
         }
 
         for key, val in settings.items():
-            # 使用 ON CONFLICT 更新現有設定
-            cur.execute("""
-                INSERT INTO settings (key, value) 
-                VALUES (%s, %s) 
-                ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
-            """, (key, val))
+            if val is not None: # 只更新有值的欄位
+                # 使用 ON CONFLICT 更新現有設定
+                cur.execute("""
+                    INSERT INTO settings (key, value) 
+                    VALUES (%s, %s) 
+                    ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+                """, (key, val))
         
         conn.commit()
         msg = "✅ 外送設定已更新"
