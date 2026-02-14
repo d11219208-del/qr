@@ -1,3 +1,4 @@
+# routes/admin_routes.py
 import io
 import json
 import threading
@@ -86,6 +87,7 @@ def admin_panel():
         # --- 功能 3: 新增產品 ---
         elif action == 'add_product':
             try:
+                # 包含所有多語系欄位
                 cur.execute("""
                     INSERT INTO products (
                         name, price, category, print_category, image_url, sort_order,
@@ -116,8 +118,18 @@ def admin_panel():
         settings_rows = cur.fetchall()
         config = {row[0]: row[1] for row in settings_rows} # 轉為 Dictionary
         
-        # 為了讓前端 template 正確判斷 1/0，可以這裡做些預處理，或者在 template 用 == '1' 判斷
-        # 這裡保持原樣傳字串，前端 template 需自行判斷 (e.g. config.get('shop_open') == '1')
+        # 【關鍵修正 1】轉換資料型態，確保模板中的 if 判斷正確
+        # 將字串 '1', '0' 轉為整數，避免 Jinja2 將字串 '0' 視為 True
+        # 特別針對開關類型的設定
+        toggle_keys = ['shop_open', 'enable_delivery', 'delivery_enabled']
+        for key in toggle_keys:
+            val = config.get(key, '0') # 預設為 '0'
+            config[key] = 1 if val == '1' else 0
+
+        # 【關鍵修正 2】確保 enable_delivery 與 delivery_enabled 狀態一致
+        # 因為 database.py 中兩者都存在，為了避免混淆，這裡做一個 fallback
+        if 'enable_delivery' not in config:
+            config['enable_delivery'] = config.get('delivery_enabled', 0)
         
         cur.execute("""
             SELECT id, name, price, category, is_available, print_category, sort_order, image_url, 
@@ -133,7 +145,7 @@ def admin_panel():
 
 
 # ==========================================
-# [重要新增] 通用設定切換路由 (修復連線錯誤)
+# [關鍵修正] 通用設定切換路由 (修復連線錯誤)
 # 用於切換 'shop_open' 或 'enable_delivery'
 # ==========================================
 @admin_bp.route('/toggle_config', methods=['POST'])
@@ -148,8 +160,7 @@ def toggle_config():
         data = request.get_json()
         key = data.get('key')
         
-        # 安全性檢查：只允許修改特定的設定鍵值
-        # 注意：包含 'enable_delivery' (前端用) 和 'delivery_enabled' (後端舊設定用)
+        # 安全性檢查
         allowed_keys = ['shop_open', 'enable_delivery', 'delivery_enabled']
         if key not in allowed_keys:
             return jsonify({'status': 'error', 'message': '不允許的設定項目'}), 400
@@ -159,16 +170,22 @@ def toggle_config():
         row = cur.fetchone()
 
         # 2. 切換狀態 ('1' <-> '0')
-        # 如果目前是 '1' 則變 '0'，否則變 '1'
         current_val = row[0] if row else '0'
         new_val = '0' if current_val == '1' else '1'
         
-        # 3. 寫入資料庫 (Upsert)
-        cur.execute("""
-            INSERT INTO settings (key, value) 
-            VALUES (%s, %s)
-            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
-        """, (key, new_val))
+        # 3. 【關鍵修正】同步更新相關欄位
+        # 如果切換的是外送設定，要同時更新 enable_delivery 和 delivery_enabled
+        keys_to_update = [key]
+        if key in ['enable_delivery', 'delivery_enabled']:
+            keys_to_update = ['enable_delivery', 'delivery_enabled']
+
+        # 4. 寫入資料庫
+        for k in keys_to_update:
+            cur.execute("""
+                INSERT INTO settings (key, value) 
+                VALUES (%s, %s)
+                ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+            """, (k, new_val))
 
         conn.commit()
 
@@ -193,13 +210,14 @@ def update_delivery_settings():
     cur = conn.cursor()
     try:
         # 1. 處理 Checkbox 狀態
-        # 注意：這裡使用 'delivery_enabled' 作為 Key
-        # 若你的前端 toggle 按鈕使用 'enable_delivery'，請確保資料庫讀取邏輯一致
+        # 注意：表單傳送過來的 checkbox 若有勾選則有值，沒勾選則為 None
         is_enabled = '1' if request.form.get('delivery_enabled') else '0'
 
         # 2. 準備寫入資料庫
+        # 【關鍵修正】同時寫入 enable_delivery 與 delivery_enabled 確保按鈕與設定同步
         settings = {
             'delivery_enabled': is_enabled,
+            'enable_delivery': is_enabled,  # 同步更新
             'delivery_min_price': request.form.get('delivery_min_price'),
             'delivery_fee_base': request.form.get('delivery_fee_base'),
             'delivery_max_km': request.form.get('delivery_max_km'),
@@ -235,6 +253,7 @@ def edit_product(pid):
     
     if request.method == 'POST':
         try:
+            # 更新所有欄位，包含多語系
             cur.execute("""
                 UPDATE products SET 
                 name=%s, price=%s, category=%s, image_url=%s, custom_options=%s,
@@ -272,10 +291,11 @@ def edit_product(pid):
     
     if not row: return "找不到該產品", 404
 
-    # 將資料轉換為字典
+    # 將資料轉換為字典方便前端存取
     p = dict(zip(columns, row))
     def v(key): return p.get(key) if p.get(key) is not None else ""
 
+    # 回傳簡單的 HTML 編輯表單
     return f"""
     <!DOCTYPE html><html><head><meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
