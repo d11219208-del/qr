@@ -75,6 +75,20 @@
             font-size: 1.4em; /* 比語言按鈕稍小 */
             padding: 18px;
         }
+        .panda {
+            background: linear-gradient(135deg, #D70F64, #C20D5A); /* Foodpanda Pink */
+        }
+
+        /* 休息中樣式 */
+        .closed-notice {
+            background: #f8f9fa;
+            color: #666;
+            padding: 30px;
+            border-radius: 15px;
+            font-size: 1.5em;
+            font-weight: bold;
+            border: 2px solid #ddd;
+        }
 
         .footer-info {
             margin-top: 40px;
@@ -101,17 +115,35 @@
     </div>
 
     <div class="btn-container">
-        {# 使用 Jinja2 語法處理桌號參數 #}
-        {% set table_param = "&table=" + table_num if table_num else "" %}
-        
-        <a href="/menu?lang=zh{{ table_param }}" class="btn zh">中文</a>
-        <a href="/menu?lang=en{{ table_param }}" class="btn en">English</a>
-        <a href="/menu?lang=jp{{ table_param }}" class="btn jp">日本語</a>
-        <a href="/menu?lang=kr{{ table_param }}" class="btn kr">한국어</a>
+        {# --- 判斷全店營業狀態 --- #}
+        {% if shop_open %}
+            
+            {# 使用 Jinja2 語法處理桌號參數 #}
+            {% set table_param = "&table=" + table_num if table_num else "" %}
+            
+            <a href="/menu?lang=zh{{ table_param }}" class="btn zh">中文</a>
+            <a href="/menu?lang=en{{ table_param }}" class="btn en">English</a>
+            <a href="/menu?lang=jp{{ table_param }}" class="btn jp">日本語</a>
+            <a href="/menu?lang=kr{{ table_param }}" class="btn kr">한국어</a>
 
-        <div class="delivery-section">
-            <a href="/delivery/setup" class="btn delivery">🛵 外送服務 (Delivery)</a>
-        </div>
+            <div class="delivery-section">
+                {# --- 外送按鈕邏輯判斷 --- #}
+                {% if delivery_enabled %}
+                    {# 情況A: 全店營業 + 啟用內建外送 -> 導向內建外送頁面 #}
+                    <a href="/delivery/setup" class="btn delivery">🛵 外送服務 (Delivery)</a>
+                {% else %}
+                    {# 情況B: 全店營業 + 關閉內建外送 -> 導向 Foodpanda #}
+                    <a href="https://www.foodpanda.com.tw/restaurant/uf01/hong-xing-xiao-chi" target="_blank" class="btn delivery panda">🐼 Foodpanda 外送</a>
+                {% endif %}
+            </div>
+
+        {% else %}
+            {# --- 全店休息中 --- #}
+            <div class="closed-notice">
+                😴 本店目前休息中<br>
+                <small style="font-size:0.6em; color:#999;">Shop Closed</small>
+            </div>
+        {% endif %}
     </div>
 
     <div class="footer-info">
