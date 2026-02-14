@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Select Language | 龍江路大鼎豬血湯</title>
+    <title>Select Order Type | 龍江路大鼎豬血湯</title>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
     <style>
@@ -10,138 +10,188 @@
             display: flex;
             flex-direction: column;
             align-items: center;
-            justify-content: center;
             min-height: 100vh;
             margin: 0;
-            background: #ffffff;
+            background: #fdfdfd;
             padding: 20px;
             box-sizing: border-box;
         }
         .header-info {
             text-align: center;
-            margin-bottom: 30px;
+            margin-bottom: 20px;
+            margin-top: 10px;
         }
         h2 {
             color: #333;
-            font-size: 2.2em; /* 放大店名文字 */
-            margin: 0 0 10px 0;
+            font-size: 1.8em;
+            margin: 0 0 5px 0;
             font-weight: 900;
         }
         .sub-title {
             color: #666;
-            font-size: 1.2em;
-            margin-bottom: 20px;
+            font-size: 1em;
         }
-        .btn-container {
+
+        /* --- 容器樣式 --- */
+        .main-container {
+            width: 100%;
+            max-width: 500px; /* 稍微放寬以容納網格 */
             display: flex;
             flex-direction: column;
-            width: 100%;
-            max-width: 350px;
+            gap: 20px;
         }
-        .btn {
-            padding: 22px; /* 增加點擊區域 */
-            margin: 10px 0;
+
+        /* --- 點餐區塊 (卡片式設計) --- */
+        .order-section {
+            background: #fff;
+            border-radius: 20px;
+            padding: 20px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.08);
+            border: 1px solid #eee;
+            text-align: center;
+        }
+        
+        .section-title {
+            font-size: 1.4em;
+            font-weight: bold;
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+        
+        .dine-in-title { color: #007bff; }
+        .takeout-title { color: #e91e63; }
+
+        /* --- 語言按鈕網格 --- */
+        .lang-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr; /* 兩欄 */
+            gap: 12px;
+        }
+
+        .btn-lang {
+            padding: 15px 0;
             text-align: center;
             text-decoration: none;
-            font-size: 1.6em; /* 放大按鈕文字 */
+            font-size: 1.1em;
             font-weight: bold;
-            border-radius: 60px;
+            border-radius: 12px;
             color: white;
-            box-shadow: 0 6px 15px rgba(0,0,0,0.15);
-            transition: transform 0.1s, box-shadow 0.1s;
-            border: none;
-            display: block;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            transition: transform 0.1s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
         }
-        .btn:active {
-            transform: scale(0.95);
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-        }
-        /* 語言按鈕顏色 */
+        .btn-lang:active { transform: scale(0.95); }
+
+        /* 語言顏色 */
         .zh { background: linear-gradient(135deg, #e91e63, #c2185b); } 
         .en { background: linear-gradient(135deg, #007bff, #0056b3); } 
         .jp { background: linear-gradient(135deg, #ff9800, #f57c00); } 
         .kr { background: linear-gradient(135deg, #20c997, #17a2b8); }
-        
-        /* 外送按鈕樣式 (獨立區塊) */
-        .delivery-section {
-            margin-top: 20px;
-            padding-top: 20px;
-            border-top: 2px solid #eee;
-            width: 100%;
-            text-align: center;
-        }
-        .delivery { 
-            background: linear-gradient(135deg, #ff5722, #d84315); 
-            font-size: 1.4em; /* 比語言按鈕稍小 */
-            padding: 18px;
-        }
-        /* Foodpanda 專用顏色 (桃紅色) */
-        .panda {
-            background: linear-gradient(135deg, #D70F64, #C20D5A); 
-        }
 
-        /* 休息中樣式 */
+        /* --- 外送區塊 (獨立) --- */
+        .delivery-btn {
+            display: block;
+            width: 100%;
+            padding: 18px;
+            margin-top: 10px;
+            text-align: center;
+            text-decoration: none;
+            font-size: 1.3em;
+            font-weight: bold;
+            color: white;
+            border-radius: 60px;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.15);
+        }
+        .delivery-internal { background: linear-gradient(135deg, #ff5722, #d84315); }
+        .delivery-panda { background: linear-gradient(135deg, #D70F64, #C20D5A); }
+
+        /* --- 休息中樣式 --- */
         .closed-notice {
             background: #f8f9fa;
             color: #666;
-            padding: 30px;
+            padding: 40px;
             border-radius: 15px;
             font-size: 1.5em;
             font-weight: bold;
             border: 2px solid #ddd;
+            text-align: center;
         }
 
         .footer-info {
-            margin-top: 40px;
+            margin-top: 30px;
             text-align: center;
             color: #555;
         }
-        .footer-info h3 {
-            font-size: 1.5em; /* 放大電話 */
-            margin: 5px 0;
-            color: #000;
-        }
-        .footer-info h4 {
-            font-size: 1.1em; /* 放大地址 */
-            margin: 5px 0;
+        .footer-info h3, .footer-info h4 { margin: 5px 0; font-weight: normal; font-size: 0.9em; }
+
+        /* 桌號提示小字 */
+        .table-hint {
+            font-size: 0.8em;
+            color: #888;
+            margin-bottom: 10px;
             font-weight: normal;
-            color: #666;
         }
     </style>
 </head>
 <body>
     <div class="header-info">
-        <h2>龍江路大鼎豬血湯專門店</h2>
-        <div class="sub-title">請選擇語言 / Select Language</div>
+        <h2>龍江路大鼎豬血湯</h2>
+        <div class="sub-title">請選擇用餐方式 / Select Order Type</div>
     </div>
 
-    <div class="btn-container">
+    <div class="main-container">
         {# --- 判斷全店營業狀態 (shop_open) --- #}
         {% if shop_open %}
             
-            {# 使用 Jinja2 語法處理桌號參數 #}
+            {# 設定桌號參數變數 (供內用使用) #}
             {% set table_param = "&table=" + table_num if table_num else "" %}
-            
-            <a href="/menu?lang=zh{{ table_param }}" class="btn zh">中文</a>
-            <a href="/menu?lang=en{{ table_param }}" class="btn en">English</a>
-            <a href="/menu?lang=jp{{ table_param }}" class="btn jp">日本語</a>
-            <a href="/menu?lang=kr{{ table_param }}" class="btn kr">한국어</a>
 
-            <div class="delivery-section">
-                {# --- 外送按鈕邏輯判斷 --- #}
+            <div class="order-section">
+                <div class="section-title dine-in-title">🏠 內用 (Dine In)</div>
+                {% if table_num %}
+                    <div class="table-hint">目前桌號: {{ table_num }}</div>
+                {% endif %}
                 
-                {# 情況 1: 啟用內建外送 (delivery_enabled 為 True) #}
+                <div class="lang-grid">
+                    <a href="/menu?lang=zh{{ table_param }}" class="btn-lang zh">中文</a>
+                    <a href="/menu?lang=en{{ table_param }}" class="btn-lang en">English</a>
+                    <a href="/menu?lang=jp{{ table_param }}" class="btn-lang jp">日本語</a>
+                    <a href="/menu?lang=kr{{ table_param }}" class="btn-lang kr">한국어</a>
+                </div>
+            </div>
+
+            <div class="order-section">
+                <div class="section-title takeout-title">👜 外帶 (Takeout)</div>
+                <div class="table-hint">Takeout Order</div>
+
+                {# 這裡強制將 table 設為 "外帶" #}
+                <div class="lang-grid">
+                    <a href="/menu?lang=zh&table=外帶" class="btn-lang zh">中文</a>
+                    <a href="/menu?lang=en&table=外帶" class="btn-lang en">English</a>
+                    <a href="/menu?lang=jp&table=外帶" class="btn-lang jp">日本語</a>
+                    <a href="/menu?lang=kr&table=外帶" class="btn-lang kr">한국어</a>
+                </div>
+            </div>
+
+            <div style="margin-top: 10px;">
                 {% if delivery_enabled %}
-                    <a href="/delivery/setup" class="btn delivery">🛵 外送服務 (Delivery)</a>
-                
-                {# 情況 2: 關閉內建外送 (delivery_enabled 為 False) -> 顯示 Foodpanda #}
+                    <a href="/delivery/setup" class="delivery-btn delivery-internal">
+                        🛵 外送服務 (Delivery)
+                    </a>
                 {% else %}
-                    <a href="https://www.foodpanda.com.tw/restaurant/uf01/hong-xing-xiao-chi-dian" target="_blank" class="btn delivery panda">🐼 Foodpanda 外送</a>
+                    <a href="https://www.foodpanda.com.tw/restaurant/uf01/hong-xing-xiao-chi-dian" target="_blank" class="delivery-btn delivery-panda">
+                        🐼 Foodpanda 外送
+                    </a>
                 {% endif %}
             </div>
 
         {% else %}
-            {# --- 全店休息中 (shop_open 為 False) --- #}
+            {# --- 全店休息中 --- #}
             <div class="closed-notice">
                 😴 本店目前休息中<br>
                 <small style="font-size:0.6em; color:#999;">Shop Closed</small>
