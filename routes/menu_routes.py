@@ -66,7 +66,7 @@ def get_menu_data():
     return settings, p_list
 
 # ==========================================
-# 2. 共用函數：處理訂單提交 (核心邏輯)
+# 2. 共用函數：處理訂單提交 (核心邏輯 - 嚴格判定版)
 # ==========================================
 def process_order_submission(request, order_type_override=None):
     display_lang = request.form.get('lang_input', 'zh')
@@ -87,67 +87,59 @@ def process_order_submission(request, order_type_override=None):
         if not shop_open:
             return "Shop is Closed / 本店休息中", 403
 
-        # --- B. 接收表單資料 ---
-        raw_table_number = request.form.get('table_number')
+        # --- B. 接收基礎表單資料 ---
         cart_json = request.form.get('cart_data')
         need_receipt = request.form.get('need_receipt') == 'on'
         final_lang = request.form.get('lang_input', 'zh')
         old_order_id = request.form.get('old_order_id')
+        raw_table_number = request.form.get('table_number')
+
+        if not cart_json or cart_json == '[]': 
+            return "Empty Cart", 400
+
+        # --- C. 嚴格模式判定 (Strict Mode Logic) ---
+        # 這裡不進行自動推斷，完全依賴 order_type_override
         
-        # 決定訂單類型
-        order_type = order_type_override if order_type_override else request.form.get('order_type', 'dine_in')
+        is_delivery_mode = (order_type_override == 'delivery')
         
-        # --- C. 處理外送資訊 ---
-        # 只有在非強制內用模式下，才去讀取 Session 的外送資料
-        # 這能防止「內用模式」誤讀到「外送模式」留下的 Session
-        sess_data = {}
-        sess_info = {}
+        # 初始化變數
+        order_type = 'dine_in' # 預設
+        delivery_fee = 0
+        delivery_info_json_str = None
+        table_number = ''
         
-        if order_type_override != 'dine_in':
+        # 客戶資訊變數
+        customer_name = ''
+        customer_phone = ''
+        customer_address = ''
+        scheduled_for = ''
+        
+        if is_delivery_mode:
+            # ==============================
+            # 模式一：外送 (Delivery)
+            # ==============================
+            if not delivery_enabled:
+                 return "Delivery Service is currently disabled / 外送服務目前關閉中", 403
+
+            # 讀取 Session 與表單
             sess_data = session.get('delivery_data', {})
             sess_info = session.get('delivery_info', {})
-
-        customer_name = request.form.get('customer_name') or request.form.get('name') or sess_data.get('name') or ''
-        customer_phone = request.form.get('customer_phone') or request.form.get('phone') or sess_data.get('phone') or ''
-        customer_address = request.form.get('delivery_address') or request.form.get('address') or sess_data.get('address') or ''
-        note = request.form.get('delivery_note') or request.form.get('note') or sess_data.get('note') or ''
-        scheduled_for = request.form.get('scheduled_for') or sess_data.get('scheduled_for') or ''
-        
-        delivery_info_json_str = None
-        delivery_fee = 0
-        
-        should_process_as_delivery = False
-        
-        # 【關鍵修正】：如果強制指定為 dine_in，絕對不允許變成外送
-        if order_type_override == 'dine_in':
-            should_process_as_delivery = False
-            # 強制清空可能誤填的地址，確保後續邏輯正確
-            customer_address = '' 
-        else:
-            # 原有的判斷邏輯
-            if order_type == 'delivery':
-                should_process_as_delivery = True
-            elif (customer_address and len(customer_address) > 2):
-                should_process_as_delivery = True
-
-        # 如果判定為外送，但後台關閉外送 -> 阻擋
-        if should_process_as_delivery and not delivery_enabled:
-             return "Delivery Service is currently disabled / 外送服務目前關閉中", 403
-
-        if should_process_as_delivery:
-            order_type = 'delivery'
             
-            # 運費計算
+            customer_name = request.form.get('customer_name') or request.form.get('name') or sess_data.get('name') or ''
+            customer_phone = request.form.get('customer_phone') or request.form.get('phone') or sess_data.get('phone') or ''
+            customer_address = request.form.get('delivery_address') or request.form.get('address') or sess_data.get('address') or ''
+            note = request.form.get('delivery_note') or request.form.get('note') or sess_data.get('note') or ''
+            scheduled_for = request.form.get('scheduled_for') or sess_data.get('scheduled_for') or ''
+            
+            # 計算運費
             sess_fee = sess_info.get('shipping_fee')
             form_fee = request.form.get('delivery_fee')
-            
             if sess_fee is not None:
                 delivery_fee = int(float(sess_fee))
             elif form_fee:
                 delivery_fee = int(float(form_fee))
-            else:
-                delivery_fee = 0
-
+            
+            # 建立外送資訊 JSON
             delivery_info_dict = {
                 'name': customer_name,
                 'phone': customer_phone,
@@ -158,19 +150,28 @@ def process_order_submission(request, order_type_override=None):
                 'shipping_fee': delivery_fee
             }
             delivery_info_json_str = json.dumps(delivery_info_dict, ensure_ascii=False)
+            
+            order_type = 'delivery'
             table_number = "外送"
+
         else:
-            # 內用 / 外帶
-            delivery_fee = 0
+            # ==============================
+            # 模式二：內用/外帶 (Dine-in / Takeout)
+            # ==============================
+            # 強制忽略所有外送相關的 Session 與表單地址
+            # 只處理內用/外帶邏輯
+            
             if raw_table_number and raw_table_number.strip():
                 table_number = raw_table_number
                 order_type = 'dine_in'
             else:
                 table_number = "外帶"
                 order_type = 'takeout'
-
-        if not cart_json or cart_json == '[]': 
-            return "Empty Cart", 400
+            
+            # 確保外送相關欄位為空
+            customer_address = ''
+            delivery_fee = 0
+            delivery_info_json_str = None
 
         # --- D. 計算總金額與產生訂單內容 ---
         cart_items = json.loads(cart_json)
@@ -264,7 +265,7 @@ def index():
     shop_open = settings.get('shop_open', '1') == '1'
     delivery_enabled = settings.get('delivery_enabled', '1') == '1'
 
-    # 清除外送 Session，確保狀態重置
+    # 強制清除 Session
     session.pop('delivery_data', None)
     session.pop('delivery_info', None)
     
@@ -277,12 +278,11 @@ def index():
 # --- 內用/外帶 路由 ---
 @menu_bp.route('/menu', methods=['GET', 'POST'])
 def menu():
-    # 提交訂單
+    # 提交訂單：嚴格指定 'dine_in' 模式，這會觸發 process_order_submission 的嚴格過濾
     if request.method == 'POST':
         return process_order_submission(request, order_type_override='dine_in')
 
-    # 【關鍵修正】：進入內用選單 (GET) 時，確保清除外送 Session
-    # 這防止了 "Sticky Session" 導致前端或後端誤判為外送模式
+    # GET 請求時：預防性清除外送 Session
     if 'delivery_data' in session: session.pop('delivery_data', None)
     if 'delivery_info' in session: session.pop('delivery_info', None)
 
@@ -320,13 +320,12 @@ def menu():
 # --- 外送 專用路由 ---
 @menu_bp.route('/delivery', methods=['GET', 'POST'])
 def delivery_menu():
-    # 提交訂單
+    # 提交訂單：嚴格指定 'delivery' 模式
     if request.method == 'POST':
         return process_order_submission(request, order_type_override='delivery')
     
     settings, products = get_menu_data()
     
-    # 檢查外送功能是否開啟
     if settings.get('delivery_enabled', '1') != '1':
         return redirect(url_for('menu.index'))
 
@@ -334,7 +333,6 @@ def delivery_menu():
     t_all = load_translations()
     t = t_all.get(display_lang, t_all['zh'])
     
-    # 讀取 Session 中的資料
     session_delivery = session.get('delivery_data', {})
     
     return render_template('menu.html', 
