@@ -121,17 +121,14 @@
         {# --- 這裡對應 database.py 的 orders 表 table_number 欄位 --- #}
         <input type="hidden" name="table_number" id="tbl_input">
         
-        {# --- 外送資料欄位 (關鍵修正區) --- #}
+        {# --- 外送資料欄位 --- #}
         <input type="hidden" name="order_type" value="{{ 'delivery' if is_delivery_mode else 'dine_in' }}">
         
-        {# 修正：name 必須與 Python request.form.get() 內的字串完全一致 #}
         <input type="hidden" name="customer_name" value="{{ session_delivery.get('name', '') }}">
         <input type="hidden" name="customer_phone" value="{{ session_delivery.get('phone', '') }}">
         
-        {# 修正：Python 使用 'delivery_address' 來抓取地址 #}
         <input type="hidden" name="delivery_address" value="{{ session_delivery.get('address', '') }}">
         
-        {# 修正：新增備註欄位 (從 session 抓取) #}
         <input type="hidden" name="delivery_note" value="{{ session_delivery.get('note', '') }}">
         
         <input type="hidden" name="scheduled_for" value="{{ session_delivery.get('scheduled_for', '') }}">
@@ -179,9 +176,11 @@
     const PRELOAD_CART = {{ preload_cart | safe }};
     const CUR_LANG = "{{ display_lang }}";
     
-    // JS 這裡也改為使用變數判定
+    // --- JS 使用變數判定 (含低消) ---
     const IS_DELIVERY = {{ 'true' if is_delivery_mode else 'false' }};
     const DELIVERY_FEE = {{ session.get('delivery_info', {}).get('shipping_fee', 0) }};
+    // ★ 新增：從 session 讀取最低消費設定，若無則預設 500 ★
+    const DELIVERY_MIN = {{ session.get('delivery_info', {}).get('min_price', 500) }};
 
     let C = [], cur = null, selectedOptIndices = [], addP = 0, editIndex = -1;
 
@@ -401,11 +400,11 @@
     }
 
     function sub() {
-        // --- 1. 外送低消檢查 ---
+        // --- 1. 外送低消檢查 (已修正：使用 DELIVERY_MIN 變數) ---
         if (IS_DELIVERY) {
             let foodTotal = C.reduce((a, b) => a + (b.unit_price * b.qty), 0);
-            if (foodTotal < 1000) {
-                alert("⚠️ 外送訂單金額未滿 $1000 元 (不含運費)\n請再加點商品。\n\nMinimum order for delivery is $1000.");
+            if (foodTotal < DELIVERY_MIN) {
+                alert(`⚠️ 外送訂單金額未滿 $${DELIVERY_MIN} 元 (不含運費)\n請再加點商品。\n\nMinimum order for delivery is $${DELIVERY_MIN}.`);
                 return; 
             }
         }
