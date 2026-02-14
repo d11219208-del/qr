@@ -35,7 +35,7 @@
         /* --- 容器樣式 --- */
         .main-container {
             width: 100%;
-            max-width: 500px; /* 稍微放寬以容納網格 */
+            max-width: 500px;
             display: flex;
             flex-direction: column;
             gap: 20px;
@@ -148,8 +148,18 @@
         {# --- 判斷全店營業狀態 (shop_open) --- #}
         {% if shop_open %}
             
-            {# 設定桌號參數變數 (供內用使用) #}
+            {# =================================================== #}
+            {#  關鍵修改邏輯：設定內用與外帶的 table 參數字串         #}
+            {# =================================================== #}
+            
+            {# 1. 內用參數: 如果有 table_num 則帶入 &table=4桌 #}
             {% set table_param = "&table=" + table_num if table_num else "" %}
+
+            {# 2. 外帶參數: #}
+            {#    如果有 table_num (例如4桌)，則組合為 "&table=外帶4桌" #}
+            {#    如果沒有 table_num，則維持單純的 "&table=外帶" #}
+            {% set takeout_param = "&table=外帶" + table_num if table_num else "&table=外帶" %}
+
 
             <div class="order-section">
                 <div class="section-title dine-in-title">🏠 內用 (Dine In)</div>
@@ -167,14 +177,20 @@
 
             <div class="order-section">
                 <div class="section-title takeout-title">👜 外帶 (Takeout)</div>
-                <div class="table-hint">Takeout Order</div>
+                
+                {# 顯示提示文字，讓使用者知道現在是用什麼身份外帶 #}
+                {% if table_num %}
+                    <div class="table-hint">外帶 (桌號: {{ table_num }})</div>
+                {% else %}
+                    <div class="table-hint">Takeout Order</div>
+                {% endif %}
 
-                {# 這裡強制將 table 設為 "外帶" #}
+                {# 使用上面定義好的 takeout_param 變數 #}
                 <div class="lang-grid">
-                    <a href="/menu?lang=zh&table=外帶" class="btn-lang zh">中文</a>
-                    <a href="/menu?lang=en&table=外帶" class="btn-lang en">English</a>
-                    <a href="/menu?lang=jp&table=外帶" class="btn-lang jp">日本語</a>
-                    <a href="/menu?lang=kr&table=外帶" class="btn-lang kr">한국어</a>
+                    <a href="/menu?lang=zh{{ takeout_param }}" class="btn-lang zh">中文</a>
+                    <a href="/menu?lang=en{{ takeout_param }}" class="btn-lang en">English</a>
+                    <a href="/menu?lang=jp{{ takeout_param }}" class="btn-lang jp">日本語</a>
+                    <a href="/menu?lang=kr{{ takeout_param }}" class="btn-lang kr">한국어</a>
                 </div>
             </div>
 
