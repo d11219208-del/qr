@@ -45,10 +45,9 @@ def get_menu_data():
 def process_order_submission(request, order_type_override=None):
     display_lang = request.form.get('lang_input', 'zh')
     
-    # ★ Debug: 印出所有接收到的表單資料 (請查看終端機)
+    # ★ Debug: 印出所有接收到的表單資料
     print("--- DEBUG: Form Data Received ---")
-    # print(request.form) # 如果資料太多可註解掉
-    print(f"Type: {request.form.get('order_type')}, Name: {request.form.get('customer_name')}, Phone: {request.form.get('customer_phone')}")
+    print(f"Type: {request.form.get('order_type')}, Name: {request.form.get('customer_name')}")
     print("---------------------------------")
 
     conn = get_db_connection()
@@ -56,6 +55,12 @@ def process_order_submission(request, order_type_override=None):
     cur = conn.cursor()
 
     try:
+        # 0. 【新增】檢查店鋪是否營業
+        cur.execute("SELECT value FROM settings WHERE key='shop_open'")
+        shop_status = cur.fetchone()
+        if shop_status and shop_status[0] == '0':
+            return "Shop is Closed / 本店休息中", 403
+
         # 1. 基本欄位
         raw_table_number = request.form.get('table_number')
         cart_json = request.form.get('cart_data')
@@ -66,44 +71,38 @@ def process_order_submission(request, order_type_override=None):
         # 2. 判斷訂單類型 (優先順序：覆寫值 > 表單值 > 預設 dine_in)
         order_type = order_type_override if order_type_override else request.form.get('order_type', 'dine_in')
         
-        # 3. ★ 強力抓取外送資訊 (無論訂單類型為何，先嘗試抓取所有可能的欄位名稱)
-        # 這是為了解決 HTML name 屬性可能是 'name' 或 'customer_name' 的問題
+        # 3. ★ 強力抓取外送資訊
         sess_data = session.get('delivery_data', {})
         sess_info = session.get('delivery_info', {})
 
-        # 姓名：嘗試抓取 'customer_name' 或 'name'
         customer_name = (
             request.form.get('customer_name') or 
             request.form.get('name') or 
             sess_data.get('name') or ''
         )
         
-        # 電話：嘗試抓取 'customer_phone' 或 'phone'
         customer_phone = (
             request.form.get('customer_phone') or 
             request.form.get('phone') or 
             sess_data.get('phone') or ''
         )
         
-        # 地址：嘗試抓取 'delivery_address' 或 'address'
         customer_address = (
             request.form.get('delivery_address') or 
             request.form.get('address') or 
             sess_data.get('address') or ''
         )
 
-        # 備註與時間
         note = request.form.get('delivery_note') or request.form.get('note') or sess_data.get('note') or sess_info.get('note') or ''
         scheduled_for = request.form.get('scheduled_for') or sess_data.get('scheduled_for') or ''
         
-        # 初始化外送相關變數
         delivery_info_json_str = None
         delivery_fee = 0
         
         # --- 判斷邏輯 ---
         # 如果有填寫地址或選取外送，強制視為外送處理
         if order_type == 'delivery' or (customer_address and len(customer_address) > 2):
-            order_type = 'delivery' # 修正 order_type 確保寫入正確
+            order_type = 'delivery'
             
             # 運費處理
             sess_fee = sess_info.get('shipping_fee')
@@ -116,7 +115,7 @@ def process_order_submission(request, order_type_override=None):
             else:
                 delivery_fee = 0
 
-            # 建立完整的 delivery_info Dict (作為 JSON 備份)
+            # 建立完整的 delivery_info Dict
             delivery_info_dict = {
                 'name': customer_name,
                 'phone': customer_phone,
@@ -172,8 +171,6 @@ def process_order_submission(request, order_type_override=None):
         # --- DB Transaction ---
         cur.execute("LOCK TABLE orders IN SHARE ROW EXCLUSIVE MODE")
 
-        # 這裡的寫入非常重要，確保 customer_name 等欄位有被寫入
-        # 使用 %s 參數化查詢防止 SQL Injection，同時處理 None 值
         cur.execute("""
             INSERT INTO orders (
                 table_number, items, total_price, lang, 
@@ -219,11 +216,30 @@ def process_order_submission(request, order_type_override=None):
         cur.close()
         conn.close()
 
-# --- 1. 首頁 ---
+# --- 1. 首頁 (修正版：讀取設定並傳給 HTML) ---
 @menu_bp.route('/')
 def index():
     table_num = request.args.get('table', '')
-    return render_template('index.html', table_num=table_num)
+    
+    # 讀取設定 (shop_open, delivery_enabled)
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT key, value FROM settings WHERE key IN ('shop_open', 'delivery_enabled')")
+    settings = dict(cur.fetchall())
+    conn.close()
+    
+    # 轉換為 boolean
+    shop_open = settings.get('shop_open', '1') == '1'
+    delivery_enabled = settings.get('delivery_enabled', '1') == '1'
+
+    # 清除舊 session，避免狀態混亂
+    if 'delivery_data' in session: session.pop('delivery_data', None)
+    if 'delivery_info' in session: session.pop('delivery_info', None)
+    
+    return render_template('index.html', 
+                           table_num=table_num, 
+                           shop_open=shop_open, 
+                           delivery_enabled=delivery_enabled)
 
 # --- 2. 內用/外帶 專用路由 ---
 @menu_bp.route('/menu', methods=['GET', 'POST'])
@@ -265,13 +281,18 @@ def menu():
 def delivery_menu():
     if request.method == 'POST':
         return process_order_submission(request, order_type_override='delivery')
+    
+    # 檢查外送設定
+    settings, products = get_menu_data()
+    
+    # 如果後台關閉了外送功能，將使用者導回首頁
+    if settings.get('delivery_enabled', '1') != '1':
+        return redirect(url_for('menu.index'))
 
     display_lang = request.args.get('lang', 'zh')
     t_all = load_translations()
     t = t_all.get(display_lang, t_all['zh'])
     
-    settings, products = get_menu_data()
-
     # 讀取 Session 中的資料，確保傳給 HTML
     session_delivery = session.get('delivery_data', {})
     
@@ -283,7 +304,7 @@ def delivery_menu():
                            is_delivery_mode=True,
                            session_delivery=session_delivery)
 
-# --- 4. 下單成功頁面 (修正版) ---
+# --- 4. 下單成功頁面 ---
 @menu_bp.route('/success')
 def order_success():
     oid = request.args.get('order_id')
@@ -294,8 +315,7 @@ def order_success():
     conn = get_db_connection()
     cur = conn.cursor()
     
-    # 【關鍵修正】讀取資料庫的真實欄位
-    # 對應 database.py 中定義的 columns
+    # 讀取資料庫
     cur.execute("""
         SELECT daily_seq, content_json, total_price, created_at, 
                order_type, delivery_info, delivery_fee,
@@ -308,16 +328,15 @@ def order_success():
     
     if not row: return "Order Not Found", 404
     
-    # 解構資料 (順序必須與 SQL SELECT 一致)
+    # 解構資料
     seq, json_str, total, created_at, order_type, delivery_info_json, delivery_fee, c_name, c_phone, c_addr, c_time, table_num_db = row
     
-    # 1. 判斷是否為外送
+    # 判斷是否為外送
     type_is_delivery = (str(order_type or '').strip().lower() == 'delivery')
     table_is_delivery = (str(table_num_db or '').strip() == '外送')
     is_delivery = type_is_delivery or table_is_delivery
     
-    # 2. 處理外送資訊 (Fallback 機制)
-    # 如果 DB 實體欄位 (c_name 等) 有值，優先使用；否則嘗試解析 JSON
+    # 處理外送資訊
     delivery_info_dict = {}
     if delivery_info_json:
         try:
@@ -330,18 +349,16 @@ def order_success():
     d_addr = c_addr if c_addr else delivery_info_dict.get('address', 'N/A')
     d_note = delivery_info_dict.get('note', '')
     
-    # 時間處理：優先使用 DB 欄位 scheduled_for
     d_scheduled = ""
     if c_time:
         d_scheduled = str(c_time)
     elif delivery_info_dict.get('scheduled_for'):
         d_scheduled = str(delivery_info_dict.get('scheduled_for'))
         
-    # 美化時間字串 (去掉秒數)
     if d_scheduled and len(d_scheduled) > 16:
         d_scheduled = d_scheduled[:16]
 
-    # 4. 生成商品列表 HTML
+    # 生成商品列表 HTML
     items = json.loads(json_str) if json_str else []
     items_html = ""
     
@@ -362,7 +379,7 @@ def order_success():
         </div>
         """
     
-    # 5. 生成外送資訊區塊 HTML
+    # 生成外送資訊區塊 HTML
     delivery_html = ""
     fee_row_html = ""
     
@@ -370,7 +387,6 @@ def order_success():
     wait_msg = ""
 
     if is_delivery:
-        # 顯示外送費行
         fee_label = "Delivery Fee" if lang == 'en' else "運費"
         fee_row_html = f"""
         <div style='display:flex; justify-content:space-between; align-items: center; border-bottom:2px solid #333; padding:15px 0; color:#007bff;'>
@@ -396,7 +412,6 @@ def order_success():
         status_msg = "Order Received / 訂單已收到"
         wait_msg = "Please wait for confirmation call.<br>請留意電話，我們將與您確認餐點與外送時間。"
     else:
-        # 內用/外帶訊息
         status_msg = t.get('pay_at_counter', '請至櫃檯結帳')
         wait_msg = t.get('kitchen_prep', 'Kitchen is preparing your meal.')
 
@@ -460,4 +475,3 @@ def order_success():
     </body>
     </html>
     """
-
