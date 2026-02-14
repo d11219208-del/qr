@@ -125,11 +125,13 @@ def admin_panel():
             config[key] = 1 if val == '1' else 0
 
         # 【關鍵修正 2】確保 enable_delivery 與 delivery_enabled 狀態一致
+        # 若資料庫只存了其中一個，另一個也要有值，避免前端判斷錯誤
         if 'enable_delivery' not in config:
             config['enable_delivery'] = config.get('delivery_enabled', 0)
         
-        # 確保外送費相關參數若不存在則給予預設顯示 (避免前端空白)
-        config.setdefault('delivery_min_price', '500')
+        # 【關鍵修正 3】外送參數預設值
+        # 這些 setdefault 確保如果資料庫是空的，前端 input 會有預設值顯示
+        config.setdefault('delivery_min_price', '0')
         config.setdefault('delivery_fee_base', '0')
         config.setdefault('delivery_max_km', '5')
         config.setdefault('delivery_fee_per_km', '10')
@@ -148,8 +150,51 @@ def admin_panel():
 
 
 # ==========================================
-# [關鍵修正] 通用設定切換路由 (修復連線錯誤)
-# 用於切換 'shop_open' 或 'enable_delivery'
+# [關鍵] 外送詳細設定 (表單提交)
+# 這裡負責寫入：最低消費、基本運費、最大距離、每公里加價
+# ==========================================
+@admin_bp.route('/settings/delivery', methods=['POST'])
+def update_delivery_settings():
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        # 1. 處理 Checkbox 狀態 (HTML checkbox 沒勾選時不會送出值，需手動轉 '0')
+        is_enabled = '1' if request.form.get('delivery_enabled') else '0'
+
+        # 2. 準備寫入資料庫的字典
+        # 使用 'or' 運算符：如果前端傳來空字串，給予預設值，防止資料庫錯誤
+        settings_to_update = {
+            'delivery_enabled': is_enabled,
+            'enable_delivery': is_enabled,  # 同步更新兩個 Key，避免邏輯衝突
+            'delivery_min_price': request.form.get('delivery_min_price') or '0',
+            'delivery_fee_base': request.form.get('delivery_fee_base') or '0',
+            'delivery_max_km': request.form.get('delivery_max_km') or '5',
+            'delivery_fee_per_km': request.form.get('delivery_fee_per_km') or '10'
+        }
+
+        # 3. 執行 SQL Upsert (若 Key 存在則更新，不存在則插入)
+        for key, val in settings_to_update.items():
+            cur.execute("""
+                INSERT INTO settings (key, value) 
+                VALUES (%s, %s) 
+                ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+            """, (key, str(val)))
+        
+        conn.commit()
+        msg = "✅ 外送設定已更新 (含運費規則)"
+    except Exception as e:
+        conn.rollback()
+        msg = f"❌ 設定更新失敗: {e}"
+        traceback.print_exc()
+    finally:
+        cur.close(); conn.close()
+
+    return redirect(url_for('admin.admin_panel', msg=msg))
+
+
+# ==========================================
+# [關鍵修正] 通用設定切換路由 (AJAX)
+# 用於快速切換 'shop_open' 或 'enable_delivery'
 # ==========================================
 @admin_bp.route('/toggle_config', methods=['POST'])
 def toggle_config():
@@ -202,48 +247,6 @@ def toggle_config():
     finally:
         cur.close()
         conn.close()
-
-
-# ==========================================
-# 外送詳細設定 (表單提交) - 這裡實作覆寫 database.py 預設值的邏輯
-# ==========================================
-@admin_bp.route('/settings/delivery', methods=['POST'])
-def update_delivery_settings():
-    conn = get_db_connection()
-    cur = conn.cursor()
-    try:
-        # 1. 處理 Checkbox 狀態
-        is_enabled = '1' if request.form.get('delivery_enabled') else '0'
-
-        # 2. 準備寫入資料庫
-        # 這裡的邏輯會將 database.py 設定的初始值「覆蓋」為管理者輸入的數值
-        # 使用 'or' 運算符確保如果前端傳來空字串，會有合理的預設值 (字串格式)
-        settings = {
-            'delivery_enabled': is_enabled,
-            'enable_delivery': is_enabled,  # 同步更新
-            'delivery_min_price': request.form.get('delivery_min_price') or '0',
-            'delivery_fee_base': request.form.get('delivery_fee_base') or '0',
-            'delivery_max_km': request.form.get('delivery_max_km') or '5',
-            'delivery_fee_per_km': request.form.get('delivery_fee_per_km') or '10'
-        }
-
-        for key, val in settings.items():
-            if val is not None:
-                cur.execute("""
-                    INSERT INTO settings (key, value) 
-                    VALUES (%s, %s) 
-                    ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
-                """, (key, str(val)))
-        
-        conn.commit()
-        msg = "✅ 外送設定已更新"
-    except Exception as e:
-        conn.rollback()
-        msg = f"❌ 設定更新失敗: {e}"
-    finally:
-        cur.close(); conn.close()
-
-    return redirect(url_for('admin.admin_panel', msg=msg))
 
 
 # ==========================================
