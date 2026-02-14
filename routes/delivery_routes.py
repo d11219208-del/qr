@@ -5,7 +5,7 @@ from geopy.exc import GeocoderTimedOut, GeocoderUnavailable, GeocoderServiceErro
 from haversine import haversine, Unit
 from database import get_db_connection
 import re
-import random  # 新增：用於生成隨機 User-Agent
+import random
 
 delivery_bp = Blueprint('delivery', __name__)
 
@@ -13,18 +13,27 @@ delivery_bp = Blueprint('delivery', __name__)
 RESTAURANT_COORDS = (25.054358, 121.543468)
 
 def get_delivery_settings():
+    """
+    從資料庫讀取外送設定
+    確保欄位名稱與 database.py 的設定 (settings 表) 完全一致
+    """
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute("SELECT key, value FROM settings")
     rows = cur.fetchall()
     conn.close()
+    
+    # 將資料轉為字典，例如: {'delivery_fee_base': '0', 'delivery_max_km': '5', ...}
     s = {row[0]: row[1] for row in rows}
+    
     return {
         'enabled': s.get('delivery_enabled', '1') == '1',
         'min_price': int(s.get('delivery_min_price', 500)),
-        'max_km': float(s.get('delivery_max_km', 5.0)),
-        'base_fee': int(s.get('delivery_base_fee', 30)),
-        'fee_per_km': int(s.get('delivery_fee_per_km', 10))
+        
+        # --- 修正處：確保這裡讀取的是 database.py 定義的鍵名 ---
+        'max_km': float(s.get('delivery_max_km', 5.0)),          # 最大距離
+        'base_fee': int(s.get('delivery_fee_base', 0)),          # 基礎運費 (對應 DB 的 delivery_fee_base)
+        'fee_per_km': int(s.get('delivery_fee_per_km', 10))      # 每公里加價
     }
 
 def normalize_address(addr):
@@ -61,6 +70,7 @@ def generate_time_slots(base_date):
     
     while current_dt <= end_dt:
         t = current_dt.time()
+        # 如果是「今天」，過濾掉已經過去的時間 (保留30分鐘緩衝)
         if base_date == now_tw.date() and current_dt < (now_tw + timedelta(minutes=30)):
             current_dt += timedelta(minutes=30)
             continue
@@ -113,23 +123,21 @@ def check_address():
     if not raw_address or not name or not phone or not delivery_date or not delivery_time:
         return jsonify({'success': False, 'msg': '請填寫完整資訊 (含日期與時間)'})
     
-    # ★ 修正重點 1：使用隨機 User-Agent 避免被 509 封鎖 ★
-    # 加入隨機數讓每次請求看起來都不一樣
+    # 隨機 User-Agent 避免封鎖
     ua_string = f"mbdv_delivery_app_user_{random.randint(10000, 99999)}"
     geolocator = Nominatim(user_agent=ua_string)
     
     location = None
     fallback_level = 0
-    settings = get_delivery_settings()
+    settings = get_delivery_settings() # 這裡會取得正確的 DB 設定
 
-    # 組合預約時間
     scheduled_for = f"{delivery_date} {delivery_time}"
 
     try:
         # --- 第一層：標準清洗 ---
         search_addr = normalize_address(raw_address)
         query = f"台灣 {search_addr}"
-        location = geolocator.geocode(query, timeout=5) # 縮短 timeout 避免卡太久
+        location = geolocator.geocode(query, timeout=5)
         
         # --- 第二層：去連字號 ---
         if not location:
@@ -148,24 +156,25 @@ def check_address():
                 location = geolocator.geocode(f"台灣 {road_only}", timeout=5)
                 fallback_level = 2
 
-        # --- 判斷結果 (成功定位) ---
+        # --- 判斷結果 ---
         if location:
             user_coords = (location.latitude, location.longitude)
             dist = haversine(RESTAURANT_COORDS, user_coords, unit=Unit.KILOMETERS)
             
+            # 使用從 DB 讀取的 max_km
             if dist > settings['max_km']:
                 return jsonify({
                     'success': False, 
                     'msg': f'超出外送範圍 (距離 {dist:.1f}km, 目前限制 {settings["max_km"]}km)'
                 })
 
+            # 計算運費：基本費 (從 DB delivery_fee_base 讀來) + (距離 * 每公里費率)
             shipping_fee = settings['base_fee'] + int(dist * settings['fee_per_km'])
             
             note = ""
             if fallback_level == 2:
                 note = "(以路段中心估算)"
 
-            # 存入 Session (正常模式)
             session['delivery_data'] = {
                 'name': name,
                 'phone': phone,
@@ -185,18 +194,15 @@ def check_address():
             return jsonify({'success': True, 'redirect': url_for('menu.menu', lang='zh')})
 
         else:
-            # 真的找不到地址 (非連線錯誤，而是查無此地)
             return jsonify({
                 'success': False, 
                 'msg': '找不到此地址，請確認路名是否正確。'
             })
 
-    # ★ 修正重點 2：捕捉 509 及網路錯誤，允許進入「人工確認模式」 ★
     except Exception as e:
         print(f"Geo Error (切換至人工模式): {e}")
         
-        # 即使地圖掛了，也讓客人下單！
-        # 設定距離為 0，運費設為基本費 (或 0)，並加上備註
+        # 發生錯誤時，運費暫時設為基本費
         session['delivery_data'] = {
             'name': name,
             'phone': phone,
@@ -206,18 +212,17 @@ def check_address():
         
         session['delivery_info'] = {
             'is_delivery': True,
-            'distance_km': 0,      # 無法計算
-            'shipping_fee': settings['base_fee'], # 先收基本費，或設為 0
+            'distance_km': 0,
+            'shipping_fee': settings['base_fee'], # 使用 DB 設定的基礎運費
             'min_price': settings['min_price'],
-            'note': "⚠️ 地圖連線忙碌，運費僅為預估，將由專人電話確認" # 重要提示
+            'note': "⚠️ 地圖連線忙碌，運費僅為預估，將由專人電話確認"
         }
         
         session['table_num'] = '外送'
         session.modified = True
         
-        # 回傳成功，讓前端跳轉
         return jsonify({
             'success': True, 
             'redirect': url_for('menu.menu', lang='zh'),
-            'msg': '地圖連線忙碌，將轉為人工確認模式' # 這裡的 msg 前端可能不會顯示，因為直接 redirect 了
+            'msg': '地圖連線忙碌，將轉為人工確認模式'
         })
