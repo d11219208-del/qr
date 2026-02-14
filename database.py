@@ -85,7 +85,7 @@ def init_db():
             ('delivery_enabled', '1'),                 # 是否啟用外送功能 (後端用)
             ('enable_delivery', '1'),                  # 前端按鈕可能使用的 key (保持相容)
             ('delivery_min_price', '500'),             # 外送起送價
-            ('delivery_fee_base', '60'),               # 基礎外送費
+            ('delivery_fee_base', '0'),                # 基礎外送費
             ('delivery_max_km', '5'),                  # 最大外送距離 (公里)
             ('delivery_fee_per_km', '10')              # 超過基礎距離後的每公里加價
         ]
@@ -152,3 +152,4 @@ def init_db():
 if __name__ == "__main__":
     # 當直接執行此 .py 檔案時，啟動初始化程序
     init_db()
+
