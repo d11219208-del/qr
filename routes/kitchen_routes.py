@@ -236,7 +236,7 @@ def check_new_orders():
         return jsonify({'html': f"載入錯誤: {str(e)}", 'max_seq': 0, 'new_ids': []})
 
 
-# --- 3. 核心列印路由 ---
+# --- 3. 核心列印路由 (已優化速度) ---
 @kitchen_bp.route('/print_order/<int:oid>')
 def print_order(oid):
     try:
@@ -475,6 +475,7 @@ def print_order(oid):
             f"S.jobName=Order_{seq}_{print_type};S.editor=false;end;"
         )
 
+        # 優化後的 JavaScript：針對 Kiosk 模式加速
         final_html = f"""
         <!DOCTYPE html>
         <html>
@@ -484,15 +485,28 @@ def print_order(oid):
             <script>
                 document.addEventListener("DOMContentLoaded", function() {{
                     var userAgent = navigator.userAgent || navigator.vendor || window.opera;
+                    
                     if (/android/i.test(userAgent)) {{
+                        // Android 手機 (RawBT)
                         var msg = document.createElement('div');
                         msg.innerHTML = '<h2 style="text-align:center;color:green;margin-top:20px;">🖨️ 正在傳送至出單機...</h2>';
                         document.body.appendChild(msg);
                         window.location.href = "{intent_url}";
                         setTimeout(function() {{ if(window.opener) window.close(); }}, 2000);
+                    
                     }} else {{
-                        setTimeout(function() {{ window.print(); }}, 200);
-                        window.onafterprint = function() {{ if(window.opener) window.close(); }};
+                        // PC / Chrome Kiosk 模式加速版
+                        // 1. 立即呼叫列印 (Kiosk 模式下不跳視窗)
+                        window.print();
+                        
+                        // 2. Fire-and-forget 策略：
+                        // 在 Kiosk 模式下，指令送出非常快，不需要等待 onafterprint (該事件常有延遲)
+                        // 設定 10ms 緩衝後直接關閉，體驗會像"閃一下"就沒了
+                        if(window.opener) {{
+                            setTimeout(function() {{
+                                window.close();
+                            }}, 10); 
+                        }}
                     }}
                 }});
             </script>
