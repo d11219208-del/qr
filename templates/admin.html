@@ -90,10 +90,19 @@
                     <div class="column"><label>發件人 Email</label><input type="email" name="sender_email" value="{{ config.get('sender_email','') }}" placeholder="需與 Resend 驗證網域一致"></div>
                     <div class="column"><label>Resend API Key</label><input type="password" name="resend_api_key" value="{{ config.get('resend_api_key','') }}" placeholder="re_..."></div>
                 </div>
+                
                 <div class="row">
-                    <div class="column column-33">
-                        <label>💰 外送運費 (Delivery Fee)</label>
-                        <input type="number" name="delivery_fee" value="{{ config.get('delivery_fee', 0) }}" placeholder="0" min="0">
+                    <div class="column">
+                        <label>💰 基礎運費 (Base Fee)</label>
+                        <input type="number" name="delivery_fee_base" value="{{ config.get('delivery_fee_base', 0) }}" placeholder="0" min="0">
+                    </div>
+                    <div class="column">
+                        <label>📏 最大距離 (Max KM)</label>
+                        <input type="number" name="delivery_max_km" value="{{ config.get('delivery_max_km', 5) }}" placeholder="5" min="0" step="0.1">
+                    </div>
+                    <div class="column">
+                        <label>➕ 每公里加價 (Fee/KM)</label>
+                        <input type="number" name="delivery_fee_per_km" value="{{ config.get('delivery_fee_per_km', 10) }}" placeholder="10" min="0">
                     </div>
                 </div>
 
