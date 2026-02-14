@@ -1,4 +1,3 @@
-templates/menu.html
 <!DOCTYPE html>
 <html lang="{{ display_lang }}">
 <head>
@@ -69,24 +68,8 @@ templates/menu.html
         
         <h2 style="margin:0 0 10px 0;">{{ texts['welcome'] }}</h2>
 
+        {# --- 這裡只保留狀態顯示 (置頂)，詳細卡片移出 --- #}
         {% if is_delivery_mode %}
-            {# --- 外送模式顯示卡片 --- #}
-            <div class="delivery-info-card">
-                <div class="di-row"><span class="di-icon">🛵</span> <b>外送訂單 (Delivery)</b></div>
-                <div class="di-row"><span class="di-icon">👤</span> {{ session_delivery.get('name', '貴賓') }} / {{ session_delivery.get('phone', '-') }}</div>
-                <div class="di-row"><span class="di-icon">📍</span> {{ session_delivery.get('address', '地址載入中') }}</div>
-                {# --- 顯示外送時間 --- #}
-                <div class="di-row"><span class="di-icon">🕒</span> 預約時間: {{ session_delivery.get('scheduled_for', '盡快送達') }}</div>
-                
-                <div class="di-fee">
-                    運費 Delivery Fee: ${{ session.get('delivery_info', {}).get('shipping_fee', 0) }}
-                    {% set d_note = session_delivery.get('note') or session.get('delivery_info', {}).get('note') %}
-                    {% if d_note %}
-                        <br><small style="color:#666;font-weight:normal;">註: {{ d_note }}</small>
-                    {% endif %}
-                </div>
-            </div>
-            
             {# --- 鎖定的外送桌號欄位 (唯讀) --- #}
             <div style="margin-bottom: 10px;">
                 <label style="font-weight:bold; color:#1565c0;">{{ texts['table_placeholder'] }}</label>
@@ -104,6 +87,27 @@ templates/menu.html
 
         <div class="cat-bar" id="cat-nav"></div>
     </div>
+
+    {# --- 修改：將外送資訊卡片移到 Header 之外，使其可以隨頁面捲動 --- #}
+    {% if is_delivery_mode %}
+    <div style="padding: 10px 12px 0 12px;">
+        <div class="delivery-info-card">
+            <div class="di-row"><span class="di-icon">🛵</span> <b>外送訂單 (Delivery)</b></div>
+            <div class="di-row"><span class="di-icon">👤</span> {{ session_delivery.get('name', '貴賓') }} / {{ session_delivery.get('phone', '-') }}</div>
+            <div class="di-row"><span class="di-icon">📍</span> {{ session_delivery.get('address', '地址載入中') }}</div>
+            {# --- 顯示外送時間 --- #}
+            <div class="di-row"><span class="di-icon">🕒</span> 預約時間: {{ session_delivery.get('scheduled_for', '盡快送達') }}</div>
+            
+            <div class="di-fee">
+                運費 Delivery Fee: ${{ session.get('delivery_info', {}).get('shipping_fee', 0) }}
+                {% set d_note = session_delivery.get('note') or session.get('delivery_info', {}).get('note') %}
+                {% if d_note %}
+                    <br><small style="color:#666;font-weight:normal;">註: {{ d_note }}</small>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+    {% endif %}
 
     <div id="list"></div>
 
