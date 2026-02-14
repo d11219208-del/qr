@@ -15,10 +15,15 @@ def get_menu_data():
     conn = get_db_connection()
     cur = conn.cursor()
     
-    # 讀取所有設定
+    # 讀取所有設定 (包含 shop_open, delivery_enabled, delivery_min_price 等)
     cur.execute("SELECT key, value FROM settings")
     settings_rows = cur.fetchall()
     settings = {row[0]: row[1] for row in settings_rows}
+    
+    # 【關鍵修改】確保 delivery_min_price 存在於設定中
+    # 這樣前端 menu.html 透過 config.delivery_min_price 讀取時才不會出錯或為空
+    if 'delivery_min_price' not in settings:
+        settings['delivery_min_price'] = '0'  # 若資料庫未設定，預設為 0
     
     # 讀取產品 (包含多語系欄位)
     cur.execute("""
