@@ -75,8 +75,9 @@
             font-size: 1.4em; /* 比語言按鈕稍小 */
             padding: 18px;
         }
+        /* Foodpanda 專用顏色 (桃紅色) */
         .panda {
-            background: linear-gradient(135deg, #D70F64, #C20D5A); /* Foodpanda Pink */
+            background: linear-gradient(135deg, #D70F64, #C20D5A); 
         }
 
         /* 休息中樣式 */
@@ -115,7 +116,7 @@
     </div>
 
     <div class="btn-container">
-        {# --- 判斷全店營業狀態 --- #}
+        {# --- 判斷全店營業狀態 (shop_open) --- #}
         {% if shop_open %}
             
             {# 使用 Jinja2 語法處理桌號參數 #}
@@ -128,17 +129,19 @@
 
             <div class="delivery-section">
                 {# --- 外送按鈕邏輯判斷 --- #}
+                
+                {# 情況 1: 啟用內建外送 (delivery_enabled 為 True) #}
                 {% if delivery_enabled %}
-                    {# 情況A: 全店營業 + 啟用內建外送 -> 導向內建外送頁面 #}
                     <a href="/delivery/setup" class="btn delivery">🛵 外送服務 (Delivery)</a>
+                
+                {# 情況 2: 關閉內建外送 (delivery_enabled 為 False) -> 顯示 Foodpanda #}
                 {% else %}
-                    {# 情況B: 全店營業 + 關閉內建外送 -> 導向 Foodpanda #}
-                    <a href="https://www.foodpanda.com.tw/restaurant/uf01/hong-xing-xiao-chi" target="_blank" class="btn delivery panda">🐼 Foodpanda 外送</a>
+                    <a href="https://www.foodpanda.com.tw/restaurant/uf01/hong-xing-xiao-chi-dian" target="_blank" class="btn delivery panda">🐼 Foodpanda 外送</a>
                 {% endif %}
             </div>
 
         {% else %}
-            {# --- 全店休息中 --- #}
+            {# --- 全店休息中 (shop_open 為 False) --- #}
             <div class="closed-notice">
                 😴 本店目前休息中<br>
                 <small style="font-size:0.6em; color:#999;">Shop Closed</small>
