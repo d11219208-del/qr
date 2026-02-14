@@ -41,6 +41,9 @@
         .prod-info { font-size: 0.85em; color: #777; margin-top: 4px; }
         .prod-name { font-size: 1.1em; font-weight: bold; color: #333; }
         
+        /* 分隔線與標題 */
+        .section-title { border-bottom: 2px solid #eee; padding-bottom: 10px; margin-bottom: 20px; color: var(--primary); font-weight: bold; }
+        
         @media (max-width: 600px) {
             table, thead, tbody, th, td, tr { display: block; }
             thead tr { position: absolute; top: -9999px; }
@@ -61,9 +64,8 @@
         {% endif %}
 
         <div class="card">
-            <h4>⚙️ 系統與通知設定</h4>
-            
-            <div class="row" style="border-bottom: 1px solid #eee; padding-bottom: 20px; margin-bottom: 20px;">
+            <h4 class="section-title">🚦 營業狀態控制</h4>
+            <div class="row">
                 <div class="column">
                     <label>🏪 全店營業狀態 (Shop Status)</label>
                     {% set shop_open = config.get('shop_open', 1) %}
@@ -75,48 +77,85 @@
                     <small style="color: #888; margin-left: 8px;">控制顧客端是否能進入點餐</small>
                 </div>
                 <div class="column">
-                    <label>🛵 外送功能 (Delivery Mode)</label>
+                    <label>🛵 外送功能總開關 (Master Switch)</label>
                     {% set delivery_on = config.get('enable_delivery', 0) %}
                     <button type="button" 
                             class="btn-sm {{ 'status-on' if delivery_on else 'status-off' }}"
                             onclick="toggleConfig('enable_delivery', this, '已開啟', '已關閉')">
                         {{ '已開啟' if delivery_on else '已關閉' }}
                     </button>
+                    <small style="color: #888; margin-left: 8px;">快速切換外送接單</small>
                 </div>
             </div>
-            <form method="POST">
-                <div class="row">
-                    <div class="column"><label>收件 Email</label><input type="email" name="report_email" value="{{ config.get('report_email','') }}" placeholder="接收日結單"></div>
-                    <div class="column"><label>發件人 Email</label><input type="email" name="sender_email" value="{{ config.get('sender_email','') }}" placeholder="需與 Resend 驗證網域一致"></div>
-                    <div class="column"><label>Resend API Key</label><input type="password" name="resend_api_key" value="{{ config.get('resend_api_key','') }}" placeholder="re_..."></div>
-                </div>
-                
-                <div class="row">
-                    <div class="column">
-                        <label>💰 基礎運費 (Base Fee)</label>
-                        <input type="number" name="delivery_fee_base" value="{{ config.get('delivery_fee_base', 0) }}" placeholder="0" min="0">
-                    </div>
-                    <div class="column">
-                        <label>📏 最大距離 (Max KM)</label>
-                        <input type="number" name="delivery_max_km" value="{{ config.get('delivery_max_km', 5) }}" placeholder="5" min="0" step="0.1">
-                    </div>
-                    <div class="column">
-                        <label>➕ 每公里加價 (Fee/KM)</label>
-                        <input type="number" name="delivery_fee_per_km" value="{{ config.get('delivery_fee_per_km', 10) }}" placeholder="10" min="0">
-                    </div>
-                </div>
+        </div>
 
-                <div style="margin-top: 10px;">
-                    <button type="submit" name="action" value="save_settings">💾 儲存所有設定</button>
-                    <button type="submit" name="action" value="test_email" class="button button-outline">🧪 測試連線</button>
-                    <button type="submit" name="action" value="send_report_now" class="button button-outline" style="float: right;">📊 立即補發今日報表</button>
+        <div class="row">
+            <div class="column column-50">
+                <div class="card" style="height: 100%;">
+                    <h4 class="section-title">📧 郵件與系統設定</h4>
+                    <form method="POST" action="{{ url_for('admin.admin_panel') }}">
+                        <label>收件 Email (接收日結單)</label>
+                        <input type="email" name="report_email" value="{{ config.get('report_email','') }}">
+                        
+                        <label>發件人 Email (需與 Resend 一致)</label>
+                        <input type="email" name="sender_email" value="{{ config.get('sender_email','') }}" placeholder="onboarding@resend.dev">
+                        
+                        <label>Resend API Key</label>
+                        <input type="password" name="resend_api_key" value="{{ config.get('resend_api_key','') }}">
+
+                        <div style="margin-top: 20px;">
+                            <button type="submit" name="action" value="save_settings">💾 儲存設定</button>
+                            <button type="submit" name="action" value="test_email" class="button button-outline">🧪 測試連線</button>
+                            <hr>
+                            <button type="submit" name="action" value="send_report_now" class="button button-clear" style="width:100%">📊 立即補發今日報表</button>
+                        </div>
+                    </form>
                 </div>
-            </form>
+            </div>
+
+            <div class="column column-50">
+                <div class="card" style="height: 100%;">
+                    <h4 class="section-title">🛵 外送費率規則</h4>
+                    <form method="POST" action="{{ url_for('admin.update_delivery_settings') }}">
+                        <div style="margin-bottom: 15px; background: #f8f8f8; padding: 10px; border-radius: 4px;">
+                            <label style="display: inline; cursor: pointer;">
+                                <input type="checkbox" name="delivery_enabled" style="margin-right: 5px;" 
+                                       {{ 'checked' if config.get('enable_delivery') else '' }}> 
+                                啟用外送規則 (同步控制總開關)
+                            </label>
+                        </div>
+
+                        <div class="row">
+                            <div class="column">
+                                <label>最低消費金額</label>
+                                <input type="number" name="delivery_min_price" value="{{ config.get('delivery_min_price', 0) }}" min="0">
+                            </div>
+                            <div class="column">
+                                <label>基礎運費 (Base)</label>
+                                <input type="number" name="delivery_fee_base" value="{{ config.get('delivery_fee_base', 0) }}" min="0">
+                            </div>
+                        </div>
+
+                        <div class="row">
+                            <div class="column">
+                                <label>最大外送距離 (KM)</label>
+                                <input type="number" name="delivery_max_km" value="{{ config.get('delivery_max_km', 5) }}" step="0.1" min="0">
+                            </div>
+                            <div class="column">
+                                <label>每公里加價</label>
+                                <input type="number" name="delivery_fee_per_km" value="{{ config.get('delivery_fee_per_km', 10) }}" min="0">
+                            </div>
+                        </div>
+
+                        <button type="submit" class="button button-outline" style="width: 100%; border-color: var(--primary); color: var(--primary);">💾 更新外送規則</button>
+                    </form>
+                </div>
+            </div>
         </div>
 
         <div class="card">
-            <h4>➕ 新增單一品項</h4>
-            <form method="POST">
+            <h4 class="section-title">➕ 新增單一品項</h4>
+            <form method="POST" action="{{ url_for('admin.admin_panel') }}">
                 <input type="hidden" name="action" value="add_product">
                 <div class="row">
                     <div class="column column-40"><label>品名 (中)</label><input type="text" name="name" required></div>
@@ -161,7 +200,7 @@
         </div>
 
         <div class="card">
-            <h4>📋 菜單管理</h4>
+            <h4 class="section-title">📋 菜單管理</h4>
             <div style="overflow-x: auto;">
                 <table>
                     <thead>
@@ -220,6 +259,68 @@
         </div>
     </div>
 
+    <div id="orderModal" class="custom-modal" style="display: none;">
+        <div class="custom-modal-content">
+            <span class="close-btn" onclick="closeOrderModal()">&times;</span>
+            <h3 style="color: #d63031; margin-top: 0;">💥 清空/刪除訂單</h3>
+            
+            <form action="{{ url_for('admin.reset_orders') }}" method="POST" onsubmit="return confirmOrderDelete()">
+                
+                <div style="margin-bottom: 15px; padding: 10px; background: #fff0f0; border-radius: 5px;">
+                    <label style="cursor: pointer; display: block;">
+                        <input type="radio" name="delete_mode" value="all" checked onchange="toggleDateInputs(false)">
+                        <strong>清空所有歷史訂單</strong>
+                        <div style="font-size: 0.85em; color: #666; margin-left: 22px;">(警告：這將清空資料庫並重置流水號 ID)</div>
+                    </label>
+                </div>
+
+                <div style="margin-bottom: 15px; padding: 10px; background: #f9f9f9; border-radius: 5px;">
+                    <label style="cursor: pointer; display: block; margin-bottom: 10px;">
+                        <input type="radio" name="delete_mode" value="range" onchange="toggleDateInputs(true)">
+                        <strong>刪除指定日期區間</strong>
+                    </label>
+                    
+                    <div id="date-picker-area" style="display: none; margin-left: 22px;">
+                        <div style="margin-bottom: 5px;">
+                            <span>從：</span>
+                            <input type="date" name="start_date" style="padding: 4px;">
+                        </div>
+                        <div>
+                            <span>到：</span>
+                            <input type="date" name="end_date" style="padding: 4px;">
+                        </div>
+                    </div>
+                </div>
+
+                <div style="text-align: right; margin-top: 20px;">
+                    <button type="button" onclick="closeOrderModal()" style="padding: 8px 15px; cursor: pointer; background: #eee; border: none; border-radius: 4px; margin-right: 5px;">取消</button>
+                    <button type="submit" style="padding: 8px 15px; cursor: pointer; background: #d63031; color: white; border: none; border-radius: 4px;">確認執行</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <style>
+        .custom-modal {
+            position: fixed; z-index: 9999; left: 0; top: 0;
+            width: 100%; height: 100%; overflow: auto;
+            background-color: rgba(0,0,0,0.5);
+            display: flex; justify-content: center; align-items: center;
+        }
+        .custom-modal-content {
+            background-color: #fefefe;
+            margin: 10% auto; padding: 20px;
+            border: 1px solid #888; width: 90%; max-width: 400px;
+            border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+            position: relative;
+        }
+        .close-btn {
+            color: #aaa; float: right; font-size: 28px; font-weight: bold;
+            cursor: pointer; line-height: 20px;
+        }
+        .close-btn:hover { color: black; }
+    </style>
+
     <script>
         // 訊息自動隱藏
         const msg = document.getElementById('status-msg');
@@ -227,12 +328,9 @@
             setTimeout(() => { msg.style.display = 'none'; }, 3000);
         }
 
-        // [新增] 通用設定開關 (如：全店營業狀態、外送開關)
-        // 後端需在 routes/admin_routes.py 實作 '/admin/toggle_config' 路由
+        // AJAX 設定開關 (全店營業/外送總開關)
         function toggleConfig(key, btn, textOn, textOff) {
-            // 讓使用者知道正在處理中 (可選)
             btn.style.opacity = '0.7';
-            
             fetch('/admin/toggle_config', { 
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -242,10 +340,14 @@
             .then(d => {
                 btn.style.opacity = '1';
                 if(d.status === 'success') {
-                    // d.new_value 應該回傳 boolean
                     const isOn = d.new_value; 
                     btn.className = isOn ? 'btn-sm status-on' : 'btn-sm status-off';
                     btn.innerText = isOn ? textOn : textOff;
+                    // 如果是外送開關，順便更新外送設定表單裡的 checkbox 顯示 (視覺同步)
+                    if(key === 'enable_delivery') {
+                        const cb = document.querySelector('input[name="delivery_enabled"]');
+                        if(cb) cb.checked = isOn;
+                    }
                 } else {
                     alert('設定更新失敗：' + d.message);
                 }
@@ -289,125 +391,37 @@
                 });
             }
         });
-    </script>
-    
-    <div id="orderModal" class="custom-modal" style="display: none;">
-    <div class="custom-modal-content">
-        <span class="close-btn" onclick="closeOrderModal()">&times;</span>
-        <h3 style="color: #d63031; margin-top: 0;">💥 清空/刪除訂單</h3>
-        
-        <form action="{{ url_for('admin.reset_orders') }}" method="POST" onsubmit="return confirmOrderDelete()">
-            
-            <div style="margin-bottom: 15px; padding: 10px; background: #fff0f0; border-radius: 5px;">
-                <label style="cursor: pointer; display: block;">
-                    <input type="radio" name="delete_mode" value="all" checked onchange="toggleDateInputs(false)">
-                    <strong>清空所有歷史訂單</strong>
-                    <div style="font-size: 0.85em; color: #666; margin-left: 22px;">(警告：這將清空資料庫並重置流水號 ID)</div>
-                </label>
-            </div>
 
-            <div style="margin-bottom: 15px; padding: 10px; background: #f9f9f9; border-radius: 5px;">
-                <label style="cursor: pointer; display: block; margin-bottom: 10px;">
-                    <input type="radio" name="delete_mode" value="range" onchange="toggleDateInputs(true)">
-                    <strong>刪除指定日期區間</strong>
-                </label>
-                
-                <div id="date-picker-area" style="display: none; margin-left: 22px;">
-                    <div style="margin-bottom: 5px;">
-                        <span>從：</span>
-                        <input type="date" name="start_date" style="padding: 4px;">
-                    </div>
-                    <div>
-                        <span>到：</span>
-                        <input type="date" name="end_date" style="padding: 4px;">
-                    </div>
-                </div>
-            </div>
-
-            <div style="text-align: right; margin-top: 20px;">
-                <button type="button" onclick="closeOrderModal()" style="padding: 8px 15px; cursor: pointer; background: #eee; border: none; border-radius: 4px; margin-right: 5px;">取消</button>
-                <button type="submit" style="padding: 8px 15px; cursor: pointer; background: #d63031; color: white; border: none; border-radius: 4px;">確認執行</button>
-            </div>
-        </form>
-    </div>
-</div>
-
-<style>
-    /* 遮罩背景 */
-    .custom-modal {
-        position: fixed; z-index: 9999; left: 0; top: 0;
-        width: 100%; height: 100%; overflow: auto;
-        background-color: rgba(0,0,0,0.5);
-        display: flex; justify-content: center; align-items: center;
-    }
-    /* 彈窗本體 */
-    .custom-modal-content {
-        background-color: #fefefe;
-        margin: 10% auto; padding: 20px;
-        border: 1px solid #888; width: 90%; max-width: 400px;
-        border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.2);
-        position: relative;
-    }
-    /* 關閉按鈕 */
-    .close-btn {
-        color: #aaa; float: right; font-size: 28px; font-weight: bold;
-        cursor: pointer; line-height: 20px;
-    }
-    .close-btn:hover { color: black; }
-</style>
-
-<script>
-    function openOrderModal() {
-        document.getElementById('orderModal').style.display = 'block';
-    }
-
-    function closeOrderModal() {
-        document.getElementById('orderModal').style.display = 'none';
-    }
-
-    // 切換日期輸入框的顯示/隱藏
-    function toggleDateInputs(show) {
-        var area = document.getElementById('date-picker-area');
-        var inputs = area.querySelectorAll('input');
-        if (show) {
-            area.style.display = 'block';
-            inputs.forEach(i => i.required = true); // 必填
-        } else {
-            area.style.display = 'none';
-            inputs.forEach(i => i.required = false); // 免填
-            inputs.forEach(i => i.value = ''); // 清空
+        // 訂單刪除 Modal 邏輯
+        function openOrderModal() { document.getElementById('orderModal').style.display = 'block'; }
+        function closeOrderModal() { document.getElementById('orderModal').style.display = 'none'; }
+        function toggleDateInputs(show) {
+            var area = document.getElementById('date-picker-area');
+            var inputs = area.querySelectorAll('input');
+            if (show) {
+                area.style.display = 'block';
+                inputs.forEach(i => i.required = true);
+            } else {
+                area.style.display = 'none';
+                inputs.forEach(i => i.required = false);
+                inputs.forEach(i => i.value = '');
+            }
         }
-    }
-
-    // 表單送出前的最後確認
-    function confirmOrderDelete() {
-        var mode = document.querySelector('input[name="delete_mode"]:checked').value;
-        if (mode === 'all') {
-            var input = prompt("⚠️ 危險操作！\n這將刪除「所有」訂單且無法復原。\n請輸入 'DELETE' 以確認：");
+        function confirmOrderDelete() {
+            var mode = document.querySelector('input[name="delete_mode"]:checked').value;
+            if (mode === 'all') {
+                var input = prompt("⚠️ 危險操作！\n這將刪除「所有」訂單且無法復原。\n請輸入 'DELETE' 以確認：");
+                return input === 'DELETE';
+            }
+            return confirm("確定要刪除選定日期範圍內的訂單嗎？");
+        }
+        window.onclick = function(event) {
+            if (event.target == document.getElementById('orderModal')) closeOrderModal();
+        }
+        function confirmMenuReset() {
+            var input = prompt("⚠️ 危險操作！\n這將清空所有產品資料且「無法復原」。\n\n若確定要執行，請輸入 'DELETE'：");
             return input === 'DELETE';
         }
-        return confirm("確定要刪除選定日期範圍內的訂單嗎？");
-    }
-
-    // 點擊視窗外部關閉
-    window.onclick = function(event) {
-        var modal = document.getElementById('orderModal');
-        if (event.target == modal) {
-            modal.style.display = "none";
-        }
-    }
-
-   // 清空菜單的雙重確認邏輯
-    function confirmMenuReset() {
-        var input = prompt("⚠️ 危險操作！\n這將清空所有產品資料且「無法復原」。\n\n若確定要執行，請輸入 'DELETE'：");
-        if (input === 'DELETE') {
-            return true;
-        } else {
-            alert("❌ 輸入不正確或已取消，操作中止。");
-            return false; 
-        }
-    }
-    
-</script>
+    </script>
 </body>
 </html>
