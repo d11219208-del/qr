@@ -119,18 +119,21 @@ def admin_panel():
         config = {row[0]: row[1] for row in settings_rows} # 轉為 Dictionary
         
         # 【關鍵修正 1】轉換資料型態，確保模板中的 if 判斷正確
-        # 將字串 '1', '0' 轉為整數，避免 Jinja2 將字串 '0' 視為 True
-        # 特別針對開關類型的設定
         toggle_keys = ['shop_open', 'enable_delivery', 'delivery_enabled']
         for key in toggle_keys:
             val = config.get(key, '0') # 預設為 '0'
             config[key] = 1 if val == '1' else 0
 
         # 【關鍵修正 2】確保 enable_delivery 與 delivery_enabled 狀態一致
-        # 因為 database.py 中兩者都存在，為了避免混淆，這裡做一個 fallback
         if 'enable_delivery' not in config:
             config['enable_delivery'] = config.get('delivery_enabled', 0)
         
+        # 確保外送費相關參數若不存在則給予預設顯示 (避免前端空白)
+        config.setdefault('delivery_min_price', '500')
+        config.setdefault('delivery_fee_base', '0')
+        config.setdefault('delivery_max_km', '5')
+        config.setdefault('delivery_fee_per_km', '10')
+
         cur.execute("""
             SELECT id, name, price, category, is_available, print_category, sort_order, image_url, 
                    name_en, name_jp, name_kr 
@@ -202,7 +205,7 @@ def toggle_config():
 
 
 # ==========================================
-# 外送詳細設定 (表單提交)
+# 外送詳細設定 (表單提交) - 這裡實作覆寫 database.py 預設值的邏輯
 # ==========================================
 @admin_bp.route('/settings/delivery', methods=['POST'])
 def update_delivery_settings():
@@ -210,18 +213,18 @@ def update_delivery_settings():
     cur = conn.cursor()
     try:
         # 1. 處理 Checkbox 狀態
-        # 注意：表單傳送過來的 checkbox 若有勾選則有值，沒勾選則為 None
         is_enabled = '1' if request.form.get('delivery_enabled') else '0'
 
         # 2. 準備寫入資料庫
-        # 【關鍵修正】同時寫入 enable_delivery 與 delivery_enabled 確保按鈕與設定同步
+        # 這裡的邏輯會將 database.py 設定的初始值「覆蓋」為管理者輸入的數值
+        # 使用 'or' 運算符確保如果前端傳來空字串，會有合理的預設值 (字串格式)
         settings = {
             'delivery_enabled': is_enabled,
             'enable_delivery': is_enabled,  # 同步更新
-            'delivery_min_price': request.form.get('delivery_min_price'),
-            'delivery_fee_base': request.form.get('delivery_fee_base'),
-            'delivery_max_km': request.form.get('delivery_max_km'),
-            'delivery_fee_per_km': request.form.get('delivery_fee_per_km')
+            'delivery_min_price': request.form.get('delivery_min_price') or '0',
+            'delivery_fee_base': request.form.get('delivery_fee_base') or '0',
+            'delivery_max_km': request.form.get('delivery_max_km') or '5',
+            'delivery_fee_per_km': request.form.get('delivery_fee_per_km') or '10'
         }
 
         for key, val in settings.items():
