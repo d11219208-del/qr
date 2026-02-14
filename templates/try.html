@@ -5,40 +5,57 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>資料庫結構檢視 (Debug)</title>
     <style>
-        body { font-family: monospace; padding: 20px; background-color: #f4f4f4; }
-        .container { max-width: 1200px; margin: 0 auto; }
-        .card { background: white; padding: 20px; margin-bottom: 30px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
-        h1 { color: #333; border-bottom: 2px solid #333; padding-bottom: 10px; }
-        h2 { color: #007bff; margin-top: 0; }
+        body { font-family: 'Segoe UI', monospace; padding: 20px; background-color: #f8f9fa; color: #333; }
+        .container { max-width: 1400px; margin: 0 auto; }
         
-        table { width: 100%; border-collapse: collapse; margin-bottom: 15px; font-size: 14px; }
-        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
-        th { background-color: #eee; font-weight: bold; }
+        /* 卡片樣式 */
+        .card { background: white; padding: 25px; margin-bottom: 30px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); border: 1px solid #e0e0e0; }
         
-        .badge { display: inline-block; padding: 3px 6px; border-radius: 4px; font-size: 12px; color: white; }
+        h1 { color: #2c3e50; border-bottom: 3px solid #3498db; padding-bottom: 15px; margin-bottom: 25px; }
+        h2 { color: #2980b9; margin-top: 0; display: flex; align-items: center; gap: 10px; }
+        
+        /* 表格樣式 */
+        table { width: 100%; border-collapse: separate; border-spacing: 0; margin-bottom: 20px; font-size: 14px; border: 1px solid #dee2e6; border-radius: 8px; overflow: hidden; }
+        th, td { border-bottom: 1px solid #dee2e6; padding: 12px 15px; text-align: left; vertical-align: middle; }
+        th { background-color: #f1f3f5; font-weight: 700; color: #495057; border-right: 1px solid #dee2e6; }
+        td { border-right: 1px solid #dee2e6; }
+        th:last-child, td:last-child { border-right: none; }
+        
+        /* 標籤樣式 */
+        .badge { display: inline-block; padding: 4px 8px; border-radius: 6px; font-size: 12px; font-weight: 600; color: white; letter-spacing: 0.5px; }
         .badge-type { background-color: #17a2b8; }
-        .badge-pk { background-color: #dc3545; }
+        .badge-pk { background-color: #e74c3c; box-shadow: 0 2px 4px rgba(231, 76, 60, 0.3); }
+        .badge-desc { background-color: #6f42c1; }
         
-        .section-title { font-weight: bold; margin: 10px 0 5px; color: #666; }
-        .empty-data { color: #999; font-style: italic; }
+        /* 文字樣式 */
+        .col-name { font-size: 1.1em; color: #2c3e50; font-weight: bold; }
+        .col-desc { color: #666; font-size: 0.95em; }
+        .default-val { color: #d63384; background: #fff0f6; padding: 2px 6px; border-radius: 4px; font-family: monospace; }
+        
+        .section-title { font-weight: 800; margin: 20px 0 10px; color: #555; font-size: 1.1em; text-transform: uppercase; letter-spacing: 1px; }
+        .empty-data { padding: 20px; text-align: center; color: #888; background: #f8f9fa; border-radius: 8px; border: 1px dashed #ced4da; }
+        
+        /* 資料預覽表格的限制 */
+        .data-preview td { max-width: 250px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .data-preview th small { display: block; color: #6f42c1; font-weight: normal; margin-top: 4px; }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>🛠️ 資料庫現況檢視 (database.py)</h1>
-        <p>此頁面顯示目前的資料庫 Schema 與部分資料，用於確認 Migration 是否成功。</p>
+        <h1>🛠️ 資料庫全貌 (包含 database.py 定義)</h1>
+        <p>此頁面讀取目前的 PostgreSQL 資料庫結構，並結合程式碼中的中文註解，方便開發者對照。</p>
 
         {% for table_name, info in db_info.items() %}
         <div class="card">
             <h2>📦 Table: {{ table_name }}</h2>
             
-            <div class="section-title">📋 欄位結構 (Schema)</div>
+            <div class="section-title">📋 欄位定義 (Schema)</div>
             <table>
                 <thead>
                     <tr>
-                        <th>#</th>
-                        <th>欄位名稱 (Column)</th>
-                        <th>資料型態 (Type)</th>
+                        <th style="width: 50px;">#</th>
+                        <th style="width: 200px;">欄位名稱 (Column)</th>
+                        <th>中文說明 (Description)</th> <th>資料型態 (Type)</th>
                         <th>Null?</th>
                         <th>預設值 (Default)</th>
                     </tr>
@@ -48,25 +65,45 @@
                     <tr>
                         <td>{{ loop.index }}</td>
                         <td>
-                            <strong>{{ col[0] }}</strong>
-                            {% if col[0] == 'id' %}<span class="badge badge-pk">PK</span>{% endif %}
+                            <div class="col-name">{{ col.name }}</div>
+                            {% if col.name == 'id' or col.name == 'key' %}
+                                <span class="badge badge-pk" style="margin-top:5px;">PK</span>
+                            {% endif %}
                         </td>
-                        <td><span class="badge badge-type">{{ col[1] }}</span></td>
-                        <td>{{ col[2] }}</td>
-                        <td><code style="color: #d63384;">{{ col[3] or 'None' }}</code></td>
+                        <td>
+                            <span style="color: #2c3e50; font-weight: 500;">{{ col.desc }}</span>
+                        </td>
+                        <td><span class="badge badge-type">{{ col.type }}</span></td>
+                        <td>
+                            {% if col.nullable == 'YES' %}
+                                <span style="color: #28a745;">✔ 可空</span>
+                            {% else %}
+                                <span style="color: #dc3545; font-weight:bold;">✖ 必填</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if col.default %}
+                                <code class="default-val">{{ col.default }}</code>
+                            {% else %}
+                                <span style="color: #ccc;">-</span>
+                            {% endif %}
+                        </td>
                     </tr>
                     {% endfor %}
                 </tbody>
             </table>
 
-            <div class="section-title">🔍 資料預覽 (Top 3 Rows)</div>
+            <div class="section-title">🔍 真實資料預覽 (Top 50 Rows)</div>
             <div style="overflow-x: auto;">
                 {% if info.data %}
-                <table>
+                <table class="data-preview">
                     <thead>
                         <tr>
                             {% for col in info.schema %}
-                            <th>{{ col[0] }}</th>
+                            <th>
+                                {{ col.name }}
+                                <small>{{ col.desc }}</small>
+                            </th>
                             {% endfor %}
                         </tr>
                     </thead>
@@ -74,7 +111,7 @@
                         {% for row in info.data %}
                         <tr>
                             {% for cell in row %}
-                            <td style="white-space: nowrap; max-width: 200px; overflow: hidden; text-overflow: ellipsis;">
+                            <td title="{{ cell }}">
                                 {{ cell }}
                             </td>
                             {% endfor %}
@@ -83,7 +120,9 @@
                     </tbody>
                 </table>
                 {% else %}
-                <div class="empty-data">此表格目前沒有資料。</div>
+                <div class="empty-data">
+                    📭 此資料表目前沒有任何資料。
+                </div>
                 {% endif %}
             </div>
         </div>
