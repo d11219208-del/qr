@@ -3,10 +3,10 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>資料庫結構檢視 (Debug)</title>
+    <title>資料庫管理後台 (Debug)</title>
     <style>
         body { font-family: 'Segoe UI', monospace; padding: 20px; background-color: #f8f9fa; color: #333; }
-        .container { max-width: 1400px; margin: 0 auto; }
+        .container { max-width: 95%; margin: 0 auto; }
         
         /* 卡片樣式 */
         .card { background: white; padding: 25px; margin-bottom: 30px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); border: 1px solid #e0e0e0; }
@@ -16,87 +16,121 @@
         
         /* 表格樣式 */
         table { width: 100%; border-collapse: separate; border-spacing: 0; margin-bottom: 20px; font-size: 14px; border: 1px solid #dee2e6; border-radius: 8px; overflow: hidden; }
-        th, td { border-bottom: 1px solid #dee2e6; padding: 12px 15px; text-align: left; vertical-align: middle; }
-        th { background-color: #f1f3f5; font-weight: 700; color: #495057; border-right: 1px solid #dee2e6; }
+        th, td { border-bottom: 1px solid #dee2e6; padding: 12px 15px; text-align: left; vertical-align: top; }
+        th { background-color: #f1f3f5; font-weight: 700; color: #495057; border-right: 1px solid #dee2e6; position: sticky; top: 0; z-index: 10; }
         td { border-right: 1px solid #dee2e6; }
         th:last-child, td:last-child { border-right: none; }
         
-        /* 標籤樣式 */
+        /* 標籤與文字 */
         .badge { display: inline-block; padding: 4px 8px; border-radius: 6px; font-size: 12px; font-weight: 600; color: white; letter-spacing: 0.5px; }
         .badge-type { background-color: #17a2b8; }
-        .badge-pk { background-color: #e74c3c; box-shadow: 0 2px 4px rgba(231, 76, 60, 0.3); }
-        .badge-desc { background-color: #6f42c1; }
+        .badge-pk { background-color: #e74c3c; }
         
-        /* 文字樣式 */
         .col-name { font-size: 1.1em; color: #2c3e50; font-weight: bold; }
-        .col-desc { color: #666; font-size: 0.95em; }
-        .default-val { color: #d63384; background: #fff0f6; padding: 2px 6px; border-radius: 4px; font-family: monospace; }
-        
         .section-title { font-weight: 800; margin: 20px 0 10px; color: #555; font-size: 1.1em; text-transform: uppercase; letter-spacing: 1px; }
         .empty-data { padding: 20px; text-align: center; color: #888; background: #f8f9fa; border-radius: 8px; border: 1px dashed #ced4da; }
         
-        /* 資料預覽表格的限制 */
-        .data-preview td { max-width: 250px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        .data-preview th small { display: block; color: #6f42c1; font-weight: normal; margin-top: 4px; }
+        /* --- 編輯功能專用樣式 --- */
+        
+        /* 可編輯的儲存格 */
+        td.editable {
+            cursor: text;
+            transition: all 0.2s;
+            background-color: #fff;
+        }
+        td.editable:hover {
+            background-color: #fff3cd; /* 黃色高亮提示可編輯 */
+            box-shadow: inset 0 0 0 1px #ffc107;
+        }
+        td.editable:focus {
+            background-color: #fff;
+            outline: 2px solid #3498db;
+            padding: 10px 13px; /* 微調以防止跳動 */
+            z-index: 2;
+            position: relative;
+        }
+
+        /* 主鍵鎖定樣式 */
+        td.pk-cell {
+            background-color: #e9ecef;
+            color: #6c757d;
+            font-weight: bold;
+            cursor: not-allowed;
+            user-select: all; /* 方便複製 ID */
+        }
+
+        /* 資料預覽限制 */
+        .data-preview td { max-width: 300px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .data-preview td:focus { white-space: normal; overflow: visible; max-width: none; } /* 編輯時展開 */
+        .data-preview th small { display: block; color: #6f42c1; font-weight: normal; margin-top: 4px; font-size: 0.85em; }
+
+        /* 狀態 Toast */
+        #toast {
+            position: fixed; bottom: 30px; right: 30px;
+            padding: 15px 25px; border-radius: 8px;
+            color: white; font-weight: bold;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+            display: none; z-index: 9999;
+            animation: slideIn 0.3s ease-out;
+        }
+        .toast-success { background-color: #28a745; }
+        .toast-error { background-color: #dc3545; }
+        .toast-loading { background-color: #17a2b8; }
+        
+        @keyframes slideIn {
+            from { transform: translateY(100%); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
+        }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>🛠️ 資料庫全貌 (包含 database.py 定義)</h1>
-        <p>此頁面讀取目前的 PostgreSQL 資料庫結構，並結合程式碼中的中文註解，方便開發者對照。</p>
+        <h1>🛠️ 資料庫直接編輯模式</h1>
+        <p>💡 <strong>操作說明：</strong> 點擊下方「資料預覽」表格中的任意內容即可直接編輯。編輯完成後按 <strong>Enter</strong> 或點擊空白處即可自動存檔。</p>
 
         {% for table_name, info in db_info.items() %}
         <div class="card">
-            <h2>📦 Table: {{ table_name }}</h2>
+            <h2>📦 Table: {{ table_name }} <span style="font-size:0.6em; color:#888; margin-left:10px; font-weight:normal;">(PK: {{ info.pk_col }})</span></h2>
             
-            <div class="section-title">📋 欄位定義 (Schema)</div>
-            <table>
-                <thead>
-                    <tr>
-                        <th style="width: 50px;">#</th>
-                        <th style="width: 200px;">欄位名稱 (Column)</th>
-                        <th>中文說明 (Description)</th> <th>資料型態 (Type)</th>
-                        <th>Null?</th>
-                        <th>預設值 (Default)</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for col in info.schema %}
-                    <tr>
-                        <td>{{ loop.index }}</td>
-                        <td>
-                            <div class="col-name">{{ col.name }}</div>
-                            {% if col.name == 'id' or col.name == 'key' %}
-                                <span class="badge badge-pk" style="margin-top:5px;">PK</span>
-                            {% endif %}
-                        </td>
-                        <td>
-                            <span style="color: #2c3e50; font-weight: 500;">{{ col.desc }}</span>
-                        </td>
-                        <td><span class="badge badge-type">{{ col.type }}</span></td>
-                        <td>
-                            {% if col.nullable == 'YES' %}
-                                <span style="color: #28a745;">✔ 可空</span>
-                            {% else %}
-                                <span style="color: #dc3545; font-weight:bold;">✖ 必填</span>
-                            {% endif %}
-                        </td>
-                        <td>
-                            {% if col.default %}
-                                <code class="default-val">{{ col.default }}</code>
-                            {% else %}
-                                <span style="color: #ccc;">-</span>
-                            {% endif %}
-                        </td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
+            <details>
+                <summary class="section-title" style="cursor: pointer; display: inline-block;">📋 檢視欄位定義 (Schema)</summary>
+                <table>
+                    <thead>
+                        <tr>
+                            <th style="width: 50px;">#</th>
+                            <th style="width: 200px;">欄位名稱</th>
+                            <th>中文說明</th>
+                            <th>型態</th>
+                            <th>Null?</th>
+                            <th>預設值</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for col in info.schema %}
+                        <tr>
+                            <td>{{ loop.index }}</td>
+                            <td>
+                                <div class="col-name">{{ col.name }}</div>
+                                {% if col.name == info.pk_col %}<span class="badge badge-pk">PK</span>{% endif %}
+                            </td>
+                            <td><span style="color: #2c3e50;">{{ col.desc }}</span></td>
+                            <td><span class="badge badge-type">{{ col.type }}</span></td>
+                            <td>
+                                {% if col.nullable == 'YES' %}<span style="color:#28a745;">✔</span>{% else %}<span style="color:#dc3545;">✖</span>{% endif %}
+                            </td>
+                            <td><code>{{ col.default or '-' }}</code></td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </details>
 
-            <div class="section-title">🔍 真實資料預覽 (Top 50 Rows)</div>
+            <div class="section-title" style="margin-top: 20px;">🔍 真實資料預覽 & 編輯 (Top 50 Rows)</div>
             <div style="overflow-x: auto;">
                 {% if info.data %}
-                <table class="data-preview">
+                <table class="data-preview" 
+                       data-table-name="{{ table_name }}" 
+                       data-pk-name="{{ info.pk_col }}">
                     <thead>
                         <tr>
                             {% for col in info.schema %}
@@ -111,22 +145,123 @@
                         {% for row in info.data %}
                         <tr>
                             {% for cell in row %}
-                            <td title="{{ cell }}">
-                                {{ cell }}
-                            </td>
+                                {% set col_name = info.schema[loop.index0].name %}
+                                
+                                {% if col_name == info.pk_col %}
+                                    <td class="pk-cell" 
+                                        data-col-name="{{ col_name }}"
+                                        title="主鍵無法修改">
+                                        {{ cell }}
+                                    </td>
+                                {% else %}
+                                    <td class="editable" 
+                                        contenteditable="true"
+                                        data-col-name="{{ col_name }}"
+                                        onblur="saveData(this)"
+                                        onkeydown="handleEnter(event, this)">
+                                        {{ cell if cell is not none else '' }}
+                                    </td>
+                                {% endif %}
                             {% endfor %}
                         </tr>
                         {% endfor %}
                     </tbody>
                 </table>
                 {% else %}
-                <div class="empty-data">
-                    📭 此資料表目前沒有任何資料。
-                </div>
+                <div class="empty-data">📭 此資料表目前沒有任何資料。</div>
                 {% endif %}
             </div>
         </div>
         {% endfor %}
     </div>
+
+    <div id="toast">儲存中...</div>
+
+    <script>
+        // 記錄編輯前的內容，若沒變更就不發送請求
+        let originalContent = "";
+
+        document.querySelectorAll('.editable').forEach(cell => {
+            cell.addEventListener('focus', function() {
+                originalContent = this.innerText;
+            });
+        });
+
+        // 按下 Enter 時觸發儲存 (防止換行)
+        function handleEnter(e, cell) {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                cell.blur(); // 觸發 onblur
+            }
+        }
+
+        // 核心儲存功能
+        function saveData(cell) {
+            const newValue = cell.innerText;
+            if (newValue === originalContent) return; // 內容未變更
+
+            const tableEl = cell.closest('table');
+            const rowEl = cell.parentElement;
+            
+            const tableName = tableEl.dataset.tableName;
+            const pkName = tableEl.dataset.pkName;
+            const colName = cell.dataset.colName;
+            
+            // 找出同一列中的 PK 值
+            // 我們透過 data-col-name 屬性找到該列對應 PK 的那個 cell
+            const pkCell = rowEl.querySelector(`td[data-col-name="${pkName}"]`);
+            
+            if (!pkCell) {
+                showToast('❌ 錯誤：找不到主鍵欄位', 'toast-error');
+                return;
+            }
+            
+            const pkVal = pkCell.innerText.trim();
+
+            showToast('🔄 儲存中...', 'toast-loading');
+
+            fetch('/try/update', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    table: tableName,
+                    pk_col: pkName,
+                    pk_val: pkVal,
+                    column: colName,
+                    value: newValue
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    showToast('✅ 更新成功', 'toast-success');
+                    cell.style.backgroundColor = '#d4edda'; // 綠色閃爍
+                    setTimeout(() => cell.style.backgroundColor = '', 1000);
+                    originalContent = newValue; // 更新暫存
+                } else {
+                    showToast('❌ 更新失敗: ' + data.error, 'toast-error');
+                    cell.innerText = originalContent; // 還原數值
+                }
+            })
+            .catch(err => {
+                console.error(err);
+                showToast('❌ 網路連線錯誤', 'toast-error');
+                cell.innerText = originalContent;
+            });
+        }
+
+        function showToast(msg, type) {
+            const toast = document.getElementById('toast');
+            toast.innerText = msg;
+            toast.className = type;
+            toast.style.display = 'block';
+
+            if (type !== 'toast-loading') {
+                setTimeout(() => {
+                    toast.style.display = 'none';
+                }, 2000);
+            }
+        }
+    </script>
 </body>
 </html>
