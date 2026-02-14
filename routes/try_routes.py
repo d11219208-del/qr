@@ -1,11 +1,10 @@
-from flask import Blueprint, render_template
+from flask import Blueprint, render_template, request, jsonify
 from database import get_db_connection
 import psycopg2
 
 try_bp = Blueprint('try_debug', __name__)
 
 # 建立資料庫欄位的中英對照表 (依照 database.py 的註解)
-# 這樣前端顯示時，除了英文欄位名，還能知道該欄位的用途
 COLUMN_MAP = {
     # --- Products (產品表) ---
     'products': {
@@ -87,28 +86,73 @@ def show_db_structure():
             col_name = col[0]
             col_type = col[1]
             
-            # 從對照表中尋找中文說明，若找不到則顯示 "未定義說明"
+            # 從對照表中尋找中文說明
             description = COLUMN_MAP.get(table, {}).get(col_name, '-')
             
-            # 將資料組合成字典方便前端讀取
             columns_info.append({
                 'name': col_name,
                 'type': col_type,
                 'nullable': col[2],
                 'default': col[3],
-                'desc': description  # 新增這個屬性傳給前端
+                'desc': description
             })
         
-        # 3. 抓取該表的所有資料 (這裡限制 50 筆以防頁面太長，可視需求改為不限制)
-        cur.execute(f"SELECT * FROM {table} ORDER BY 1 DESC LIMIT 50")
+        # 3. 判斷該表的 Primary Key (PK)
+        # 一般表通常是 id，但 settings 表是 key
+        pk_col = 'key' if table == 'settings' else 'id'
+
+        # 4. 抓取該表的所有資料 (以 PK 倒序，方便看到最新資料)
+        # 注意：這裡加上 pk_col 排序，確保資料順序穩定
+        cur.execute(f"SELECT * FROM {table} ORDER BY {pk_col} DESC LIMIT 50")
         sample_rows = cur.fetchall()
         
         db_info[table] = {
-            'schema': columns_info, # 包含中文說明的欄位結構
-            'data': sample_rows     # 資料內容
+            'schema': columns_info,
+            'data': sample_rows,
+            'pk_col': pk_col  # 【重要】傳送 PK 欄位名稱給前端，前端更新資料時需要用
         }
 
     cur.close()
     conn.close()
     
     return render_template('try.html', db_info=db_info)
+
+# --- 新增：接收前端修改請求的 API ---
+@try_bp.route('/try/update', methods=['POST'])
+def update_db_data():
+    """
+    接收 JSON 格式: { table, pk_col, pk_val, column, value }
+    用途：讓開發者在 try.html 頁面上直接修改資料庫內容
+    """
+    data = request.json
+    table = data.get('table')
+    pk_col = data.get('pk_col')
+    pk_val = data.get('pk_val')
+    column = data.get('column')
+    new_value = data.get('value')
+
+    # 簡單的安全檢查 (避免缺少參數)
+    if not table or not column or not pk_val:
+        return jsonify({'success': False, 'error': 'Missing parameters'})
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        # 使用參數化查詢防止 SQL Injection (針對 value 與 pk_val)
+        # table 與 column 名稱因為無法參數化，但來源是我們自己的代碼邏輯，相對可控
+        query = f"UPDATE {table} SET {column} = %s WHERE {pk_col} = %s"
+        
+        # 如果是空字串，某些數值欄位可能需要轉為 None (或保留空字串視欄位型態而定)
+        # 這裡簡化處理：直接傳送 new_value，由 PostgreSQL 判斷型態
+        # 若輸入格式錯誤 (如在 int 欄位輸入 'abc')，會進入 except 區塊
+        cur.execute(query, (new_value, pk_val))
+        conn.commit()
+        
+        return jsonify({'success': True})
+    except Exception as e:
+        conn.rollback() # 發生錯誤時回滾
+        print(f"Update Error: {e}")
+        return jsonify({'success': False, 'error': str(e)})
+    finally:
+        cur.close()
+        conn.close()
