@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>資料庫結構檢視 (Debug)</title>
+    <style>
+        body { font-family: monospace; padding: 20px; background-color: #f4f4f4; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        .card { background: white; padding: 20px; margin-bottom: 30px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+        h1 { color: #333; border-bottom: 2px solid #333; padding-bottom: 10px; }
+        h2 { color: #007bff; margin-top: 0; }
+        
+        table { width: 100%; border-collapse: collapse; margin-bottom: 15px; font-size: 14px; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background-color: #eee; font-weight: bold; }
+        
+        .badge { display: inline-block; padding: 3px 6px; border-radius: 4px; font-size: 12px; color: white; }
+        .badge-type { background-color: #17a2b8; }
+        .badge-pk { background-color: #dc3545; }
+        
+        .section-title { font-weight: bold; margin: 10px 0 5px; color: #666; }
+        .empty-data { color: #999; font-style: italic; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🛠️ 資料庫現況檢視 (database.py)</h1>
+        <p>此頁面顯示目前的資料庫 Schema 與部分資料，用於確認 Migration 是否成功。</p>
+
+        {% for table_name, info in db_info.items() %}
+        <div class="card">
+            <h2>📦 Table: {{ table_name }}</h2>
+            
+            <div class="section-title">📋 欄位結構 (Schema)</div>
+            <table>
+                <thead>
+                    <tr>
+                        <th>#</th>
+                        <th>欄位名稱 (Column)</th>
+                        <th>資料型態 (Type)</th>
+                        <th>Null?</th>
+                        <th>預設值 (Default)</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for col in info.schema %}
+                    <tr>
+                        <td>{{ loop.index }}</td>
+                        <td>
+                            <strong>{{ col[0] }}</strong>
+                            {% if col[0] == 'id' %}<span class="badge badge-pk">PK</span>{% endif %}
+                        </td>
+                        <td><span class="badge badge-type">{{ col[1] }}</span></td>
+                        <td>{{ col[2] }}</td>
+                        <td><code style="color: #d63384;">{{ col[3] or 'None' }}</code></td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+
+            <div class="section-title">🔍 資料預覽 (Top 3 Rows)</div>
+            <div style="overflow-x: auto;">
+                {% if info.data %}
+                <table>
+                    <thead>
+                        <tr>
+                            {% for col in info.schema %}
+                            <th>{{ col[0] }}</th>
+                            {% endfor %}
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in info.data %}
+                        <tr>
+                            {% for cell in row %}
+                            <td style="white-space: nowrap; max-width: 200px; overflow: hidden; text-overflow: ellipsis;">
+                                {{ cell }}
+                            </td>
+                            {% endfor %}
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+                {% else %}
+                <div class="empty-data">此表格目前沒有資料。</div>
+                {% endif %}
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</body>
+</html>
