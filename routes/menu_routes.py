@@ -21,7 +21,6 @@ def get_menu_data():
     settings = {row[0]: row[1] for row in settings_rows}
     
     # 【關鍵修改】確保 delivery_min_price 存在於設定中
-    # 這樣前端 menu.html 透過 config.delivery_min_price 讀取時才不會出錯或為空
     if 'delivery_min_price' not in settings:
         settings['delivery_min_price'] = '0'  # 若資料庫未設定，預設為 0
     
@@ -109,6 +108,7 @@ def process_order_submission(request, order_type_override=None):
         sess_data = session.get('delivery_data', {})
         sess_info = session.get('delivery_info', {})
 
+        # 這裡會讀取 session，導致即使是內用，如果 session 有舊資料，customer_address 也會有值
         customer_name = request.form.get('customer_name') or request.form.get('name') or sess_data.get('name') or ''
         customer_phone = request.form.get('customer_phone') or request.form.get('phone') or sess_data.get('phone') or ''
         customer_address = request.form.get('delivery_address') or request.form.get('address') or sess_data.get('address') or ''
@@ -118,8 +118,19 @@ def process_order_submission(request, order_type_override=None):
         delivery_info_json_str = None
         delivery_fee = 0
         
-        # 邏輯判斷：如果有地址 或 強制指定為外送
-        if order_type == 'delivery' or (customer_address and len(customer_address) > 2):
+        # 【關鍵修正】：邏輯判斷
+        # 原始錯誤邏輯： if order_type == 'delivery' or (customer_address and len(customer_address) > 2):
+        # 修正後邏輯：加入 (order_type_override != 'dine_in') 判斷。
+        # 意思就是：除非現在「不是」強制內用模式，否則不要因為有地址就自動變外送。
+        
+        should_process_as_delivery = False
+        if order_type == 'delivery':
+            should_process_as_delivery = True
+        elif (customer_address and len(customer_address) > 2) and (order_type_override != 'dine_in'):
+            # 只有在非強制內用的情況下，才允許因地址存在而自動判定為外送
+            should_process_as_delivery = True
+
+        if should_process_as_delivery:
             order_type = 'delivery'
             
             # 運費計算
@@ -148,7 +159,9 @@ def process_order_submission(request, order_type_override=None):
             table_number = "外送"
         else:
             # 內用 / 外帶
+            # 確保不會誤帶入外送費
             delivery_fee = 0
+            
             if raw_table_number and raw_table_number.strip():
                 table_number = raw_table_number
                 order_type = 'dine_in'
@@ -273,6 +286,7 @@ def index():
 def menu():
     # 提交訂單
     if request.method == 'POST':
+        # 這裡傳入 'dine_in'，會觸發上述 process_order_submission 的修正邏輯
         return process_order_submission(request, order_type_override='dine_in')
 
     # 顯示菜單
