@@ -123,7 +123,7 @@ def check_new_orders():
                 display_table = "🛵 外送"
             elif c_type == 'takeout':
                 is_delivery = False
-                display_table = "🥡 自取/外帶"
+                display_table = "🥡 自取"
             elif c_type == 'dine_in':
                 is_delivery = False
                 display_table = f"桌號 {table_str}"
@@ -724,3 +724,4 @@ def daily_report():
     </body>
     </html>
     """
+
