@@ -236,7 +236,7 @@ def check_new_orders():
         return jsonify({'html': f"載入錯誤: {str(e)}", 'max_seq': 0, 'new_ids': []})
 
 
-# --- 3. 核心列印路由 (已優化速度) ---
+# --- 3. 核心列印路由 (已優化速度 + 多語系結帳單支援) ---
 @kitchen_bp.route('/print_order/<int:oid>')
 def print_order(oid):
     try:
@@ -245,10 +245,11 @@ def print_order(oid):
         conn = get_db_connection()
         cur = conn.cursor()
         
-        # SQL 查詢：包含 order_type 與外送詳細資料
+        # SQL 查詢：新增讀取 'lang' 欄位
         query = """
             SELECT table_number, total_price, daily_seq, content_json, created_at, status,
-                   customer_name, customer_phone, customer_address, delivery_fee, scheduled_for, order_type
+                   customer_name, customer_phone, customer_address, delivery_fee, scheduled_for, 
+                   order_type, lang
             FROM orders WHERE id=%s
         """
         try:
@@ -257,10 +258,11 @@ def print_order(oid):
         except Exception as e:
             conn.rollback() 
             print(f"SQL Fallback triggered (print_order): {e}")
-            # Fallback for missing columns
+            # Fallback for missing columns (補上預設 'zh')
             cur.execute("""
                 SELECT table_number, total_price, daily_seq, content_json, created_at, status,
-                       customer_name, customer_phone, customer_address, delivery_fee, scheduled_for, 'unknown'
+                       customer_name, customer_phone, customer_address, delivery_fee, scheduled_for, 
+                       'unknown', 'zh'
                 FROM orders WHERE id=%s
             """, (oid,))
             order = cur.fetchone()
@@ -272,14 +274,15 @@ def print_order(oid):
         if not order:
             return "訂單不存在", 404
         
-        # 解包資料
+        # 解包資料 (新增 c_lang)
         table_num, total_price, seq, content_json, created_at, status, \
-        c_name, c_phone, c_addr, c_fee, c_schedule, c_type = order
+        c_name, c_phone, c_addr, c_fee, c_schedule, c_type, c_lang = order
         
         # 資料預處理
         c_fee = int(c_fee or 0)
         table_str = str(table_num).strip() if table_num else ""
         c_type = str(c_type).lower() if c_type else 'unknown'
+        c_lang = str(c_lang).lower() if c_lang else 'zh' # 確保有預設語系
         
         # 判斷資訊存在
         has_contact = (c_phone and str(c_phone).strip() != '' and str(c_phone).lower() != 'none')
@@ -375,7 +378,7 @@ def print_order(oid):
             .item-row { display: flex; justify-content: space-between; align-items: flex-start; margin-top: 8px; line-height: 1.1; }
             .name-col { width: 85%; display: flex; flex-direction: column; }
             .item-name-main { font-size: 22px; font-weight: 900; word-wrap: break-word; }
-            .item-name-sub { font-size: 16px; font-weight: bold; color: #000; }
+            .item-name-sub { font-size: 16px; font-weight: bold; color: #555; margin-top: 2px; } /* 副標題(中文)樣式 */
             .item-qty { font-size: 22px; font-weight: 900; white-space: nowrap; }
             .opt { font-size: 16px; font-weight: bold; padding-left: 10px; color: #333; }
             
@@ -400,45 +403,63 @@ def print_order(oid):
                 h += f"<div class='schedule-row'>🕒 預約: {c_schedule}</div>"
 
             # 2. 客戶資料區塊 (姓名、電話、地址)
-            # 只要是外送或有聯絡資訊就顯示
             if is_delivery or has_contact or (c_name and str(c_name).strip()):
                 h += f"<div class='customer-info'>"
-                
-                # 姓名
                 if c_name and str(c_name).strip():
                     h += f"<div class='cust-row'>👤 {c_name}</div>"
-                
-                # 電話
                 if has_contact:
                     h += f"<div class='cust-row'>📞 {c_phone}</div>"
-                
-                # 地址 (獨立一行，特大字體)
                 if has_addr:
                     h += f"<div class='addr-row'>📍 {c_addr}</div>"
-                
                 h += f"</div>"
             
             # 列出商品
             for i in item_list:
-                main_name = i.get('name') or i.get('name_en') or i.get('name_zh') or 'Unknown'
-                sub_name = i.get('name_zh', '')
+                # 基礎中文資料
+                name_zh = i.get('name_zh') or i.get('name')
+                opts_zh = i.get('options_zh') or i.get('options', [])
                 
-                kitchen_name = i.get('name_zh') or main_name
+                # 初始化變數
+                main_name = name_zh
+                sub_name = ""
+                opts_display = opts_zh
+
+                # --- 邏輯判斷開始 ---
+                if is_receipt:
+                    # 如果是結帳單，且客人非中文語系，切換顯示
+                    if c_lang and c_lang != 'zh':
+                        # 1. 抓取對應語系的名稱 (例如 name_en, name_jp)
+                        # 如果找不到對應語系，嘗試抓英文，最後才Fallback回中文
+                        lang_name_key = f"name_{c_lang}"
+                        target_name = i.get(lang_name_key) or i.get('name_en')
+                        
+                        if target_name:
+                            main_name = target_name
+                            sub_name = name_zh # 中文保留在下方給店員看
+                        
+                        # 2. 抓取對應語系的選項 (例如 options_en)
+                        lang_opt_key = f"options_{c_lang}"
+                        target_opts = i.get(lang_opt_key) or i.get('options_en')
+                        if target_opts:
+                            opts_display = target_opts
                 
-                name_html = f"<div class='name-col'><span class='item-name-main'>{(main_name if is_receipt else kitchen_name)}</span>"
-                if is_receipt and sub_name and sub_name != main_name:
+                # 如果是廚房單 (is_receipt=False)，完全不動，維持預設變數 (全中文)
+                # -------------------
+
+                # 組合 HTML
+                name_html = f"<div class='name-col'><span class='item-name-main'>{main_name}</span>"
+                
+                # 只有當有 sub_name 且跟主名稱不同時才顯示 (避免重複)
+                if sub_name and sub_name != main_name:
                     name_html += f"<span class='item-name-sub'>{sub_name}</span>"
+                
                 name_html += "</div>"
                 
                 qty = i.get('qty', 1)
                 h += f"<div class='item-row'>{name_html}<span class='item-qty'>x{qty}</span></div>"
 
-                opts_main = i.get('options') or i.get('options_zh', [])
-                opts_sub = i.get('options_zh', [])
-                
-                if opts_main: h += f"<div class='opt'>└ {', '.join(opts_main)}</div>"
-                if is_receipt and opts_sub and opts_sub != opts_main:
-                    h += f"<div class='opt' style='font-size:14px;'>({', '.join(opts_sub)})</div>"
+                if opts_display:
+                    h += f"<div class='opt'>└ {', '.join(opts_display)}</div>"
             
             # 結帳單顯示總金額與運費
             if is_receipt: 
@@ -724,4 +745,5 @@ def daily_report():
     </body>
     </html>
     """
+
 
