@@ -98,8 +98,6 @@ def process_order_submission(request, order_type_override=None):
             return "Empty Cart", 400
 
         # --- C. 嚴格模式判定 (Strict Mode Logic) ---
-        # 這裡不進行自動推斷，完全依賴 order_type_override
-        
         is_delivery_mode = (order_type_override == 'delivery')
         
         # 初始化變數
@@ -161,12 +159,25 @@ def process_order_submission(request, order_type_override=None):
             # 強制忽略所有外送相關的 Session 與表單地址
             # 只處理內用/外帶邏輯
             
+            # 判定邏輯修正：只要桌號包含 "外帶" 或桌號為空，就視為外帶
             if raw_table_number and raw_table_number.strip():
-                table_number = raw_table_number
-                order_type = 'dine_in'
+                table_number = raw_table_number.strip()
+                
+                # 如果桌號字串裡包含 "外帶" (例如 "外帶" 或 "外帶1")
+                if "外帶" in table_number:
+                    order_type = 'takeout'
+                    # 【關鍵修改】如果是外帶，從表單讀取預約時間與電話
+                    scheduled_for = request.form.get('scheduled_for', '')
+                    customer_phone = request.form.get('customer_phone') or request.form.get('phone') or ''
+                else:
+                    order_type = 'dine_in'
             else:
+                # 若無桌號，預設為外帶
                 table_number = "外帶"
                 order_type = 'takeout'
+                # 【關鍵修改】預設外帶也要讀取預約時間與電話
+                scheduled_for = request.form.get('scheduled_for', '')
+                customer_phone = request.form.get('customer_phone') or request.form.get('phone') or ''
             
             # 確保外送相關欄位為空
             customer_address = ''
@@ -446,8 +457,14 @@ def order_success():
         status_msg = "Order Received / 訂單已收到"
         wait_msg = "Please wait for confirmation call.<br>請留意電話，我們將與您確認餐點與外送時間。"
     else:
+        # 內用或外帶的顯示邏輯
+        # 如果有預約時間(外帶自取)，顯示出來
+        takeout_time_html = ""
+        if d_scheduled:
+            takeout_time_html = f"<div style='margin-bottom:10px; color:#d32f2f; font-weight:bold; font-size:1.2em;'>🕒 自取時間: {d_scheduled}</div>"
+        
         status_msg = t.get('pay_at_counter', '請至櫃檯結帳')
-        wait_msg = t.get('kitchen_prep', 'Kitchen is preparing your meal.')
+        wait_msg = f"{takeout_time_html}{t.get('kitchen_prep', 'Kitchen is preparing your meal.')}"
 
     tw_time = created_at + timedelta(hours=8)
     time_str = tw_time.strftime('%Y-%m-%d %H:%M:%S')
