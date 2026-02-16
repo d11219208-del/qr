@@ -31,29 +31,22 @@ def get_delivery_settings():
 
 def advanced_taiwan_address_cleaner(addr):
     """
-    清洗地址：
-    1. 轉半形
-    2. 強制移除郵遞區號 (解決你遇到的問題關鍵)
-    3. 只保留到『號』
+    清洗地址：確保格式適合台灣官方地圖搜尋
     """
     if not addr: return ""
-    # 轉半形
+    # 統一全形轉半形
     addr = addr.translate(str.maketrans('０１２３４５６７８９－', '0123456789-'))
-    
-    # 移除任何開頭或中間的 3~5 碼郵遞區號
-    addr = re.sub(r'\b\d{3,5}\b', '', addr)
-    
-    # 強制擷取至「號」為止
+    # 移除開頭郵遞區號
+    addr = re.sub(r'^\d{3,5}\s?', '', addr)
+    # 擷取到「號」為止
     match = re.search(r'(.+?[路街大道巷弄].+?\d+號)', addr)
     if match:
-        return match.group(1).replace(" ", "").strip()
-    
+        return match.group(1).replace(" ", "")
     return addr.strip()
 
 def nlsc_geocode(address):
     """
-    利用國土測繪圖資服務雲 (NLSC) 進行門牌定位
-    修正版：支援更多回傳欄位格式
+    強化版 NLSC 定位：支援多種回傳欄位格式 (lat/lon, y/x)
     """
     try:
         url = "https://maps.nlsc.gov.tw/S_Maps/Search"
@@ -63,19 +56,24 @@ def nlsc_geocode(address):
             "Referer": "https://maps.nlsc.gov.tw/"
         }
         
-        response = requests.get(url, params=params, headers=headers, timeout=8)
+        response = requests.get(url, params=params, headers=headers, timeout=10)
         data = response.json()
         
-        if data and isinstance(data, list) and len(data) > 0:
-            res = data[0]
-            # NLSC API 可能回傳不同的經緯度欄位名，這裡做全方位捕捉
-            lat = res.get('lat') or res.get('y') or res.get('cy')
-            lon = res.get('lon') or res.get('x') or res.get('cx')
-            
-            if lat and lon:
-                return (float(lat), float(lon))
+        # 遍歷結果，尋找有效的經緯度
+        if isinstance(data, list) and len(data) > 0:
+            for res in data:
+                # 優先抓取 WGS84 座標格式 (y 為緯度, x 為經度)
+                lat = res.get('lat') or res.get('y') or res.get('LAT')
+                lon = res.get('lon') or res.get('x') or res.get('LON')
+                
+                if lat and lon:
+                    try:
+                        return (float(lat), float(lon))
+                    except ValueError:
+                        continue
+        print(f"NLSC 找不到座標: {address}")
     except Exception as e:
-        print(f"NLSC API Error: {e}")
+        print(f"NLSC API 連線失敗: {e}")
     return None
 
 def generate_time_slots(base_date):
@@ -134,20 +132,19 @@ def check_address():
     settings = get_delivery_settings()
     scheduled_for = f"{delivery_date} {delivery_time}"
 
-    # 1. 精化地址：會把 '10576臺北市...' 變成 '臺北市松山區敦化北路338號'
+    # 1. 精確清洗地址
     search_target = advanced_taiwan_address_cleaner(raw_address)
     
-    # 2. NLSC 定位
+    # 2. 定位 (優先搜尋完整地址)
     user_coords = nlsc_geocode(search_target)
     
-    # 3. Fallback 邏輯
+    # 3. Fallback: 如果搜不到地址，嘗試「路名 + 號」
     fallback_note = ""
     if not user_coords:
-        # 嘗試搜尋路名 (如果號碼太新或太精確搜不到)
-        road_match = re.search(r'.+?[路街大道巷弄]', search_target)
-        if road_match:
-            user_coords = nlsc_geocode(road_match.group(0))
-            fallback_note = "(門牌定位失敗，以路段中心估算)"
+        # 如果使用者輸入包含「松山區」，有時官方地圖要「臺北市松山區」才能搜到
+        if "臺北" not in search_target:
+            search_target = "臺北市" + search_target
+            user_coords = nlsc_geocode(search_target)
 
     if user_coords:
         dist = haversine(RESTAURANT_COORDS, user_coords, unit=Unit.KILOMETERS)
@@ -155,7 +152,7 @@ def check_address():
         if dist > settings['max_km']:
             return jsonify({
                 'success': False, 
-                'msg': f'超出外送範圍 (距離 {dist:.1f}km, 限制 {settings["max_km"]}km)'
+                'msg': f'超出範圍 (距離 {dist:.1f}km, 限制 {settings["max_km"]}km)'
             })
 
         shipping_fee = settings['base_fee'] + int(dist * settings['fee_per_km'])
@@ -176,11 +173,11 @@ def check_address():
         return jsonify({'success': True, 'redirect': url_for('menu.menu', lang='zh')})
     
     else:
-        # 最終失敗轉人工
+        # 最終失敗：轉人工確認
         session['delivery_data'] = {'name': name, 'phone': phone, 'address': raw_address, 'scheduled_for': scheduled_for}
         session['delivery_info'] = {
             'is_delivery': True, 'distance_km': 0, 'shipping_fee': settings['base_fee'],
-            'min_price': settings['min_price'], 'note': "⚠️ 地址定位失敗，將由專人電話確認"
+            'min_price': settings['min_price'], 'note': "⚠️ 地址解析忙碌，請點餐後由專人電話核實運費"
         }
         session.modified = True
         return jsonify({'success': True, 'redirect': url_for('menu.menu', lang='zh')})
