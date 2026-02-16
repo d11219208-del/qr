@@ -36,9 +36,11 @@ def advanced_taiwan_address_cleaner(addr):
     if not addr: return ""
     # 統一全形轉半形
     addr = addr.translate(str.maketrans('０１２３４５６７８９－', '0123456789-'))
+    # 統一「台」為「臺」 (官方資料庫多用「臺」)
+    addr = addr.replace("台", "臺")
     # 移除開頭郵遞區號
     addr = re.sub(r'^\d{3,5}\s?', '', addr)
-    # 擷取到「號」為止
+    # 擷取到「號」為止，避免「圖書二館」或「F樓」干擾
     match = re.search(r'(.+?[路街大道巷弄].+?\d+號)', addr)
     if match:
         return match.group(1).replace(" ", "")
@@ -46,11 +48,12 @@ def advanced_taiwan_address_cleaner(addr):
 
 def nlsc_geocode(address):
     """
-    強化版 NLSC 定位：支援多種回傳欄位格式 (lat/lon, y/x)
+    終極強化版 NLSC 定位邏輯
     """
     try:
-        url = "https://maps.nlsc.gov.tw/S_Maps/Search"
-        params = {"lang": "zh_TW", "q": address}
+        # 使用 NLSC 的 LocationSearch 介面，這對門牌解析最友善
+        url = "https://maps.nlsc.gov.tw/S_Maps/LocationSearch"
+        params = {"term": address}
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
             "Referer": "https://maps.nlsc.gov.tw/"
@@ -59,21 +62,38 @@ def nlsc_geocode(address):
         response = requests.get(url, params=params, headers=headers, timeout=10)
         data = response.json()
         
-        # 遍歷結果，尋找有效的經緯度
+        # NLSC LocationSearch 回傳格式通常是清單
         if isinstance(data, list) and len(data) > 0:
-            for res in data:
-                # 優先抓取 WGS84 座標格式 (y 為緯度, x 為經度)
-                lat = res.get('lat') or res.get('y') or res.get('LAT')
-                lon = res.get('lon') or res.get('x') or res.get('LON')
+            for item in data:
+                # 某些回傳會在標籤內含經緯度，或是直接有 lat/lon 欄位
+                lat = item.get('lat') or item.get('y')
+                lon = item.get('lon') or item.get('x')
                 
+                # 如果 LocationSearch 回傳的是地標名稱而非座標，嘗試解析它的 content 欄位
+                # 部分回傳會把座標藏在像 "location": "121.5492,25.0617" 這樣的格式裡
+                if not lat and 'content' in item:
+                    # 嘗試從 content 提取座標 (例如: "... <span lon='121.5' lat='25.0'>")
+                    lon_match = re.search(r"lon=['\"]([\d\.]+)['\"]", item['content'])
+                    lat_match = re.search(r"lat=['\"]([\d\.]+)['\"]", item['content'])
+                    if lon_match and lat_match:
+                        lat, lon = lat_match.group(1), lon_match.group(1)
+
                 if lat and lon:
-                    try:
-                        return (float(lat), float(lon))
-                    except ValueError:
-                        continue
-        print(f"NLSC 找不到座標: {address}")
+                    return (float(lat), float(lon))
+        
+        # 備援：嘗試原本的 Search 介面
+        search_url = "https://maps.nlsc.gov.tw/S_Maps/Search"
+        res_search = requests.get(search_url, params={"q": address, "lang": "zh_TW"}, headers=headers, timeout=10)
+        data_search = res_search.json()
+        if isinstance(data_search, list) and len(data_search) > 0:
+            res = data_search[0]
+            lat = res.get('lat') or res.get('y')
+            lon = res.get('lon') or res.get('x')
+            if lat and lon:
+                return (float(lat), float(lon))
+
     except Exception as e:
-        print(f"NLSC API 連線失敗: {e}")
+        print(f"NLSC API Error: {e}")
     return None
 
 def generate_time_slots(base_date):
@@ -132,21 +152,18 @@ def check_address():
     settings = get_delivery_settings()
     scheduled_for = f"{delivery_date} {delivery_time}"
 
-    # 1. 精確清洗地址
+    # 1. 精確清洗地址 (包含 台 -> 臺 的轉換)
     search_target = advanced_taiwan_address_cleaner(raw_address)
     
-    # 2. 定位 (優先搜尋完整地址)
+    # 2. 定位
     user_coords = nlsc_geocode(search_target)
     
-    # 3. Fallback: 如果搜不到地址，嘗試「路名 + 號」
-    fallback_note = ""
-    if not user_coords:
-        # 如果使用者輸入包含「松山區」，有時官方地圖要「臺北市松山區」才能搜到
-        if "臺北" not in search_target:
-            search_target = "臺北市" + search_target
-            user_coords = nlsc_geocode(search_target)
+    # 3. 如果第一次失敗，補上「臺北市」再試一次
+    if not user_coords and "臺北" not in search_target:
+        user_coords = nlsc_geocode("臺北市" + search_target)
 
     if user_coords:
+        # 4. 計算距離
         dist = haversine(RESTAURANT_COORDS, user_coords, unit=Unit.KILOMETERS)
         
         if dist > settings['max_km']:
@@ -165,7 +182,7 @@ def check_address():
             'distance_km': round(dist, 1),
             'shipping_fee': shipping_fee,
             'min_price': settings['min_price'],
-            'note': fallback_note
+            'note': ""
         }
         session['table_num'] = '外送'
         session.modified = True
