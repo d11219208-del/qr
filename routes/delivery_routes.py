@@ -5,6 +5,10 @@ from haversine import haversine, Unit
 from database import get_db_connection
 import re
 import random
+import urllib3
+
+# 禁用安全請求警告（因為我們會跳過 SSL 驗證）
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 delivery_bp = Blueprint('delivery', __name__)
 
@@ -30,18 +34,12 @@ def get_delivery_settings():
     }
 
 def advanced_taiwan_address_cleaner(addr):
-    """
-    清洗地址：確保符合台灣官方資料庫偏好的格式
-    """
+    """清洗地址以符合 NLSC 搜尋格式"""
     if not addr: return ""
-    # 1. 統一全形轉半形
     addr = addr.translate(str.maketrans('０１２３４５６７８９－', '0123456789-'))
-    # 2. 統一「台」為「臺」
     addr = addr.replace("台", "臺")
-    # 3. 移除郵遞區號
     addr = re.sub(r'^\d{3,5}\s?', '', addr)
-    # 4. 只抓取到「號」為止（國土測繪雲搜尋門牌最準確的方式）
-    # 範例：臺北市松山區敦化北路338號5樓 -> 臺北市松山區敦化北路338號
+    # 擷取到「號」為止
     match = re.search(r'(.+?[路街大道巷弄].+?\d+號)', addr)
     if match:
         return match.group(1).strip()
@@ -49,7 +47,7 @@ def advanced_taiwan_address_cleaner(addr):
 
 def nlsc_geocode(address):
     """
-    國土測繪圖資服務雲 (NLSC) 深度解析邏輯
+    深度解析 NLSC 門牌座標，處理 SSL 驗證失敗問題
     """
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -57,46 +55,36 @@ def nlsc_geocode(address):
     }
     
     try:
-        # --- 方法 A: LocationSearch 接口 (支援模糊地標與門牌) ---
-        url_a = "https://maps.nlsc.gov.tw/S_Maps/LocationSearch"
-        res_a = requests.get(url_a, params={"term": address}, headers=headers, timeout=10)
-        data_a = res_a.json()
+        # 使用 LocationSearch 接口
+        url = "https://maps.nlsc.gov.tw/S_Maps/LocationSearch"
+        # 關鍵點：加入 verify=False 解決日誌中的 SSLError
+        response = requests.get(url, params={"term": address}, headers=headers, timeout=10, verify=False)
+        data = response.json()
         
-        if isinstance(data_a, list) and len(data_a) > 0:
-            for item in data_a:
-                # 關鍵修正：NLSC 經常使用 x(經度), y(緯度)
+        if isinstance(data, list) and len(data) > 0:
+            for item in data:
+                # 1. 嘗試直接獲取 x, y (NLSC 常用 x 代表經度, y 代表緯度)
                 lon = item.get('x') or item.get('lon')
                 lat = item.get('y') or item.get('lat')
                 
-                # 有些格式會把座標藏在 content 的 HTML 標籤裡
+                # 2. 如果沒有，嘗試從 content 字串中正則提取
                 if not lat and 'content' in item:
+                    # 匹配 lat='25.123' 或 lon='121.123'
                     lat_match = re.search(r"lat=['\"]([\d\.]+)['\"]", item['content'])
                     lon_match = re.search(r"lon=['\"]([\d\.]+)['\"]", item['content'])
                     if lat_match and lon_match:
                         lat, lon = lat_match.group(1), lon_match.group(1)
-
+                
                 if lat and lon:
                     return (float(lat), float(lon))
-
-        # --- 方法 B: Search 接口 (備援，適合精確門牌) ---
-        url_b = "https://maps.nlsc.gov.tw/S_Maps/Search"
-        res_b = requests.get(url_b, params={"q": address, "lang": "zh_TW"}, headers=headers, timeout=10)
-        data_b = res_b.json()
-        
-        if isinstance(data_b, list) and len(data_b) > 0:
-            res = data_b[0]
-            lat = res.get('lat') or res.get('y')
-            lon = res.get('lon') or res.get('x')
-            if lat and lon:
-                return (float(lat), float(lon))
-
+                    
     except Exception as e:
-        print(f"NLSC API Error for {address}: {e}")
+        print(f"NLSC API 請求失敗: {e}")
     
     return None
 
 def generate_time_slots(base_date):
-    """產生單日可外送時段 (邏輯不變)"""
+    """產生單日可外送時段"""
     slots = []
     start_time = time(10, 30)
     end_time = time(20, 30)
@@ -151,27 +139,23 @@ def check_address():
     settings = get_delivery_settings()
     scheduled_for = f"{delivery_date} {delivery_time}"
 
-    # 1. 深度清洗
+    # 1. 清洗地址
     search_target = advanced_taiwan_address_cleaner(raw_address)
     
-    # 2. 執行定位
+    # 2. 第一次嘗試定位
     user_coords = nlsc_geocode(search_target)
     
-    # 3. 針對「台北市」缺少「市」或是「臺/台」問題的自動補完嘗試
-    if not user_coords:
-        if "臺北市" not in search_target:
-            # 嘗試補齊縣市名稱再搜一次
-            retry_target = "臺北市" + search_target.replace("台北市", "")
-            user_coords = nlsc_geocode(retry_target)
+    # 3. 補齊縣市邏輯 (針對 台北市/台 -> 臺北市)
+    if not user_coords and "臺北" not in search_target:
+        user_coords = nlsc_geocode("臺北市" + search_target.replace("台北市", ""))
 
     if user_coords:
-        # 4. 計算直線距離
         dist = haversine(RESTAURANT_COORDS, user_coords, unit=Unit.KILOMETERS)
         
         if dist > settings['max_km']:
             return jsonify({
                 'success': False, 
-                'msg': f'超出外送範圍 (距離 {dist:.1f}km, 目前限制 {settings["max_km"]}km)'
+                'msg': f'超出外送範圍 (距離 {dist:.1f}km, 限制 {settings["max_km"]}km)'
             })
 
         shipping_fee = settings['base_fee'] + int(dist * settings['fee_per_km'])
@@ -192,11 +176,11 @@ def check_address():
         return jsonify({'success': True, 'redirect': url_for('menu.menu', lang='zh')})
     
     else:
-        # 最終 fallback：若地圖完全找不到，讓使用者點餐但標註為人工確認
+        # 如果 NLSC 依然失敗 (例如伺服器依然 SSL 報錯)，轉為人工模式確保使用者能下單
         session['delivery_data'] = {'name': name, 'phone': phone, 'address': raw_address, 'scheduled_for': scheduled_for}
         session['delivery_info'] = {
             'is_delivery': True, 'distance_km': 0, 'shipping_fee': settings['base_fee'],
-            'min_price': settings['min_price'], 'note': "⚠️ 地址解析忙碌，運費改由專人確認"
+            'min_price': settings['min_price'], 'note': "⚠️ 地址解析忙碌，運費改由專人電話確認"
         }
         session.modified = True
         return jsonify({'success': True, 'redirect': url_for('menu.menu', lang='zh')})
