@@ -1,7 +1,6 @@
 from flask import Blueprint, render_template, request, jsonify, session, url_for
 from datetime import datetime, timedelta, time
-from geopy.geocoders import Nominatim
-from geopy.exc import GeocoderTimedOut, GeocoderServiceError
+import requests
 from haversine import haversine, Unit
 from database import get_db_connection
 import re
@@ -10,7 +9,7 @@ import random
 delivery_bp = Blueprint('delivery', __name__)
 
 # 餐廳座標 (10491臺北市中山區龍江路164號)
-RESTAURANT_COORDS = (25.0549998,121.5377779)
+RESTAURANT_COORDS = (25.0549998, 121.5377779)
 
 def get_delivery_settings():
     """從資料庫讀取外送設定"""
@@ -32,26 +31,48 @@ def get_delivery_settings():
 
 def advanced_taiwan_address_cleaner(addr):
     """
-    結合地籍圖資正規化邏輯的清洗器：
-    1. 統一全形轉半形 (處理數字與連字號)
-    2. 移除郵遞區號
-    3. 核心邏輯：強制擷取至「號」為止，捨棄後方所有備註 (如：圖書二館、x樓)
+    清洗地址以符合國土測繪雲搜尋格式
     """
     if not addr: return ""
-    
-    # 轉半形 (將 ０-９ 轉為 0-9，－ 轉為 -)
     addr = addr.translate(str.maketrans('０１２３４５６７８９－', '0123456789-'))
-    
-    # 移除開頭的郵遞區號
     addr = re.sub(r'^\d{3,5}\s?', '', addr)
-    
-    # 正規化規則：匹配 [縣市] + [區/鎮/鄉] + [路/街/大道/巷/弄] + [數字 + 號]
-    # 範例：'114臺北市內湖區環山路一段56號圖書二館' -> '臺北市內湖區環山路一段56號'
+    # 國土測繪雲對備註詞容忍度較高，但仍保留抓取到『號』的邏輯作為主搜尋
     match = re.search(r'(.+?[路街大道巷弄].+?\d+號)', addr)
     if match:
         return match.group(1).replace(" ", "")
-    
     return addr.strip()
+
+def nlsc_geocode(address):
+    """
+    利用國土測繪圖資服務雲 (NLSC) 進行門牌定位
+    """
+    try:
+        # NLSC 地標與門牌查詢 API (這是公用查詢介面使用的 API)
+        url = "https://maps.nlsc.gov.tw/S_Maps/Search"
+        params = {
+            "lang": "zh_TW",
+            "q": address
+        }
+        # 模擬瀏覽器 Headers
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+            "Referer": "https://maps.nlsc.gov.tw/"
+        }
+        
+        response = requests.get(url, params=params, headers=headers, timeout=8)
+        data = response.json()
+        
+        # NLSC 回傳格式通常是清單，取第一個匹配項
+        if data and len(data) > 0:
+            # 國土測繪雲回傳通常包含 lat, lon 或 x, y (EPSG:4326)
+            # 部分回傳格式可能是 { "lat": ..., "lon": ... } 或是在內容字串中
+            res = data[0]
+            lat = float(res.get('lat') or res.get('y'))
+            lon = float(res.get('lon') or res.get('x'))
+            return (lat, lon)
+    except Exception as e:
+        print(f"NLSC API Error: {e}")
+    return None
 
 def generate_time_slots(base_date):
     """產生單日可外送時段"""
@@ -107,65 +128,61 @@ def check_address():
     if not all([raw_address, name, phone, delivery_date, delivery_time]):
         return jsonify({'success': False, 'msg': '請填寫完整資訊'})
     
-    # 模擬隨機瀏覽器請求，避免被 OSM 暫時封鎖
-    ua_list = [f"Taiwan_Delivery_Bot_{random.randint(100,999)}", "Mozilla/5.0", "Map_Calculator_v1"]
-    geolocator = Nominatim(user_agent=random.choice(ua_list))
-    
     settings = get_delivery_settings()
     scheduled_for = f"{delivery_date} {delivery_time}"
 
-    try:
-        # --- 核心邏輯：仿地籍圖資精確化清洗 ---
-        search_target = advanced_taiwan_address_cleaner(raw_address)
+    # 1. 地址清洗
+    search_target = advanced_taiwan_address_cleaner(raw_address)
+    
+    # 2. 使用國土測繪雲 (NLSC) 定位
+    user_coords = nlsc_geocode(search_target)
+    
+    # 3. Fallback: 如果精確地址失敗，嘗試只搜尋路名
+    fallback_note = ""
+    if not user_coords:
+        road_only = re.search(r'.+?[路街大道巷弄]', search_target)
+        if road_only:
+            user_coords = nlsc_geocode(road_only.group(0))
+            fallback_note = "(精確門牌搜尋失敗，改用路段中心估算)"
+
+    if user_coords:
+        # 4. 計算距離
+        dist = haversine(RESTAURANT_COORDS, user_coords, unit=Unit.KILOMETERS)
         
-        # 第一次嘗試：搜尋完整精確門牌
-        location = geolocator.geocode(search_target, country_codes='tw', timeout=10)
+        if dist > settings['max_km']:
+            return jsonify({
+                'success': False, 
+                'msg': f'超出外送範圍 (距離 {dist:.1f}km, 目前限制 {settings["max_km"]}km)'
+            })
+
+        shipping_fee = settings['base_fee'] + int(dist * settings['fee_per_km'])
+
+        # 5. 存入 Session
+        session['delivery_data'] = {
+            'name': name, 'phone': phone, 'address': raw_address, 'scheduled_for': scheduled_for
+        }
+        session['delivery_info'] = {
+            'is_delivery': True,
+            'distance_km': round(dist, 1),
+            'shipping_fee': shipping_fee,
+            'min_price': settings['min_price'],
+            'note': fallback_note
+        }
+        session['table_num'] = '外送'
+        session.modified = True
         
-        # 第二次嘗試 (Fallback)：如果找不到號碼，退回搜尋「路段」
-        fallback_note = ""
-        if not location:
-            road_only = re.search(r'.+?[路街大道巷弄]', search_target)
-            if road_only:
-                location = geolocator.geocode(road_only.group(0), country_codes='tw', timeout=10)
-                fallback_note = "(精確門牌定位失敗，以路段中心計算)"
-
-        if location:
-            user_coords = (location.latitude, location.longitude)
-            # 使用 Haversine 公式計算直線距離
-            dist = haversine(RESTAURANT_COORDS, user_coords, unit=Unit.KILOMETERS)
-            
-            if dist > settings['max_km']:
-                return jsonify({
-                    'success': False, 
-                    'msg': f'超出外送範圍 (距離 {dist:.1f}km, 目前限制 {settings["max_km"]}km)'
-                })
-
-            shipping_fee = settings['base_fee'] + int(dist * settings['fee_per_km'])
-
-            # 存入 Session
-            session['delivery_data'] = {
-                'name': name, 'phone': phone, 'address': raw_address, 'scheduled_for': scheduled_for
-            }
-            session['delivery_info'] = {
-                'is_delivery': True,
-                'distance_km': round(dist, 1),
-                'shipping_fee': shipping_fee,
-                'min_price': settings['min_price'],
-                'note': fallback_note
-            }
-            session['table_num'] = '外送'
-            session.modified = True
-            
-            return jsonify({'success': True, 'redirect': url_for('menu.menu', lang='zh')})
-        else:
-            return jsonify({'success': False, 'msg': '地圖無法解析此地址，請確認路名與門牌'})
-
-    except (GeocoderTimedOut, GeocoderServiceError):
-        # 伺服器忙碌時的保險機制 (人工模式)
+        return jsonify({'success': True, 'redirect': url_for('menu.menu', lang='zh')})
+    
+    else:
+        # 如果 NLSC 也失敗，轉人工模式
         session['delivery_data'] = {'name': name, 'phone': phone, 'address': raw_address, 'scheduled_for': scheduled_for}
         session['delivery_info'] = {
             'is_delivery': True, 'distance_km': 0, 'shipping_fee': settings['base_fee'],
-            'min_price': settings['min_price'], 'note': "⚠️ 地圖連線忙碌，運費請與店家確認"
+            'min_price': settings['min_price'], 'note': "⚠️ 地址解析失敗，將由專人電話確認"
         }
         session.modified = True
-        return jsonify({'success': True, 'redirect': url_for('menu.menu', lang='zh')})
+        return jsonify({
+            'success': True, 
+            'redirect': url_for('menu.menu', lang='zh'),
+            'msg': '無法精確定位地址，已轉為人工確認'
+        })
