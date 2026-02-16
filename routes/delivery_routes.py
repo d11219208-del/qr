@@ -31,73 +31,72 @@ def get_delivery_settings():
 
 def advanced_taiwan_address_cleaner(addr):
     """
-    清洗地址：確保格式適合台灣官方地圖搜尋
+    清洗地址：確保符合台灣官方資料庫偏好的格式
     """
     if not addr: return ""
-    # 統一全形轉半形
+    # 1. 統一全形轉半形
     addr = addr.translate(str.maketrans('０１２３４５６７８９－', '0123456789-'))
-    # 統一「台」為「臺」 (官方資料庫多用「臺」)
+    # 2. 統一「台」為「臺」
     addr = addr.replace("台", "臺")
-    # 移除開頭郵遞區號
+    # 3. 移除郵遞區號
     addr = re.sub(r'^\d{3,5}\s?', '', addr)
-    # 擷取到「號」為止，避免「圖書二館」或「F樓」干擾
+    # 4. 只抓取到「號」為止（國土測繪雲搜尋門牌最準確的方式）
+    # 範例：臺北市松山區敦化北路338號5樓 -> 臺北市松山區敦化北路338號
     match = re.search(r'(.+?[路街大道巷弄].+?\d+號)', addr)
     if match:
-        return match.group(1).replace(" ", "")
+        return match.group(1).strip()
     return addr.strip()
 
 def nlsc_geocode(address):
     """
-    終極強化版 NLSC 定位邏輯
+    國土測繪圖資服務雲 (NLSC) 深度解析邏輯
     """
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Referer": "https://maps.nlsc.gov.tw/"
+    }
+    
     try:
-        # 使用 NLSC 的 LocationSearch 介面，這對門牌解析最友善
-        url = "https://maps.nlsc.gov.tw/S_Maps/LocationSearch"
-        params = {"term": address}
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Referer": "https://maps.nlsc.gov.tw/"
-        }
+        # --- 方法 A: LocationSearch 接口 (支援模糊地標與門牌) ---
+        url_a = "https://maps.nlsc.gov.tw/S_Maps/LocationSearch"
+        res_a = requests.get(url_a, params={"term": address}, headers=headers, timeout=10)
+        data_a = res_a.json()
         
-        response = requests.get(url, params=params, headers=headers, timeout=10)
-        data = response.json()
-        
-        # NLSC LocationSearch 回傳格式通常是清單
-        if isinstance(data, list) and len(data) > 0:
-            for item in data:
-                # 某些回傳會在標籤內含經緯度，或是直接有 lat/lon 欄位
-                lat = item.get('lat') or item.get('y')
-                lon = item.get('lon') or item.get('x')
+        if isinstance(data_a, list) and len(data_a) > 0:
+            for item in data_a:
+                # 關鍵修正：NLSC 經常使用 x(經度), y(緯度)
+                lon = item.get('x') or item.get('lon')
+                lat = item.get('y') or item.get('lat')
                 
-                # 如果 LocationSearch 回傳的是地標名稱而非座標，嘗試解析它的 content 欄位
-                # 部分回傳會把座標藏在像 "location": "121.5492,25.0617" 這樣的格式裡
+                # 有些格式會把座標藏在 content 的 HTML 標籤裡
                 if not lat and 'content' in item:
-                    # 嘗試從 content 提取座標 (例如: "... <span lon='121.5' lat='25.0'>")
-                    lon_match = re.search(r"lon=['\"]([\d\.]+)['\"]", item['content'])
                     lat_match = re.search(r"lat=['\"]([\d\.]+)['\"]", item['content'])
-                    if lon_match and lat_match:
+                    lon_match = re.search(r"lon=['\"]([\d\.]+)['\"]", item['content'])
+                    if lat_match and lon_match:
                         lat, lon = lat_match.group(1), lon_match.group(1)
 
                 if lat and lon:
                     return (float(lat), float(lon))
+
+        # --- 方法 B: Search 接口 (備援，適合精確門牌) ---
+        url_b = "https://maps.nlsc.gov.tw/S_Maps/Search"
+        res_b = requests.get(url_b, params={"q": address, "lang": "zh_TW"}, headers=headers, timeout=10)
+        data_b = res_b.json()
         
-        # 備援：嘗試原本的 Search 介面
-        search_url = "https://maps.nlsc.gov.tw/S_Maps/Search"
-        res_search = requests.get(search_url, params={"q": address, "lang": "zh_TW"}, headers=headers, timeout=10)
-        data_search = res_search.json()
-        if isinstance(data_search, list) and len(data_search) > 0:
-            res = data_search[0]
+        if isinstance(data_b, list) and len(data_b) > 0:
+            res = data_b[0]
             lat = res.get('lat') or res.get('y')
             lon = res.get('lon') or res.get('x')
             if lat and lon:
                 return (float(lat), float(lon))
 
     except Exception as e:
-        print(f"NLSC API Error: {e}")
+        print(f"NLSC API Error for {address}: {e}")
+    
     return None
 
 def generate_time_slots(base_date):
-    """產生單日可外送時段"""
+    """產生單日可外送時段 (邏輯不變)"""
     slots = []
     start_time = time(10, 30)
     end_time = time(20, 30)
@@ -152,24 +151,27 @@ def check_address():
     settings = get_delivery_settings()
     scheduled_for = f"{delivery_date} {delivery_time}"
 
-    # 1. 精確清洗地址 (包含 台 -> 臺 的轉換)
+    # 1. 深度清洗
     search_target = advanced_taiwan_address_cleaner(raw_address)
     
-    # 2. 定位
+    # 2. 執行定位
     user_coords = nlsc_geocode(search_target)
     
-    # 3. 如果第一次失敗，補上「臺北市」再試一次
-    if not user_coords and "臺北" not in search_target:
-        user_coords = nlsc_geocode("臺北市" + search_target)
+    # 3. 針對「台北市」缺少「市」或是「臺/台」問題的自動補完嘗試
+    if not user_coords:
+        if "臺北市" not in search_target:
+            # 嘗試補齊縣市名稱再搜一次
+            retry_target = "臺北市" + search_target.replace("台北市", "")
+            user_coords = nlsc_geocode(retry_target)
 
     if user_coords:
-        # 4. 計算距離
+        # 4. 計算直線距離
         dist = haversine(RESTAURANT_COORDS, user_coords, unit=Unit.KILOMETERS)
         
         if dist > settings['max_km']:
             return jsonify({
                 'success': False, 
-                'msg': f'超出範圍 (距離 {dist:.1f}km, 限制 {settings["max_km"]}km)'
+                'msg': f'超出外送範圍 (距離 {dist:.1f}km, 目前限制 {settings["max_km"]}km)'
             })
 
         shipping_fee = settings['base_fee'] + int(dist * settings['fee_per_km'])
@@ -190,11 +192,11 @@ def check_address():
         return jsonify({'success': True, 'redirect': url_for('menu.menu', lang='zh')})
     
     else:
-        # 最終失敗：轉人工確認
+        # 最終 fallback：若地圖完全找不到，讓使用者點餐但標註為人工確認
         session['delivery_data'] = {'name': name, 'phone': phone, 'address': raw_address, 'scheduled_for': scheduled_for}
         session['delivery_info'] = {
             'is_delivery': True, 'distance_km': 0, 'shipping_fee': settings['base_fee'],
-            'min_price': settings['min_price'], 'note': "⚠️ 地址解析忙碌，請點餐後由專人電話核實運費"
+            'min_price': settings['min_price'], 'note': "⚠️ 地址解析忙碌，運費改由專人確認"
         }
         session.modified = True
         return jsonify({'success': True, 'redirect': url_for('menu.menu', lang='zh')})
