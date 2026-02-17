@@ -33,21 +33,19 @@
         .qty-input { width: 70px; text-align: center; font-size: 1.4em; border: 1px solid #ddd; padding: 8px; border-radius: 8px; }
         .cat-header { padding: 12px 15px; font-weight: bold; font-size: 1.3em; color: #333; background: #eee; margin-top: 15px; scroll-margin-top: 160px; }
 
-        /* 外送資訊卡片樣式 */
-        .delivery-info-card {
-            background: #e3f2fd; border: 1px solid #90caf9; border-radius: 10px; padding: 12px; margin-bottom: 10px; color: #1565c0; font-size: 0.95em;
-        }
+        /* Delivery Info Card */
+        .delivery-info-card { background: #e3f2fd; border: 1px solid #90caf9; border-radius: 10px; padding: 12px; margin-bottom: 10px; color: #1565c0; font-size: 0.95em; }
         .di-row { margin-bottom: 4px; display: flex; align-items: flex-start; }
         .di-icon { margin-right: 8px; font-size: 1.1em; }
         .di-fee { font-weight: bold; color: #d32f2f; margin-top: 5px; text-align: right; border-top: 1px solid #bbdefb; padding-top: 5px; }
 
-        /* 購物車樣式調整 */
+        /* Cart Adjustment */
         .cart-item-row { border-bottom: 1px solid #eee; padding: 15px 0; }
         .cart-item-main { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
         .cart-qty-sub { display: flex; align-items: center; justify-content: flex-end; gap: 15px; }
         .btn-edit-opt { background: #e3f2fd; color: #2196f3; border: 1px solid #2196f3; padding: 6px 12px; border-radius: 8px; font-size: 0.9em; font-weight: bold; cursor: pointer; }
 
-        /* [新增] 模式切換與時間選擇器樣式 */
+        /* Mode Switching */
         .mode-switch { display: flex; background: #eee; border-radius: 10px; padding: 4px; margin-bottom: 10px; }
         .mode-opt { flex: 1; text-align: center; padding: 8px; border-radius: 8px; cursor: pointer; transition: 0.3s; font-weight: bold; color: #666; }
         .mode-opt.active { background: white; color: #28a745; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
@@ -56,14 +54,12 @@
     </style>
 </head>
 <body>
-    {# --- 1. 強制從 Session 讀取資料 --- #}
+    {# --- 從 Session 讀取狀態 --- #}
     {% set session_delivery = session.get('delivery_data', {}) %}
     {% set session_table = session.get('table_num') %}
     
-    {# --- 2. 判斷邏輯：只要 Session 裡有電話，或桌號是外送，就認定為外送模式 --- #}
+    {# --- 判斷模式：外送模式優先 --- #}
     {% set is_delivery_mode = (session_delivery.get('phone')) or (session_table == '外送') %}
-    
-    {# --- 3. 決定最終顯示的桌號 (如果是外送模式，強制顯示 '外送') --- #}
     {% set final_table_num = '外送' if is_delivery_mode else (table_num or session_table or '') %}
 
     <div class="header">
@@ -75,20 +71,18 @@
         
         <h2 style="margin:0 0 10px 0;">{{ texts['welcome'] }}</h2>
 
-        {# --- 狀態顯示與輸入區 --- #}
+        {# --- 頂部輸入區：依模式切換 --- #}
         {% if is_delivery_mode %}
-            {# --- 鎖定的外送桌號欄位 (唯讀) --- #}
             <div style="margin-bottom: 10px;">
                 <label style="font-weight:bold; color:#1565c0;">{{ texts['table_placeholder'] }}</label>
                 <input type="text" id="visible_table" value="外送" readonly
                        style="padding:12px;width:100%;box-sizing:border-box;border:2px solid #90caf9; background:#e3f2fd; color:#1565c0; border-radius:8px;font-size:1.2em;margin-top:5px; text-align:center; font-weight:bold;">
             </div>
         {% else %}
-            {# --- [修改] 現場/預約自取 模式切換區 --- #}
             <div style="margin-bottom: 10px;">
                 <div class="mode-switch">
-                    <div class="mode-opt active" id="mode-dinein" onclick="setMode('dinein')">🍽️ 現場 (Dine-in)</div>
-                    <div class="mode-opt" id="mode-takeout" onclick="setMode('takeout')">🛍️ 預約自取 (Takeout)</div>
+                    <div class="mode-opt active" id="mode-dinein" onclick="setMode('dinein')">🍽️ {{ texts['mode_dinein'] or '現場內用' }}</div>
+                    <div class="mode-opt" id="mode-takeout" onclick="setMode('takeout')">🛍️ {{ texts['mode_takeout'] or '預約自取' }}</div>
                 </div>
 
                 <div id="sec-dinein">
@@ -99,8 +93,8 @@
 
                 <div id="sec-takeout" style="display: none;">
                     <div class="takeout-time-box">
-                        <label style="font-weight:bold; color:#856404;">🕒 預計取餐時間 (Pickup Time)</label>
-                        <input type="datetime-local" id="takeout_time" class="time-picker" step="60">
+                        <label style="font-weight:bold; color:#856404;">🕒 {{ texts['pickup_time_label'] or '預計取餐時間' }}</label>
+                        <input type="datetime-local" id="takeout_time" class="time-picker">
                     </div>
                 </div>
             </div>
@@ -109,6 +103,7 @@
         <div class="cat-bar" id="cat-nav"></div>
     </div>
 
+    {# --- 外送資訊卡片 --- #}
     {% if is_delivery_mode %}
     <div style="padding: 10px 12px 0 12px;">
         <div class="delivery-info-card">
@@ -116,42 +111,28 @@
             <div class="di-row"><span class="di-icon">👤</span> {{ session_delivery.get('name', '貴賓') }} / {{ session_delivery.get('phone', '-') }}</div>
             <div class="di-row"><span class="di-icon">📍</span> {{ session_delivery.get('address', '地址載入中') }}</div>
             <div class="di-row"><span class="di-icon">🕒</span> 預約時間: {{ session_delivery.get('scheduled_for', '盡快送達') }}</div>
-            
-            <div class="di-fee">
-                運費 Delivery Fee: ${{ session.get('delivery_info', {}).get('shipping_fee', 0) }}
-                {% set d_note = session_delivery.get('note') or session.get('delivery_info', {}).get('note') %}
-                {% if d_note %}
-                    <br><small style="color:#666;font-weight:normal;">註: {{ d_note }}</small>
-                {% endif %}
-            </div>
+            <div class="di-fee">運費 Delivery Fee: ${{ session.get('delivery_info', {}).get('shipping_fee', 0) }}</div>
         </div>
     </div>
     {% endif %}
 
     <div id="list"></div>
 
+    {# --- 訂單提交 Form --- #}
     <form id="order-form" method="POST" action="/menu">
         <input type="hidden" name="cart_data" id="cart_input">
         <input type="hidden" name="lang_input" id="lang_final_input" value="{{ order_lang }}">
-        {% if edit_oid %}
-        <input type="hidden" name="old_order_id" value="{{ edit_oid }}">
-        {% endif %}
+        {% if edit_oid %}<input type="hidden" name="old_order_id" value="{{ edit_oid }}">{% endif %}
         
-        {# --- 這裡對應 database.py 的 orders 表 table_number 欄位 --- #}
         <input type="hidden" name="table_number" id="tbl_input">
+        <input type="hidden" name="order_type" id="type_input" value="{{ 'delivery' if is_delivery_mode else 'dine_in' }}">
         
-        {# --- 外送資料欄位 --- #}
-        <input type="hidden" name="order_type" value="{{ 'delivery' if is_delivery_mode else 'dine_in' }}">
-        
+        {# 外送專用欄位 #}
         <input type="hidden" name="customer_name" value="{{ session_delivery.get('name', '') }}">
         <input type="hidden" name="customer_phone" value="{{ session_delivery.get('phone', '') }}">
-        
         <input type="hidden" name="delivery_address" value="{{ session_delivery.get('address', '') }}">
         <input type="hidden" name="delivery_note" value="{{ session_delivery.get('note', '') }}">
-        
-        {# --- [關鍵] 這個欄位會被後端讀取並寫入 database.py 的 delivery_time --- #}
         <input type="hidden" name="scheduled_for" id="scheduled_for_input" value="{{ session_delivery.get('scheduled_for', '') }}">
-        
         <input type="hidden" name="delivery_fee" value="{{ session.get('delivery_info', {}).get('shipping_fee', 0) }}">
         
         <div class="cart-bar" id="bar">
@@ -166,7 +147,7 @@
         </div>
     </form>
 
-    {# --- Modal 區域 (保持原樣) --- #}
+    {# --- Modals --- #}
     <div class="modal" id="opt-m" onclick="closeModalByBg(event, 'opt-m')">
         <div class="modal-c" onclick="event.stopPropagation()">
             <h3 id="m-name" style="font-size:1.5em;margin-top:0;"></h3>
@@ -195,22 +176,19 @@
     const EDIT_OID = "{{ edit_oid or '' }}";
     const PRELOAD_CART = {{ preload_cart | safe }};
     const CUR_LANG = "{{ display_lang }}";
-    
-    // --- JS 使用變數判定 (含低消) ---
     const IS_DELIVERY = {{ 'true' if is_delivery_mode else 'false' }};
     const DELIVERY_FEE = {{ session.get('delivery_info', {}).get('shipping_fee', 0) }};
     const DELIVERY_MIN = {{ session.get('delivery_info', {}).get('min_price', 500) }};
 
     let C = [], cur = null, selectedOptIndices = [], addP = 0, editIndex = -1;
-    let currentMode = 'dinein'; // 預設內用
+    let currentMode = 'dinein';
 
-    // [新增] 模式切換邏輯
     function setMode(mode) {
-        if(IS_DELIVERY) return; // 外送模式下不可切換
-
+        if(IS_DELIVERY) return;
         currentMode = mode;
         document.querySelectorAll('.mode-opt').forEach(el => el.classList.remove('active'));
         document.getElementById('mode-' + mode).classList.add('active');
+        document.getElementById('type_input').value = (mode === 'dinein' ? 'dine_in' : 'takeout');
 
         if(mode === 'dinein') {
             document.getElementById('sec-dinein').style.display = 'block';
@@ -218,290 +196,176 @@
         } else {
             document.getElementById('sec-dinein').style.display = 'none';
             document.getElementById('sec-takeout').style.display = 'block';
-            
-            // 初始化時間選擇器為當前時間往後 15 分鐘，方便使用者
             initTimePicker();
         }
     }
 
-    // [新增] 初始化時間選擇器
     function initTimePicker() {
         const now = new Date();
-        now.setMinutes(now.getMinutes() + 15); // 預設 15 分鐘後
-        now.setSeconds(0);
-        now.setMilliseconds(0);
-        
-        // 轉換為 YYYY-MM-DDTHH:mm 格式 (本地時間)
+        now.setMinutes(now.getMinutes() + 20); // 預設 20 分鐘後取餐
         const offset = now.getTimezoneOffset() * 60000;
         const localISOTime = (new Date(now - offset)).toISOString().slice(0, 16);
-        
         const picker = document.getElementById('takeout_time');
-        if(!picker.value) {
-            picker.value = localISOTime;
-        }
+        if(!picker.value) picker.value = localISOTime;
     }
 
-    function saveCache() { 
-        if(!EDIT_OID) localStorage.setItem('cart_cache', JSON.stringify(C)); 
-    }
+    function saveCache() { if(!EDIT_OID) localStorage.setItem('cart_cache', JSON.stringify(C)); }
 
     function initCart() {
-        if(EDIT_OID && PRELOAD_CART) {
-            C = PRELOAD_CART;
-        } else {
+        if(EDIT_OID && PRELOAD_CART) { C = PRELOAD_CART; } 
+        else {
             let cached = localStorage.getItem('cart_cache');
             C = cached ? JSON.parse(cached) : [];
         }
         upd();
     }
 
-    window.addEventListener('pageshow', function(event) {
-        if (event.persisted || (C.length > 0 && !localStorage.getItem('cart_cache') && !EDIT_OID)) {
-            initCart();
-        }
-    });
-
-    // 渲染商品列表 (保持原樣)
-    let h = "", lastCatKey = "", cats = [];
+    // 渲染清單
+    let h = "", lastCat = "", cats = [];
     P.forEach(p => {
-        let currentCatName = p['category_' + CUR_LANG] || p.category_zh;
-        let catId = "cat-" + p.category_zh.replace(/\s+/g, '-'); 
-        if(p.category_zh != lastCatKey) { 
-            h += `<div class="cat-header" id="${catId}">${currentCatName}</div>`; 
-            lastCatKey = p.category_zh; 
-            cats.push({ id: catId, name: currentCatName });
+        let curCat = p['category_' + CUR_LANG] || p.category_zh;
+        if(p.category_zh != lastCat) {
+            let cid = "cat-" + p.category_zh.replace(/\s+/g, '-');
+            h += `<div class="cat-header" id="${cid}">${curCat}</div>`;
+            lastCat = p.category_zh;
+            cats.push({id: cid, name: curCat});
         }
         let isAvail = p.is_available;
-        let d_name = p['name_' + CUR_LANG] || p.name_zh;
         h += `<div class="menu-item ${isAvail ? '' : 'sold-out'}">
             ${isAvail ? '' : `<div class="sold-out-badge">${T.sold_out}</div>`}
             ${p.image_url ? `<img src="${p.image_url}" class="menu-img">` : ''}
             <div class="menu-info">
-                <div><b>${d_name}</b><div style="color:#e91e63; font-weight:bold; font-size:1.1em;">$${p.price}</div></div>
-                <button class="add-btn" onclick="openOpt(${p.id})" ${isAvail ? '' : 'disabled'}>${isAvail ? T.add : T.sold_out}</button>
+                <div><b>${p['name_'+CUR_LANG] || p.name_zh}</b><div style="color:#e91e63; font-weight:bold;">$${p.price}</div></div>
+                <button class="add-btn" onclick="openOpt(${p.id})">${isAvail ? T.add : T.sold_out}</button>
             </div>
         </div>`;
     });
     document.getElementById('list').innerHTML = h;
 
-    let navH = ""; 
-    cats.forEach(c => { 
-        navH += `<div class="cat-btn" onclick="scrollToCat('${c.id}', this)">${c.name}</div>`; 
-    });
+    let navH = "";
+    cats.forEach(c => { navH += `<div class="cat-btn" onclick="scrollToCat('${c.id}', this)">${c.name}</div>`; });
     document.getElementById('cat-nav').innerHTML = navH;
 
-    function scrollToCat(catId, btn) {
-        const el = document.getElementById(catId);
+    function scrollToCat(id, btn) {
+        const el = document.getElementById(id);
         if(el) {
-            const offset = 160;
-            const bodyRect = document.body.getBoundingClientRect().top;
-            const elementRect = el.getBoundingClientRect().top;
-            const elementPosition = elementRect - bodyRect;
-            const offsetPosition = elementPosition - offset;
-            window.scrollTo({ top: offsetPosition, behavior: 'smooth' });
+            window.scrollTo({ top: el.offsetTop - 160, behavior: 'smooth' });
             document.querySelectorAll('.cat-btn').forEach(b => b.classList.remove('active'));
             btn.classList.add('active');
         }
     }
 
-    function closeModalByBg(e, id) { if(e.target.id === id) document.getElementById(id).style.display = 'none'; }
+    function closeModalByBg(e, id) { if(e.target.id === id) document.getElementById(id).style.display='none'; }
 
-    function openOpt(productId, cartIndex = -1) {
-        cur = P.find(x => x.id == productId); 
-        editIndex = cartIndex;
-        selectedOptIndices = []; 
+    function openOpt(pid, cIdx = -1) {
+        cur = P.find(x => x.id == pid);
+        editIndex = cIdx;
+        selectedOptIndices = [];
         addP = 0;
         
-        document.getElementById('m-name').innerText = (editIndex > -1 ? "✏️ " : "") + (cur['name_' + CUR_LANG] || cur.name_zh);
-        document.getElementById('m-confirm-btn').innerText = editIndex > -1 ? (T.save_changes || "💾 儲存修改") : T.modal_add_cart;
-        
-        let area = document.getElementById('m-opts'); 
+        document.getElementById('m-name').innerText = (cur['name_' + CUR_LANG] || cur.name_zh);
+        let area = document.getElementById('m-opts');
         area.innerHTML = "";
         
-        let opts = cur['custom_options_' + CUR_LANG] || cur.custom_options_zh;
-        if (typeof opts === 'string') {
-            opts = opts.split(',').filter(x => x.trim() !== '');
-        } else if (!Array.isArray(opts)) {
-            opts = [];
-        }
+        let opts = cur['custom_options_' + CUR_LANG] || cur.custom_options_zh || "";
+        let optArr = typeof opts === 'string' ? opts.split(',').filter(x=>x.trim()) : [];
+        let activeOpts = editIndex > -1 ? C[editIndex].options_zh : [];
 
-        let existingOpts = editIndex > -1 ? C[editIndex].options_zh : [];
-        
-        opts.forEach((o, index) => {
-            let parts = o.split(/[+]/); 
-            let n = parts[0].trim(), p = parts.length > 1 ? parseInt(parts[1]) : 0;
-            let d = document.createElement('div'); 
-            d.className = 'opt-tag';
+        optArr.forEach((o, i) => {
+            let parts = o.split('+'), n = parts[0].trim(), p = parts[1] ? parseInt(parts[1]) : 0;
+            let d = document.createElement('div');
+            d.className = 'opt-tag' + (activeOpts.includes(n) ? ' sel' : '');
+            if(activeOpts.includes(n)) { selectedOptIndices.push(i); addP += p; }
             d.innerText = n + (p ? ` (+$${p})` : '');
-            
-            if(editIndex > -1 && existingOpts.includes(n)) { 
-                selectedOptIndices.push(index); 
-                addP += p; 
-                d.classList.add('sel');
-            }
-            
             d.onclick = () => {
-                if(selectedOptIndices.includes(index)) {
-                    selectedOptIndices = selectedOptIndices.filter(i => i != index); 
-                    addP -= p; 
-                    d.classList.remove('sel');
+                if(d.classList.contains('sel')) {
+                    d.classList.remove('sel'); addP -= p;
+                    selectedOptIndices = selectedOptIndices.filter(idx => idx !== i);
                 } else {
-                    selectedOptIndices.push(index); 
-                    addP += p; 
-                    d.classList.add('sel');
+                    d.classList.add('sel'); addP += p;
+                    selectedOptIndices.push(i);
                 }
             };
             area.appendChild(d);
         });
-        
         document.getElementById('m-q').value = editIndex > -1 ? C[editIndex].qty : 1;
         document.getElementById('opt-m').style.display = 'flex';
-        document.getElementById('cart-m').style.display = 'none';
     }
 
     function cq(n) {
-        let input = document.getElementById('m-q'); 
-        let val = parseInt(input.value) || 1;
-        if(val + n >= 1) input.value = val + n;
+        let i = document.getElementById('m-q'), v = parseInt(i.value) || 1;
+        if(v + n >= 1) i.value = v + n;
     }
 
     function addC() {
         let q = parseInt(document.getElementById('m-q').value) || 1;
-        
-        let opts_zh = cur.custom_options_zh || [];
-        if(typeof opts_zh === 'string') opts_zh = opts_zh.split(',').filter(x=>x);
-        
-        let opts_en = cur.custom_options_en || opts_zh;
-        if(typeof opts_en === 'string') opts_en = opts_en.split(',').filter(x=>x);
+        let oZH = (cur.custom_options_zh || "").split(',').filter(x=>x);
+        let oEN = (cur.custom_options_en || cur.custom_options_zh || "").split(',').filter(x=>x);
 
-        let opts_jp = cur.custom_options_jp || opts_zh;
-        if(typeof opts_jp === 'string') opts_jp = opts_jp.split(',').filter(x=>x);
-
-        let opts_kr = cur.custom_options_kr || opts_zh;
-        if(typeof opts_kr === 'string') opts_kr = opts_kr.split(',').filter(x=>x);
-
-        let itemData = { 
-            id: cur.id, 
-            name_zh: cur.name_zh, name_en: cur.name_en, name_jp: cur.name_jp, name_kr: cur.name_kr, 
-            unit_price: cur.price + addP, 
-            qty: q, 
-            options_zh: selectedOptIndices.map(idx => (opts_zh[idx] || '').split('+')[0].trim()),
-            options_en: selectedOptIndices.map(idx => (opts_en[idx] || opts_zh[idx] || '').split('+')[0].trim()),
-            options_jp: selectedOptIndices.map(idx => (opts_jp[idx] || opts_zh[idx] || '').split('+')[0].trim()),
-            options_kr: selectedOptIndices.map(idx => (opts_kr[idx] || opts_zh[idx] || '').split('+')[0].trim()),
-            category: cur.category_zh, 
-            print_category: cur.print_category 
+        let data = {
+            id: cur.id,
+            name_zh: cur.name_zh, name_en: cur.name_en,
+            unit_price: cur.price + addP,
+            qty: q,
+            options_zh: selectedOptIndices.map(idx => oZH[idx].split('+')[0].trim()),
+            options_en: selectedOptIndices.map(idx => (oEN[idx]||oZH[idx]).split('+')[0].trim()),
+            category: cur.category_zh,
+            print_category: cur.print_category
         };
-        
-        if(editIndex > -1) C[editIndex] = itemData; else C.push(itemData);
-        
-        document.getElementById('opt-m').style.display = 'none'; 
-        saveCache(); 
-        upd(); 
-        if(editIndex > -1) showCart();
+        if(editIndex > -1) C[editIndex] = data; else C.push(data);
+        document.getElementById('opt-m').style.display = 'none';
+        saveCache(); upd();
     }
 
     function upd() {
-        if(C.length) {
-            document.getElementById('bar').style.display = 'flex';
-            let foodTotal = C.reduce((a, b) => a + b.unit_price * b.qty, 0);
-            let finalTotal = foodTotal;
-            if (IS_DELIVERY) {
-                finalTotal += DELIVERY_FEE;
-            }
-            document.getElementById('tot').innerText = finalTotal;
-            document.getElementById('cnt').innerText = C.reduce((a, b) => a + b.qty, 0);
-        } else {
-            document.getElementById('bar').style.display = 'none';
-        }
-    }
-
-    function updateCartQty(idx, n) {
-        C[idx].qty += n; 
-        if(C[idx].qty <= 0) C.splice(idx, 1);
-        saveCache(); 
-        showCart(); 
-        upd();
+        let bar = document.getElementById('bar');
+        if(!C.length) { bar.style.display = 'none'; return; }
+        bar.style.display = 'flex';
+        let foodTot = C.reduce((a, b) => a + b.unit_price * b.qty, 0);
+        document.getElementById('tot').innerText = foodTot + (IS_DELIVERY ? DELIVERY_FEE : 0);
+        document.getElementById('cnt').innerText = C.reduce((a, b) => a + b.qty, 0);
     }
 
     function showCart() {
         let h = "";
         C.forEach((i, x) => {
-            let d_name = i['name_' + CUR_LANG] || i.name_zh;
-            let opts = i['options_' + CUR_LANG] || i.options_zh || [];
-            let opt_str = opts.length ? `<div style="font-size:0.9em;color:#666;margin-top:4px;">(${opts.join(',')})</div>` : '';
+            let n = i['name_' + CUR_LANG] || i.name_zh;
+            let o = i['options_' + CUR_LANG] || i.options_zh || [];
             h += `<div class="cart-item-row">
                 <div class="cart-item-main">
-                    <div style="flex:1;"><b style="font-size:1.15em;">${d_name}</b>${opt_str}</div>
-                    <div style="font-weight:bold;color:#e91e63;font-size:1.1em;margin-left:10px;">$${i.unit_price * i.qty}</div>
+                    <b>${n}</b><span>$${i.unit_price * i.qty}</span>
                 </div>
+                <div style="font-size:0.85em;color:#666;">${o.join(', ')}</div>
                 <div class="cart-qty-sub">
-                    <button onclick="if(confirm('${T.confirm_delete || 'Delete?'}')){C.splice(${x},1);saveCache();upd();showCart();}" style="border:1px solid #ffcdd2; background:#fff5f5; border-radius:8px; padding:6px 10px; cursor:pointer; margin-right:auto;">🗑️</button>
-                    <button class="btn-edit-opt" onclick="openOpt(${i.id}, ${x})">${T.edit_options || 'Edit'}</button>
-                    <div class="qty-ctrl" style="margin:0; gap:8px;">
-                        <button onclick="updateCartQty(${x}, -1)" style="width:36px;height:36px;font-size:1.2em;">-</button>
-                        <span style="min-width:30px;text-align:center;font-weight:bold;">${i.qty}</span>
-                        <button onclick="updateCartQty(${x}, 1)" style="width:36px;height:36px;font-size:1.2em;">+</button>
+                    <button onclick="C.splice(${x},1);saveCache();upd();showCart();">🗑️</button>
+                    <button class="btn-edit-opt" onclick="openOpt(${i.id}, ${x})">✏️</button>
+                    <div class="qty-ctrl" style="margin:0;gap:5px;">
+                        <button onclick="C[${x}].qty=Math.max(1,C[${x}].qty-1);saveCache();upd();showCart();">-</button>
+                        <span>${i.qty}</span>
+                        <button onclick="C[${x}].qty+=1;saveCache();upd();showCart();">+</button>
                     </div>
                 </div>
             </div>`;
         });
-        
-        if (IS_DELIVERY && C.length > 0) {
-            h += `<div style="text-align:right; padding:15px 0; border-top:2px solid #333; color:#1565c0; font-weight:bold;">
-                    Delivery Fee (運費): $${DELIVERY_FEE}
-                  </div>`;
-        }
-
-        document.getElementById('c-list').innerHTML = h || `<p style="text-align:center;">${T.empty_cart}</p>`;
+        document.getElementById('c-list').innerHTML = h || `<p>${T.empty_cart}</p>`;
         document.getElementById('cart-m').style.display = 'flex';
     }
 
     function sub() {
-        // --- 1. 外送低消檢查 ---
         if (IS_DELIVERY) {
             let foodTotal = C.reduce((a, b) => a + (b.unit_price * b.qty), 0);
-            if (foodTotal < DELIVERY_MIN) {
-                alert(`⚠️ 外送訂單金額未滿 $${DELIVERY_MIN} 元 (不含運費)\n請再加點商品。\n\nMinimum order for delivery is $${DELIVERY_MIN}.`);
-                return; 
-            }
-        }
-
-        let tableVal = "";
-
-        // --- 2. 判斷桌號與時間 (外送 / 外帶 / 內用) ---
-        if (IS_DELIVERY) {
-            // 外送：強制設定 '外送'
-            tableVal = '外送';
-            // 外送時間已在 Session 中，不需要這裡額外處理，除非要讓使用者在結帳頁面改時間(通常是在前一個頁面設定)
-        } 
-        else if (currentMode === 'takeout') {
-            // [關鍵修改] 外帶模式：
-            // 1. 桌號設為 '外帶'
-            tableVal = '外帶';
-            
-            // 2. 取得時間選擇器的值
+            if (foodTotal < DELIVERY_MIN) return alert(`未滿低消 $${DELIVERY_MIN}`);
+            document.getElementById('tbl_input').value = '外送';
+        } else if (currentMode === 'takeout') {
             const timeVal = document.getElementById('takeout_time').value;
-            if(!timeVal) {
-                alert("⚠️ 請選擇取餐時間 (Please select pickup time)");
-                return;
-            }
-            
-            // 3. 將時間值 (例如 2023-10-27T10:30) 格式化為易讀字串，填入 scheduled_for_input
-            // 替換 T 為 空格，使其符合 database 一般 datetime 格式
+            if(!timeVal) return alert("請選擇取餐時間");
+            document.getElementById('tbl_input').value = '外帶';
             document.getElementById('scheduled_for_input').value = timeVal.replace('T', ' ');
-        } 
-        else {
-            // 內用：讀取輸入框
-            tableVal = document.getElementById('visible_table').value;
+        } else {
+            let t = document.getElementById('visible_table').value;
+            if(!t) return alert(T.table_placeholder);
+            document.getElementById('tbl_input').value = t;
         }
-
-        if(!tableVal || tableVal.trim() === '') {
-            return alert(T.table_placeholder || '請輸入桌號');
-        }
-        
-        // 填入 hidden input (name="table_number")
-        document.getElementById('tbl_input').value = tableVal;
 
         if(confirm(T.confirm_order)) {
             document.getElementById('cart_input').value = JSON.stringify(C);
@@ -514,4 +378,3 @@
     </script>
 </body>
 </html>
-
