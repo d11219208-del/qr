@@ -8,7 +8,7 @@ from flask import Blueprint, render_template, request, redirect, url_for, jsonif
 
 # 從資料庫模組匯入連線函式 (PostgreSQL)
 from database import get_db_connection
-# 從 utils 匯入發信功能
+# 從 utils 匯入發信功能 (假設已支援 store_id)
 from utils import send_daily_report
 
 admin_bp = Blueprint('admin', __name__)
@@ -75,9 +75,8 @@ def admin_panel():
                 if should_test:
                     try:
                         app_obj = current_app._get_current_object()
-                        # 注意：send_daily_report 內部邏輯也需支援 store_id (傳入參數或讓其讀取 DB)
-                        # 這裡傳入 manual_config 讓測試能直接運作
-                        result_msg = send_daily_report(app_obj, manual_config=new_config, is_test=True)
+                        # 注意：send_daily_report 內部邏輯也需支援 store_id
+                        result_msg = send_daily_report(app_obj, manual_config=new_config, is_test=True, store_id=store_id)
                         
                         if "✅" in result_msg:
                             msg = f"✅ 設定已儲存 / {result_msg}"
@@ -102,9 +101,8 @@ def admin_panel():
         elif action == 'send_report_now':
             try:
                 app_obj = current_app._get_current_object()
-                # 這裡可能需要修改 utils.py 讓它知道要發哪家店的報表
-                # 暫時解決方案：傳遞 store_id 上下文
-                threading.Thread(target=send_daily_report, args=(app_obj,), kwargs={'is_test': False}).start()
+                # 傳遞 store_id 以發送該店報表
+                threading.Thread(target=send_daily_report, args=(app_obj,), kwargs={'is_test': False, 'store_id': store_id}).start()
                 msg = "🚀 報表正在背景發送中"
             except Exception as e:
                 msg = f"❌ 無法啟動背景任務: {e}"
@@ -166,7 +164,7 @@ def admin_panel():
             SELECT id, name, price, category, is_available, print_category, sort_order, image_url, 
                    name_en, name_jp, name_kr 
             FROM products 
-            WHERE store_id = %s  -- <--- 關鍵：只顯示該店產品
+            WHERE store_id = %s 
             ORDER BY sort_order ASC, id DESC
         """, (store_id,))
         prods = cur.fetchall()
@@ -177,7 +175,7 @@ def admin_panel():
 
 
 # ==========================================
-# [關鍵] 外送詳細設定 (表單提交)
+# 外送詳細設定 (表單提交)
 # ==========================================
 @admin_bp.route('/settings/delivery', methods=['POST'])
 def update_delivery_settings():
@@ -265,7 +263,7 @@ def edit_product(pid):
     
     if request.method == 'POST':
         try:
-            # 確保只能更新自己店鋪的產品 (AND store_id = %s)
+            # 確保只能更新自己店鋪的產品
             cur.execute("""
                 UPDATE products SET 
                 name=%s, price=%s, category=%s, image_url=%s, custom_options=%s,
@@ -308,7 +306,6 @@ def edit_product(pid):
     
     if not row: return "找不到該產品或無權限編輯", 404
 
-    # (下方的 HTML 模板保持不變，直接沿用即可)
     p = dict(zip(columns, row))
     def v(key): return p.get(key) if p.get(key) is not None else ""
 
@@ -345,7 +342,6 @@ def edit_product(pid):
                     </div>
                     <div class="column column-67"><label>圖片 URL</label><input type="text" name="image_url" value="{v('image_url')}"></div>
                 </div>
-
                 <h5>2. 分類 (Category)</h5>
                 <div class="row">
                     <div class="column"><label>中文</label><input type="text" name="category" value="{v('category')}"></div>
@@ -353,14 +349,12 @@ def edit_product(pid):
                     <div class="column"><label>日本語</label><input type="text" name="category_jp" value="{v('category_jp')}"></div>
                     <div class="column"><label>한국어</label><input type="text" name="category_kr" value="{v('category_kr')}"></div>
                 </div>
-
                 <h5>3. 多語品名 (Name)</h5>
                 <div class="row">
                     <div class="column"><label>English</label><input type="text" name="name_en" value="{v('name_en')}"></div>
                     <div class="column"><label>日本語</label><input type="text" name="name_jp" value="{v('name_jp')}"></div>
                     <div class="column"><label>한국어</label><input type="text" name="name_kr" value="{v('name_kr')}"></div>
                 </div>
-
                 <h5>4. 客製化選項 (Options)</h5>
                 <label>中文選項 (逗號分隔)</label>
                 <input type="text" name="custom_options" value="{v('custom_options')}">
@@ -369,7 +363,6 @@ def edit_product(pid):
                     <div class="column"><label>日本語 Options</label><input type="text" name="custom_options_jp" value="{v('custom_options_jp')}"></div>
                     <div class="column"><label>한국어 Options</label><input type="text" name="custom_options_kr" value="{v('custom_options_kr')}"></div>
                 </div>
-
                 <div style="margin-top:30px; text-align: right;">
                     <a href="{url_for('admin.admin_panel')}" class="button button-outline">❌ 取消</a>
                     <button type="submit">💾 儲存變更</button>
@@ -412,13 +405,10 @@ def import_menu():
         if not file: return redirect(url_for('admin.admin_panel', msg="❌ 無檔案"))
         
         store_id = get_current_store_id()
-        
         df = pd.read_excel(file, engine='openpyxl')
         df = df.where(pd.notnull(df), None)
         
-        conn = get_db_connection()
-        cur = conn.cursor()
-        
+        conn = get_db_connection(); cur = conn.cursor()
         cnt = 0
         for _, p in df.iterrows():
             if not p.get('name'): continue
@@ -430,43 +420,22 @@ def import_menu():
 
             sql = """
                 INSERT INTO products (
-                    store_id, -- 匯入時強制作為目前店鋪的商品
-                    name, price, category, image_url, is_available, custom_options, sort_order,
+                    store_id, name, price, category, image_url, is_available, custom_options, sort_order,
                     name_en, name_jp, name_kr,
                     custom_options_en, custom_options_jp, custom_options_kr,
                     print_category,
                     category_en, category_jp, category_kr
-                ) VALUES (
-                    %s, -- store_id
-                    %s, %s, %s, %s, %s, %s, %s, 
-                    %s, %s, %s, 
-                    %s, %s, %s, 
-                    %s, 
-                    %s, %s, %s
-                )
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """
             
             params = (
-                store_id,
-                str(p.get('name')),
-                p.get('price', 0),
-                p.get('category'),
-                p.get('image_url'),
-                is_avail,
-                p.get('custom_options'),
-                p.get('sort_order', 0),
-                p.get('name_en'),
-                p.get('name_jp'),
-                p.get('name_kr'),
-                p.get('custom_options_en'),
-                p.get('custom_options_jp'),
-                p.get('custom_options_kr'),
+                store_id, str(p.get('name')), p.get('price', 0), p.get('category'),
+                p.get('image_url'), is_avail, p.get('custom_options'), p.get('sort_order', 0),
+                p.get('name_en'), p.get('name_jp'), p.get('name_kr'),
+                p.get('custom_options_en'), p.get('custom_options_jp'), p.get('custom_options_kr'),
                 p.get('print_category', 'Noodle'),
-                p.get('category_en'),
-                p.get('category_jp'),
-                p.get('category_kr')
+                p.get('category_en'), p.get('category_jp'), p.get('category_kr')
             )
-            
             cur.execute(sql, params)
             cnt += 1
             
@@ -482,91 +451,68 @@ def import_menu():
 def reset_menu():
     conn = get_db_connection(); cur = conn.cursor()
     store_id = get_current_store_id()
-    # 【關鍵安全修正】絕對不能 TRUNCATE，只能刪除該 store_id 的資料
+    # 絕不使用 TRUNCATE，只刪除該店資料
     cur.execute("DELETE FROM products WHERE store_id = %s", (store_id,))
     conn.commit(); cur.close(); conn.close()
     return redirect(url_for('admin.admin_panel', msg="🗑️ 本店菜單已清空"))
 
 @admin_bp.route('/reset_orders', methods=['POST'])
 def reset_orders():
-    conn = get_db_connection()
-    cur = conn.cursor()
+    conn = get_db_connection(); cur = conn.cursor()
     store_id = get_current_store_id()
     
     try:
         delete_mode = request.form.get('delete_mode')
-        
         if delete_mode == 'all':
-            # --- 模式一：清空全部 (僅限本店) ---
-            # 這裡不使用 TRUNCATE，改用 DELETE 以支援 WHERE
             cur.execute("DELETE FROM orders WHERE store_id = %s", (store_id,))
             msg = "💥 已清空本店所有歷史訂單！"
-            
         elif delete_mode == 'range':
-            # --- 模式二：指定日期區間 ---
             start_date = request.form.get('start_date')
             end_date = request.form.get('end_date')
-            
             if not start_date or not end_date:
-                return redirect(url_for('admin.admin_panel', msg="❌ 請選擇完整的開始與結束日期"))
+                return redirect(url_for('admin.admin_panel', msg="❌ 請選擇完整日期"))
             
             start_ts = f"{start_date} 00:00:00"
             end_ts = f"{end_date} 23:59:59"
-            
             cur.execute("""
                 DELETE FROM orders 
                 WHERE store_id = %s
                   AND (created_at + interval '8 hours') >= %s 
                   AND (created_at + interval '8 hours') <= %s
             """, (store_id, start_ts, end_ts))
-            
-            deleted_count = cur.rowcount
-            msg = f"🗑️ 已刪除 {start_date} 至 {end_date} 期間的訂單，共 {deleted_count} 筆。"
-            
+            msg = f"🗑️ 已刪除指定期間訂單，共 {cur.rowcount} 筆。"
         else:
             msg = "❌ 無效的操作"
-
         conn.commit()
-        
     except Exception as e:
         conn.rollback()
         msg = f"❌ 刪除失敗: {str(e)}"
-        
     finally:
-        cur.close()
-        conn.close()
-
+        cur.close(); conn.close()
     return redirect(url_for('admin.admin_panel', msg=msg))
 
 @admin_bp.route('/toggle_product/<int:pid>', methods=['POST'])
 def toggle_product(pid):
-    conn = get_db_connection()
+    conn = get_db_connection(); cur = conn.cursor()
     store_id = get_current_store_id()
     try:
-        cur = conn.cursor()
-        # 增加 store_id 驗證
         cur.execute("SELECT is_available FROM products WHERE id = %s AND store_id = %s", (pid, store_id))
         row = cur.fetchone()
-        
         if row:
             new_s = not row[0]
             cur.execute("UPDATE products SET is_available = %s WHERE id = %s AND store_id = %s", (new_s, pid, store_id))
             conn.commit()
             return jsonify({'status': 'success', 'is_available': new_s})
-        
-        return jsonify({'status': 'error', 'message': 'Product not found or access denied'}), 404
-        
+        return jsonify({'status': 'error', 'message': 'Access denied'}), 404
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
     finally:
-        if 'cur' in locals(): cur.close()
-        if 'conn' in locals(): conn.close()
+        cur.close(); conn.close()
 
 @admin_bp.route('/delete_product/<int:pid>')
 def delete_product(pid):
     conn = get_db_connection(); cur = conn.cursor()
     store_id = get_current_store_id()
-    # 增加 store_id 驗證
     cur.execute("DELETE FROM products WHERE id = %s AND store_id = %s", (pid, store_id))
     conn.commit(); cur.close(); conn.close()
     return redirect(url_for('admin.admin_panel', msg="🗑️ 產品已刪除"))
@@ -578,7 +524,6 @@ def reorder_products():
     store_id = get_current_store_id()
     try:
         for idx, pid in enumerate(data.get('order', [])):
-            # 增加 store_id 驗證，防止惡意排序別人的商品
             cur.execute("UPDATE products SET sort_order = %s WHERE id = %s AND store_id = %s", (idx, pid, store_id))
         conn.commit()
         return jsonify({'status': 'success'})
