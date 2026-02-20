@@ -106,11 +106,11 @@ def init_db():
                 
                 -- 外送相關欄位
                 order_type VARCHAR(50) DEFAULT 'dine_in', -- 訂單類型（內用/外送/自取）
-                delivery_info TEXT,               -- 綜合外送資訊
-                customer_name TEXT,               -- 客戶姓名
-                customer_phone TEXT,              -- 客戶電話
-                customer_address TEXT,            -- 客戶地址
-                scheduled_for TEXT,               -- 預約送達時間
+                delivery_info TEXT,                -- 綜合外送資訊
+                customer_name TEXT,                -- 客戶姓名
+                customer_phone TEXT,               -- 客戶電話
+                customer_address TEXT,             -- 客戶地址
+                scheduled_for TEXT,                -- 預約送達時間
                 delivery_fee INTEGER DEFAULT 0    -- 外送費
             );
         ''')
@@ -118,8 +118,6 @@ def init_db():
         # ==========================================
         # 5. 建立系統設定表 (settings) - 加入 store_id
         # ==========================================
-        # 注意：為了相容性，這裡先建立基本結構。
-        # 理想情況下 Primary Key 應該是 (key, store_id)，但為了避免遷移複雜度，先保留 key 為 PK 或無 PK
         cur.execute('''
             CREATE TABLE IF NOT EXISTS settings (
                 key TEXT, 
