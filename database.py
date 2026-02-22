@@ -16,7 +16,7 @@ def get_db_connection():
 # --- 資料庫初始化 ---
 def init_db():
     """
-    建立所有必要的資料表與預設設定 (含多店鋪支援)。
+    建立所有必要的資料表與預設設定。
     回傳 True 表示成功，False 表示失敗。
     """
     conn = None # 預設連線變數為空
@@ -26,44 +26,10 @@ def init_db():
         conn.autocommit = True     # 設定為「自動提交」，每執行一個 SQL 指令即生效
         cur = conn.cursor()        # 開啟遊標以執行 SQL 指令
 
-        # ==========================================
-        # 1. 核心架構：建立店鋪表 (stores) [新增]
-        # ==========================================
-        cur.execute('''
-            CREATE TABLE IF NOT EXISTS stores (
-                id SERIAL PRIMARY KEY,
-                name VARCHAR(100) NOT NULL,
-                address VARCHAR(255),
-                phone VARCHAR(20),
-                is_active BOOLEAN DEFAULT TRUE,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-        ''')
-
-        # 確保至少有一家店 (預設總店 ID=1)
-        cur.execute("INSERT INTO stores (id, name) VALUES (1, '預設總店') ON CONFLICT (id) DO NOTHING;")
-
-        # ==========================================
-        # 2. 核心架構：建立使用者表 (users) [新增]
-        # ==========================================
-        cur.execute('''
-            CREATE TABLE IF NOT EXISTS users (
-                id SERIAL PRIMARY KEY,
-                username VARCHAR(50) UNIQUE NOT NULL,
-                password_hash VARCHAR(255) NOT NULL,
-                store_id INTEGER DEFAULT 1,  -- 綁定店鋪
-                role VARCHAR(20) DEFAULT 'admin', -- admin, staff, super_admin
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-        ''')
-
-        # ==========================================
-        # 3. 建立產品表 (products) - 加入 store_id
-        # ==========================================
+        # 1. 建立產品表 (products)
         cur.execute('''
             CREATE TABLE IF NOT EXISTS products (
                 id SERIAL PRIMARY KEY,            -- 自動遞增的主鍵 ID
-                store_id INTEGER DEFAULT 1,       -- [新增] 所屬店鋪 ID
                 name VARCHAR(100) NOT NULL,       -- 產品名稱（必填）
                 price INTEGER NOT NULL,           -- 價格（必填）
                 category VARCHAR(50),             -- 分類名稱
@@ -71,15 +37,12 @@ def init_db():
                 is_available BOOLEAN DEFAULT TRUE,-- 是否上架（預設為是）
                 custom_options TEXT,              -- 自定義選項（如：辣度、冰塊）
                 sort_order INTEGER DEFAULT 100,   -- 排序序號
-                
-                -- 多語系欄位
                 name_en VARCHAR(100),             -- 英文品名
                 name_jp VARCHAR(100),             -- 日文品名
                 name_kr VARCHAR(100),             -- 韓文品名
                 custom_options_en TEXT,           -- 英文自定義選項
                 custom_options_jp TEXT,           -- 日文自定義選項
                 custom_options_kr TEXT,           -- 韓文自定義選項
-                
                 print_category VARCHAR(20) DEFAULT 'Noodle', -- 出單分類（用於廚房出單）
                 category_en VARCHAR(50),          -- 英文分類名
                 category_jp VARCHAR(50),          -- 日文分類名
@@ -87,75 +50,54 @@ def init_db():
             );
         ''')
         
-        # ==========================================
-        # 4. 建立訂單表 (orders) - 加入 store_id
-        # ==========================================
+        # 2. 建立訂單表 (orders)
         cur.execute('''
             CREATE TABLE IF NOT EXISTS orders (
                 id SERIAL PRIMARY KEY,            -- 訂單 ID
-                store_id INTEGER DEFAULT 1,       -- [新增] 所屬店鋪 ID
                 table_number VARCHAR(10),         -- 桌號
                 items TEXT NOT NULL,              -- 訂單項目內容（文字描述）
                 total_price INTEGER NOT NULL,     -- 總金額
                 status VARCHAR(20) DEFAULT 'Pending', -- 訂單狀態（預設為待處理）
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, -- 建立時間
-                daily_seq INTEGER DEFAULT 0,      -- 當日流水號 (需搭配 store_id 計算)
+                daily_seq INTEGER DEFAULT 0,      -- 當日流水號
                 content_json TEXT,                -- 以 JSON 格式存儲的訂單明細
                 need_receipt BOOLEAN DEFAULT FALSE, -- 是否需要收據/統編
                 lang VARCHAR(10) DEFAULT 'zh',    -- 下單時使用的語系
                 
                 -- 外送相關欄位
                 order_type VARCHAR(50) DEFAULT 'dine_in', -- 訂單類型（內用/外送/自取）
-                delivery_info TEXT,                -- 綜合外送資訊
-                customer_name TEXT,                -- 客戶姓名
-                customer_phone TEXT,               -- 客戶電話
-                customer_address TEXT,             -- 客戶地址
-                scheduled_for TEXT,                -- 預約送達時間
+                delivery_info TEXT,               -- 綜合外送資訊
+                customer_name TEXT,               -- 客戶姓名
+                customer_phone TEXT,              -- 客戶電話
+                customer_address TEXT,            -- 客戶地址
+                scheduled_for TEXT,               -- 預約送達時間
                 delivery_fee INTEGER DEFAULT 0    -- 外送費
             );
         ''')
         
-        # ==========================================
-        # 5. 建立系統設定表 (settings) - 加入 store_id
-        # ==========================================
-        cur.execute('''
-            CREATE TABLE IF NOT EXISTS settings (
-                key TEXT, 
-                value TEXT, 
-                store_id INTEGER DEFAULT 1
-            );
-        ''')
+        # 3. 建立系統設定表 (settings)
+        cur.execute('''CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);''')
         
-        # 6. 插入預設設定 (針對 Store 1)
+        # 4. 插入預設設定 (新增了 shop_open 與其他外送參數)
         default_settings = [
-            ('sender_email', 'onboarding@resend.dev'),
-            ('shop_open', '1'),                        
-            ('delivery_enabled', '1'),                 
-            ('enable_delivery', '1'),                  
-            ('delivery_min_price', '500'),             
-            ('delivery_fee_base', '0'),                
-            ('delivery_max_km', '5'),                  
-            ('delivery_fee_per_km', '10')              
+            ('sender_email', 'onboarding@resend.dev'), # 預設發信人郵件
+            ('shop_open', '1'),                        # 預設全店營業中 (1: 開啟)
+            ('delivery_enabled', '1'),                 # 是否啟用外送功能 (後端用)
+            ('enable_delivery', '1'),                  # 前端按鈕可能使用的 key (保持相容)
+            ('delivery_min_price', '500'),             # 外送起送價
+            ('delivery_fee_base', '0'),                # 基礎外送費
+            ('delivery_max_km', '5'),                  # 最大外送距離 (公里)
+            ('delivery_fee_per_km', '10')              # 超過基礎距離後的每公里加價
         ]
         
         for k, v in default_settings:
-            # 簡單檢查：如果該店沒有這個設定才插入
-            cur.execute("""
-                INSERT INTO settings (key, value, store_id) 
-                SELECT %s, %s, 1 
-                WHERE NOT EXISTS (SELECT 1 FROM settings WHERE key=%s AND store_id=1)
-            """, (k, v, k))
+            # 插入設定值，如果 Key 已經存在則跳過 (ON CONFLICT DO NOTHING)
+            # 這樣可以確保新增加的設定 (如 shop_open) 會被寫入，而已存在的設定不會被覆蓋
+            cur.execute("INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT DO NOTHING", (k, v))
 
-        # ==========================================
-        # 7. 【關鍵】欄位自動補全 (Migration)
-        # ==========================================
+        # 5. 【關鍵】欄位自動補全 (Migration)
+        # 此段確保如果資料表已經存在，但缺少新開發的欄位時，會自動新增欄位
         alters = [
-            # --- 多店鋪欄位補全 (Store ID) ---
-            "ALTER TABLE products ADD COLUMN IF NOT EXISTS store_id INTEGER DEFAULT 1;",
-            "ALTER TABLE orders ADD COLUMN IF NOT EXISTS store_id INTEGER DEFAULT 1;",
-            "ALTER TABLE users ADD COLUMN IF NOT EXISTS store_id INTEGER DEFAULT 1;",
-            "ALTER TABLE settings ADD COLUMN IF NOT EXISTS store_id INTEGER DEFAULT 1;",
-
             # --- Orders 表格補全 ---
             "ALTER TABLE orders ADD COLUMN IF NOT EXISTS lang VARCHAR(10) DEFAULT 'zh';",
             "ALTER TABLE orders ADD COLUMN IF NOT EXISTS content_json TEXT;",
@@ -186,22 +128,13 @@ def init_db():
             try:
                 cur.execute(cmd) # 執行增加欄位的指令
             except Exception as e:
-                # 攔截錯誤，忽略「重複欄位」或「已存在」的報錯
+                # 攔截錯誤，如果是「重複欄位」或「已存在」的報錯則忽略，其餘印出警告
+                # PostgreSQL 的 ADD COLUMN IF NOT EXISTS 在舊版本可能不支援，
+                # 所以這裡保留 try-except 以確保相容性
                 if 'duplicate' not in str(e).lower() and 'exists' not in str(e).lower():
                     print(f"⚠️ Warning during migration: {e}")
 
-        # 建立 store_id 索引以優化查詢速度 (如果索引已存在會報錯，所以用 try 包起來)
-        indices = [
-            "CREATE INDEX IF NOT EXISTS idx_orders_store_id ON orders(store_id);",
-            "CREATE INDEX IF NOT EXISTS idx_products_store_id ON products(store_id);"
-        ]
-        for idx in indices:
-            try:
-                cur.execute(idx)
-            except Exception:
-                pass
-
-        print("✅ 資料庫初始化檢查完成 (已啟用多店鋪架構)")
+        print("✅ 資料庫初始化檢查完成 (含 order_type, delivery_info, products 多語系欄位)")
         return True
 
     except Exception as e:
@@ -219,3 +152,4 @@ def init_db():
 if __name__ == "__main__":
     # 當直接執行此 .py 檔案時，啟動初始化程序
     init_db()
+

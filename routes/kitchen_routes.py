@@ -54,6 +54,9 @@ def kitchen_panel():
 @kitchen_bp.route('/check_new_orders')
 def check_new_orders():
     try:
+        # 【關鍵修改 1】：接收前端傳來的最後一次看過的序號 (預設為 0)
+        last_seq = request.args.get('last_seq', 0, type=int)
+
         utc_start, utc_end = get_tw_time_range()
 
         conn = get_db_connection()
@@ -96,6 +99,8 @@ def check_new_orders():
         conn.close()
 
         html_content = ""
+        pending_ids = []
+
         if not orders: 
             html_content = "<div id='loading-msg' style='grid-column:1/-1;text-align:center;padding:100px;font-size:1.5em;color:#888;'>🍽️ 目前沒有訂單</div>"
         
@@ -107,6 +112,10 @@ def check_new_orders():
             status_cls = status.lower()
             tw_time = created + timedelta(hours=8)
             
+            # 【關鍵修改 2】：只有當狀態是 Pending，且單號「大於」前端已知的 last_seq 時，才視為真正的新訂單
+            if status == 'Pending' and seq_num > last_seq:
+                pending_ids.append(oid)
+
             # 資料預處理
             table_str = str(table).strip() if table else ""
             c_fee = int(c_fee or 0)
@@ -152,7 +161,7 @@ def check_new_orders():
             if has_contact:
                 info_html += f"<div>📞 {c_phone}</div>"
             
-            # --- 地址顯示 (在此處處理) ---
+            # 地址顯示
             if has_addr:
                 info_html += f"<div style='margin-top:2px; line-height:1.2; border-top:1px dashed #aaa; padding-top:2px; font-weight:bold; color:#bf360c;'>📍 {c_addr}</div>"
 
@@ -229,7 +238,7 @@ def check_new_orders():
         return jsonify({
             'html': html_content, 
             'max_seq': max_seq_val, 
-            'new_ids': [] 
+            'new_ids': pending_ids 
         })
     except Exception as e:
         traceback.print_exc()
@@ -314,8 +323,9 @@ def print_order(oid):
         # 下單時間
         time_str = (created_at + timedelta(hours=8)).strftime('%Y-%m-%d %H:%M:%S')
 
-        # 分類邏輯 (用於分單列印)
+        # 分類邏輯 (用於分單列印) - 修正這裡！補上第三個空串列 []
         noodle_items, soup_items, other_items = [], [], []
+        
         for item in items:
             p_name = item.get('name_zh') or item.get('name')
             p_cat = product_map.get(p_name, 'Other') 
@@ -323,7 +333,7 @@ def print_order(oid):
             elif p_cat == 'Soup': soup_items.append(item)
             else: other_items.append(item)
 
-        # CSS 樣式
+        # CSS 樣式 (輕量化處理)
         style = """
         <style>
             @page { size: 80mm auto; margin: 0mm; }
@@ -331,59 +341,26 @@ def print_order(oid):
             .ticket { border-bottom: 3px dashed #000; padding: 10px 0 30px 0; margin-bottom: 10px; page-break-after: always; position: relative; }
             .ticket:last-child { page-break-after: auto; }
             .void-watermark { position: absolute; top: 30%; left: 5%; font-size: 50px; color: #000; opacity: 0.2; transform: rotate(-30deg); border: 5px solid #000; padding: 10px; z-index: 100; font-weight: 900; }
-            
             .head { text-align: center; margin-bottom: 10px; }
             .head h2 { font-size: 24px; margin: 0; border: 2px solid #000; padding: 4px 10px; border-radius: 4px; display: inline-block; font-weight: 900; }
             .head h1 { font-size: 42px; margin: 5px 0; line-height: 1; font-weight: 900; }
-            
             .info-box { border-bottom: 2px solid #000; padding-bottom: 5px; margin-bottom: 5px; }
             .table-row { display: flex; justify-content: center; align-items: baseline; gap: 10px; }
             .table-label { font-size: 20px; font-weight: bold; }
             .table-val { font-size: 36px; font-weight: 900; line-height: 1; }
-            .time-row { font-size: 14px; text-align: center; margin-top: 2px; color: #333; }
-            
-            /* 客戶與外送詳細資訊樣式 */
-            .customer-info { 
-                border: 2px solid #000; 
-                padding: 6px; 
-                margin: 5px 0 10px 0; 
-                font-size: 18px; 
-                font-weight: bold; 
-                text-align: left; 
-                background: #f8f8f8; 
-                line-height: 1.3;
-            }
+            .time-row { font-size: 14px; text-align: center; margin-top: 2px; color: #000; }
+            .customer-info { border: 2px solid #000; padding: 6px; margin: 5px 0 10px 0; font-size: 18px; font-weight: bold; text-align: left; background: #f8f8f8; line-height: 1.3; }
             .cust-row { margin-bottom: 2px; }
-            .addr-row { 
-                margin-top: 4px; 
-                border-top: 1px dashed #666; 
-                padding-top: 4px; 
-                font-size: 24px; /* 地址特大 */
-                font-weight: 900;
-                word-wrap: break-word; /* 強制換行 */
-                line-height: 1.2;
-            }
-            
-            .schedule-row { 
-                font-size: 22px; 
-                font-weight: 900; 
-                text-align: center; 
-                background: #000; 
-                color: #fff; 
-                margin: 5px 0; 
-                padding: 5px; 
-                border-radius: 0; 
-            }
-            
+            .addr-row { margin-top: 4px; border-top: 1px dashed #000; padding-top: 4px; font-size: 24px; font-weight: 900; word-wrap: break-word; line-height: 1.2; }
+            .schedule-row { font-size: 22px; font-weight: 900; text-align: center; background: #000; color: #fff; margin: 5px 0; padding: 5px; border-radius: 0; }
             .item-row { display: flex; justify-content: space-between; align-items: flex-start; margin-top: 8px; line-height: 1.1; }
             .name-col { width: 85%; display: flex; flex-direction: column; }
             .item-name-main { font-size: 22px; font-weight: 900; word-wrap: break-word; }
-            .item-name-sub { font-size: 16px; font-weight: bold; color: #555; margin-top: 2px; } /* 副標題(中文)樣式 */
+            .item-name-sub { font-size: 16px; font-weight: bold; color: #000; margin-top: 2px; }
             .item-qty { font-size: 22px; font-weight: 900; white-space: nowrap; }
-            .opt { font-size: 16px; font-weight: bold; padding-left: 10px; color: #333; }
-            
+            .opt { font-size: 16px; font-weight: bold; padding-left: 10px; color: #000; }
             .total { text-align: right; font-size: 24px; font-weight: 900; margin-top: 10px; padding-top: 5px; border-top: 2px solid #000; }
-            .fee-row { text-align: right; font-size: 16px; font-weight: bold; color: #333; }
+            .fee-row { text-align: right; font-size: 16px; font-weight: bold; color: #000; }
         </style>
         """
 
@@ -393,66 +370,44 @@ def print_order(oid):
 
             void_mark = "<div class='void-watermark'>作廢單</div>" if status == 'Cancelled' else ""
             
-            # 頭部與基本資訊
             h = f"<div class='ticket'>{void_mark}<div class='head'><h2>{title}</h2><h1>#{seq:03d}</h1></div>"
             h += f"<div class='info-box'><div class='table-row'><span class='table-label'>Type</span><span class='table-val'>{display_tbl_name}</span></div>"
             h += f"<div class='time-row'>下單: {time_str}</div></div>"
             
-            # 1. 預約時間 (最優先顯示)
             if has_schedule:
                 h += f"<div class='schedule-row'>🕒 預約: {c_schedule}</div>"
 
-            # 2. 客戶資料區塊 (姓名、電話、地址)
             if is_delivery or has_contact or (c_name and str(c_name).strip()):
                 h += f"<div class='customer-info'>"
-                if c_name and str(c_name).strip():
-                    h += f"<div class='cust-row'>👤 {c_name}</div>"
-                if has_contact:
-                    h += f"<div class='cust-row'>📞 {c_phone}</div>"
-                if has_addr:
-                    h += f"<div class='addr-row'>📍 {c_addr}</div>"
+                if c_name and str(c_name).strip(): h += f"<div class='cust-row'>👤 {c_name}</div>"
+                if has_contact: h += f"<div class='cust-row'>📞 {c_phone}</div>"
+                if has_addr: h += f"<div class='addr-row'>📍 {c_addr}</div>"
                 h += f"</div>"
             
-            # 列出商品
             for i in item_list:
-                # 基礎中文資料
                 name_zh = i.get('name_zh') or i.get('name')
                 opts_zh = i.get('options_zh') or i.get('options', [])
                 
-                # 初始化變數
                 main_name = name_zh
                 sub_name = ""
                 opts_display = opts_zh
 
-                # --- 邏輯判斷開始 ---
                 if is_receipt:
-                    # 如果是結帳單，且客人非中文語系，切換顯示
                     if c_lang and c_lang != 'zh':
-                        # 1. 抓取對應語系的名稱 (例如 name_en, name_jp)
-                        # 如果找不到對應語系，嘗試抓英文，最後才Fallback回中文
                         lang_name_key = f"name_{c_lang}"
                         target_name = i.get(lang_name_key) or i.get('name_en')
-                        
                         if target_name:
                             main_name = target_name
-                            sub_name = name_zh # 中文保留在下方給店員看
+                            sub_name = name_zh 
                         
-                        # 2. 抓取對應語系的選項 (例如 options_en)
                         lang_opt_key = f"options_{c_lang}"
                         target_opts = i.get(lang_opt_key) or i.get('options_en')
                         if target_opts:
                             opts_display = target_opts
                 
-                # 如果是廚房單 (is_receipt=False)，完全不動，維持預設變數 (全中文)
-                # -------------------
-
-                # 組合 HTML
                 name_html = f"<div class='name-col'><span class='item-name-main'>{main_name}</span>"
-                
-                # 只有當有 sub_name 且跟主名稱不同時才顯示 (避免重複)
                 if sub_name and sub_name != main_name:
                     name_html += f"<span class='item-name-sub'>{sub_name}</span>"
-                
                 name_html += "</div>"
                 
                 qty = i.get('qty', 1)
@@ -461,13 +416,11 @@ def print_order(oid):
                 if opts_display:
                     h += f"<div class='opt'>└ {', '.join(opts_display)}</div>"
             
-            # 結帳單顯示總金額與運費
             if is_receipt: 
                 subtotal = total_price - c_fee if total_price else 0
                 if c_fee > 0:
                     h += f"<div class='fee-row'>小計: ${int(subtotal)}</div>"
                     h += f"<div class='fee-row'>運費: ${c_fee}</div>"
-                
                 h += f"<div class='total'>Total: ${int(total_price or 0)}</div>"
             
             return h + "</div>"
@@ -488,7 +441,8 @@ def print_order(oid):
             return "<script>alert('無內容可列印');window.close();</script>", 200
 
         # RawBT 整合 (APP 列印)
-        rawbt_html_source = f"<html><head>{style}</head><body>{content}</body></html>"
+        import base64
+        rawbt_html_source = f"<html><head><meta charset='utf-8'>{style}</head><body>{content}</body></html>"
         b64_data = base64.b64encode(rawbt_html_source.encode('utf-8')).decode('utf-8')
         intent_url = (
             f"intent:base64,{b64_data}#Intent;"
@@ -496,40 +450,31 @@ def print_order(oid):
             f"S.jobName=Order_{seq}_{print_type};S.editor=false;end;"
         )
 
-        # 優化後的 JavaScript：針對 Kiosk 模式加速
+        # 極速版 JavaScript：不等待 DOMContentLoaded，直接在 Body 尾端觸發
         final_html = f"""
         <!DOCTYPE html>
         <html>
-        <head>{style}</head>
+        <head>
+            <meta charset="utf-8">
+            <title>Print Order</title>
+            {style}
+        </head>
         <body>
             {content}
             <script>
-                document.addEventListener("DOMContentLoaded", function() {{
-                    var userAgent = navigator.userAgent || navigator.vendor || window.opera;
-                    
-                    if (/android/i.test(userAgent)) {{
-                        // Android 手機 (RawBT)
-                        var msg = document.createElement('div');
-                        msg.innerHTML = '<h2 style="text-align:center;color:green;margin-top:20px;">🖨️ 正在傳送至出單機...</h2>';
-                        document.body.appendChild(msg);
-                        window.location.href = "{intent_url}";
-                        setTimeout(function() {{ if(window.opener) window.close(); }}, 2000);
-                    
-                    }} else {{
-                        // PC / Chrome Kiosk 模式加速版
-                        // 1. 立即呼叫列印 (Kiosk 模式下不跳視窗)
-                        window.print();
-                        
-                        // 2. Fire-and-forget 策略：
-                        // 在 Kiosk 模式下，指令送出非常快，不需要等待 onafterprint (該事件常有延遲)
-                        // 設定 10ms 緩衝後直接關閉，體驗會像"閃一下"就沒了
-                        if(window.opener) {{
-                            setTimeout(function() {{
-                                window.close();
-                            }}, 10); 
-                        }}
-                    }}
-                }});
+                // 將 Script 放在 body 最後面，確保 HTML 已經載入，不浪費時間等待事件
+                var ua = navigator.userAgent || navigator.vendor || window.opera;
+                if (/android/i.test(ua)) {{
+                    var msg = document.createElement('div');
+                    msg.innerHTML = '<h2 style="text-align:center;color:green;margin-top:20px;">🖨️ 正在傳送至出單機...</h2>';
+                    document.body.appendChild(msg);
+                    window.location.href = "{intent_url}";
+                    setTimeout(function() {{ if(window.opener) window.close(); }}, 1500);
+                }} else {{
+                    // PC / Chrome Kiosk 模式
+                    // ⚠️ 將原本的 window.print() 和關閉視窗的程式碼通通刪除！
+                    // 現在統一由前端看板的 iframe.contentWindow.print() 來觸發列印，避免印兩次。
+                }}
             </script>
         </body>
         </html>
@@ -537,6 +482,7 @@ def print_order(oid):
         return final_html
 
     except Exception as e:
+        import traceback
         traceback.print_exc()
         return f"Print Error: {str(e)}", 500
 
@@ -663,15 +609,15 @@ def daily_report():
     v_stats = agg(v_rows)
     x_stats = agg(x_rows)
 
-    # 產生表格 HTML 函式
+    # 產生表格 HTML 函式 (移除所有顏色，改為純黑白線條)
     def tbl(stats_dict):
-        if not stats_dict: return "<p style='text-align:center;color:#888;'>無數據</p>"
-        h = "<table style='width:100%; border-collapse:collapse; margin-top:10px;'><thead><tr style='border-bottom:2px solid #333;'><th style='text-align:left;'>品項</th><th style='text-align:right;'>數</th><th style='text-align:right;'>額</th></tr></thead><tbody>"
+        if not stats_dict: return "<p style='text-align:center; color:#000; font-weight:bold;'>無數據</p>"
+        h = "<table class='report-table'><thead><tr><th style='text-align:left;'>品項</th><th style='text-align:right;'>數量</th><th style='text-align:right;'>金額</th></tr></thead><tbody>"
         for k, v in sorted(stats_dict.items(), key=lambda x:x[1]['qty'], reverse=True):
-            h += f"<tr style='border-bottom:1px solid #eee;'><td>{k}</td><td style='text-align:right;'>{v['qty']}</td><td style='text-align:right;'>${v['amt']:,}</td></tr>"
+            h += f"<tr><td>{k}</td><td style='text-align:right;'>{v['qty']}</td><td style='text-align:right;'>${v['amt']:,}</td></tr>"
         return h + "</tbody></table>"
 
-    # 最終 HTML 輸出
+    # 最終 HTML 輸出 (純黑白 + 80mm 自動長度設定)
     return f"""
     <!DOCTYPE html>
     <html>
@@ -680,66 +626,89 @@ def daily_report():
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>日結報表_{target_date_str}</title>
         <style>
-            body {{ font-family: 'Microsoft JhengHei', sans-serif; background: #f4f4f4; display:flex; flex-direction:column; align-items:center; padding:20px; }}
-            .ticket {{ background: white; width: 80mm; padding: 15px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); border-radius: 5px; min-height: 500px; }}
-            .summary {{ background: #e8f5e9; padding: 10px; border-radius: 5px; margin: 10px 0; border-left: 5px solid #2e7d32; }}
-            .void-sum {{ background: #ffebee; padding: 10px; border-radius: 5px; margin: 10px 0; border-left: 5px solid #c62828; }}
-            .header {{ text-align:center; border-bottom:2px dashed #333; padding-bottom:10px; margin-bottom:10px; }}
-            .section-title {{ font-size:18px; font-weight:bold; margin-top:15px; border-bottom:1px solid #ccc; padding-bottom:5px; }}
-            h1 {{ margin:0; font-size:24px; }}
-            p {{ margin:5px 0; }}
-            .big-num {{ font-size:20px; font-weight:bold; }}
+            /* 螢幕預覽時的背景 (列印時會隱藏) */
+            body {{ font-family: 'Microsoft JhengHei', sans-serif; background: #f4f4f4; display:flex; flex-direction:column; align-items:center; padding:20px; color: #000; }}
+            
+            /* 單據本體設定 */
+            .ticket {{ background: white; width: 78mm; padding: 0; color: #000; }}
+            
+            /* 黑白化區塊設定 */
+            .summary {{ padding: 10px; margin: 10px 0; border: 2px solid #000; font-weight: bold; }}
+            .void-sum {{ padding: 10px; margin: 10px 0; border: 2px dashed #000; font-weight: bold; }}
+            .header {{ text-align:center; border-bottom: 2px dashed #000; padding-bottom:10px; margin-bottom:10px; }}
+            .section-title {{ font-size:18px; font-weight:bold; margin-top:15px; border-bottom: 2px solid #000; padding-bottom:5px; margin-bottom: 5px; color: #000; }}
+            
+            h1 {{ margin:0; font-size:24px; font-weight: 900; }}
+            p {{ margin:5px 0; color: #000; }}
+            .big-num {{ font-size:20px; font-weight:900; }}
+            
+            /* 表格黑白線條設定 */
+            .report-table {{ width:100%; border-collapse:collapse; margin-top:10px; color: #000; }}
+            .report-table th {{ border-bottom: 2px solid #000; padding-bottom: 5px; font-weight: bold; }}
+            .report-table td {{ border-bottom: 1px dashed #000; padding: 5px 0; }}
+            
+            /* --- 關鍵：專為熱感出單機設計的列印設定 --- */
+            @page {{ 
+                size: 80mm auto; /* 80mm 寬度，長度自動延伸 */
+                margin: 0mm;     /* 消除印表機預設邊界 */
+            }}
             
             @media print {{ 
-                .no-print {{ display: none; }} 
-                body {{ background: white; padding: 0; }} 
-                .ticket {{ box-shadow: none; width: 100%; }} 
+                .no-print {{ display: none !important; }} 
+                body {{ background: transparent; padding: 0; margin: 0; }} 
+                .ticket {{ width: 80mm; box-shadow: none; border: none; }}
+                
+                /* 強制所有內容為純黑白，避免印表機灰階化導致字體變淡 */
+                * {{ color: #000 !important; background: transparent !important; }}
             }}
         </style>
     </head>
     <body>
         <div class="no-print" style="margin-bottom:20px; text-align:center;">
             <div style="margin-bottom:10px;">
-                <label>選擇日期：</label>
-                <input type="date" id="dateInput" value="{target_date_str}" onchange="location.href='/kitchen/report?date='+this.value">
+                <label style="font-weight:bold;">選擇日期：</label>
+                <input type="date" id="dateInput" value="{target_date_str}" onchange="location.href='/kitchen/report?date='+this.value" style="padding: 5px; font-size: 16px;">
             </div>
-            <button onclick="window.print()" style="padding:10px 20px; font-size:16px; background:#2196F3; color:white; border:none; border-radius:5px; cursor:pointer;">🖨️ 列印報表</button>
-            <button onclick="location.href='/kitchen'" style="padding:10px 20px; font-size:16px; background:#607D8B; color:white; border:none; border-radius:5px; cursor:pointer; margin-left:10px;">🔙 返回看板</button>
+            <button onclick="window.print()" style="padding:10px 20px; font-size:16px; background:#000; color:#fff; border:2px solid #000; font-weight:bold; cursor:pointer;">🖨️ 列印報表</button>
+            <button onclick="location.href='/kitchen'" style="padding:10px 20px; font-size:16px; background:#fff; color:#000; border:2px solid #000; font-weight:bold; cursor:pointer; margin-left:10px;">🔙 返回看板</button>
         </div>
 
         <div class="ticket">
             <div class="header">
                 <h1>日結營收報表</h1>
-                <p>{target_date_str}</p>
-                <p style="font-size:12px; color:#666;">列印時間: {datetime.now().strftime('%H:%M:%S')}</p>
+                <p style="font-size: 18px; font-weight: bold;">{target_date_str}</p>
+                <p style="font-size:12px;">列印時間: {datetime.now().strftime('%H:%M:%S')}</p>
             </div>
 
             <div class="summary">
-                <div style="font-weight:bold; color:#2e7d32;">✅ 有效營收 (Pending+Completed)</div>
+                <div>有效營收</div>
                 <div style="display:flex; justify-content:space-between; margin-top:5px;">
-                    <span>訂單數: <span class="big-num">{v_count}</span> 單</span>
-                    <span>總金額: <span class="big-num">${v_total:,}</span></span>
+                    <span>訂單: <span class="big-num">{v_count}</span> 單</span>
+                    <span>總計: <span class="big-num">${v_total:,}</span></span>
                 </div>
             </div>
 
             <div class="void-sum">
-                <div style="font-weight:bold; color:#c62828;">❌ 作廢統計 (Cancelled)</div>
+                <div>作廢統計</div>
                 <div style="display:flex; justify-content:space-between; margin-top:5px;">
-                    <span>作廢數: {x_count} 單</span>
+                    <span>作廢: {x_count} 單</span>
                     <span>作廢額: ${x_total:,}</span>
                 </div>
             </div>
 
-            <div class="section-title">📊 商品銷售明細</div>
+            <div class="section-title">商品銷售明細</div>
             {tbl(v_stats)}
 
-            <div class="section-title" style="color:#888; margin-top:30px;">🗑️ 作廢商品明細</div>
-            <div style="color:#888; font-size:0.9em;">
+            <div class="section-title" style="margin-top:30px;">作廢商品明細</div>
+            <div>
                 {tbl(x_stats)}
             </div>
 
-            <div style="margin-top:40px; text-align:center; border-top:2px dashed #000; padding-top:10px;">
-                <p>簽名: ________________</p>
+            <div style="margin-top:40px; text-align:center; border-top:2px solid #000; padding-top:10px;">
+                <p style="font-weight: bold;">經手人簽名</p>
+                <br><br>
+                <p>____________________</p>
+                <p style="font-size: 12px; margin-top: 20px;">- End of Report -</p>
             </div>
         </div>
     </body>

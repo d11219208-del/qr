@@ -1,87 +1,60 @@
-from flask import Blueprint, render_template, request, jsonify, session, url_for
+from flask import Blueprint, render_template, request, jsonify, session, redirect, url_for
 from datetime import datetime, timedelta, time
-import requests
+from geopy.geocoders import Nominatim
+from geopy.exc import GeocoderTimedOut, GeocoderUnavailable, GeocoderServiceError
 from haversine import haversine, Unit
 from database import get_db_connection
 import re
 import random
-import urllib3
-
-# 禁用安全請求警告（因為我們會跳過 SSL 驗證）
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 delivery_bp = Blueprint('delivery', __name__)
 
-# 餐廳座標 (10491臺北市中山區龍江路164號)
-RESTAURANT_COORDS = (25.0549998, 121.5377779)
+# 餐廳座標 (請確認這是正確的)
+RESTAURANT_COORDS = (25.054358, 121.543468)
 
 def get_delivery_settings():
-    """從資料庫讀取外送設定"""
+    """
+    從資料庫讀取外送設定
+    確保欄位名稱與 database.py 的設定 (settings 表) 完全一致
+    """
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute("SELECT key, value FROM settings")
     rows = cur.fetchall()
     conn.close()
     
+    # 將資料轉為字典，例如: {'delivery_fee_base': '0', 'delivery_max_km': '5', ...}
     s = {row[0]: row[1] for row in rows}
     
     return {
         'enabled': s.get('delivery_enabled', '1') == '1',
         'min_price': int(s.get('delivery_min_price', 500)),
-        'max_km': float(s.get('delivery_max_km', 5.0)),
-        'base_fee': int(s.get('delivery_fee_base', 0)),
-        'fee_per_km': int(s.get('delivery_fee_per_km', 10))
+        
+        # --- 修正處：確保這裡讀取的是 database.py 定義的鍵名 ---
+        'max_km': float(s.get('delivery_max_km', 5.0)),          # 最大距離
+        'base_fee': int(s.get('delivery_fee_base', 0)),          # 基礎運費 (對應 DB 的 delivery_fee_base)
+        'fee_per_km': int(s.get('delivery_fee_per_km', 10))      # 每公里加價
     }
 
-def advanced_taiwan_address_cleaner(addr):
-    """清洗地址以符合 NLSC 搜尋格式"""
-    if not addr: return ""
-    addr = addr.translate(str.maketrans('０１２３４５６７８９－', '0123456789-'))
-    addr = addr.replace("台", "臺")
-    addr = re.sub(r'^\d{3,5}\s?', '', addr)
-    # 擷取到「號」為止
-    match = re.search(r'(.+?[路街大道巷弄].+?\d+號)', addr)
-    if match:
-        return match.group(1).strip()
+def normalize_address(addr):
+    """基本清洗：移除郵遞區號與樓層"""
+    addr = re.sub(r'^\d{3,5}\s?', '', addr) # 移除開頭郵遞區號
+    addr = re.sub(r'(\d+[Ff樓].*)|(B\d+.*)|(地下.*)|(室.*)', '', addr) # 移除樓層
     return addr.strip()
 
-def nlsc_geocode(address):
+def extract_road_only(addr):
     """
-    深度解析 NLSC 門牌座標，處理 SSL 驗證失敗問題
+    終極手段：只抓取路名
+    輸入: '臺北市中山區長春路348-4號'
+    輸出: '臺北市中山區長春路'
     """
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Referer": "https://maps.nlsc.gov.tw/"
-    }
-    
-    try:
-        # 使用 LocationSearch 接口
-        url = "https://maps.nlsc.gov.tw/S_Maps/LocationSearch"
-        # 關鍵點：加入 verify=False 解決日誌中的 SSLError
-        response = requests.get(url, params={"term": address}, headers=headers, timeout=10, verify=False)
-        data = response.json()
-        
-        if isinstance(data, list) and len(data) > 0:
-            for item in data:
-                # 1. 嘗試直接獲取 x, y (NLSC 常用 x 代表經度, y 代表緯度)
-                lon = item.get('x') or item.get('lon')
-                lat = item.get('y') or item.get('lat')
-                
-                # 2. 如果沒有，嘗試從 content 字串中正則提取
-                if not lat and 'content' in item:
-                    # 匹配 lat='25.123' 或 lon='121.123'
-                    lat_match = re.search(r"lat=['\"]([\d\.]+)['\"]", item['content'])
-                    lon_match = re.search(r"lon=['\"]([\d\.]+)['\"]", item['content'])
-                    if lat_match and lon_match:
-                        lat, lon = lat_match.group(1), lon_match.group(1)
-                
-                if lat and lon:
-                    return (float(lat), float(lon))
-                    
-    except Exception as e:
-        print(f"NLSC API 請求失敗: {e}")
-    
-    return None
+    match = re.search(r'.+?[縣市].+?[區鄉鎮市].+?[路街大道巷]', addr)
+    if match:
+        return match.group(0)
+    match_simple = re.search(r'.+?[路街大道]', addr)
+    if match_simple:
+        return match_simple.group(0)
+    return addr 
 
 def generate_time_slots(base_date):
     """產生單日可外送時段"""
@@ -97,12 +70,19 @@ def generate_time_slots(base_date):
     
     while current_dt <= end_dt:
         t = current_dt.time()
+        # 如果是「今天」，過濾掉已經過去的時間 (保留30分鐘緩衝)
         if base_date == now_tw.date() and current_dt < (now_tw + timedelta(minutes=30)):
             current_dt += timedelta(minutes=30)
             continue
-        if not (t >= block_start and t <= block_end):
-            slots.append(current_dt.strftime("%H:%M"))
+            
+        in_forbidden_zone = (t >= block_start and t <= block_end)
+        
+        if not in_forbidden_zone:
+            time_str = current_dt.strftime("%H:%M")
+            slots.append(time_str)
+            
         current_dt += timedelta(minutes=30)
+        
     return slots
 
 @delivery_bp.route('/setup')
@@ -113,15 +93,22 @@ def setup():
 
     date_options = []
     now = datetime.utcnow() + timedelta(hours=8)
+    
     for i in range(3):
         d = (now + timedelta(days=i)).date()
+        val = d.strftime("%Y-%m-%d")
+        weekdays = ["一", "二", "三", "四", "五", "六", "日"]
+        label_date = f"{d.strftime('%m/%d')} ({weekdays[d.weekday()]})"
+        if i == 0: label_date += " (今天)"
+        
         slots = generate_time_slots(d)
         if slots:
             date_options.append({
-                'value': d.strftime("%Y-%m-%d"), 
-                'label': f"{d.strftime('%m/%d')} (今天)" if i==0 else d.strftime('%m/%d'),
+                'value': val, 
+                'label': label_date,
                 'slots': slots
             })
+
     return render_template('delivery_setup.html', dates=date_options)
 
 @delivery_bp.route('/check', methods=['POST'])
@@ -133,54 +120,109 @@ def check_address():
     delivery_date = data.get('date')
     delivery_time = data.get('time')
     
-    if not all([raw_address, name, phone, delivery_date, delivery_time]):
-        return jsonify({'success': False, 'msg': '請填寫完整資訊'})
+    if not raw_address or not name or not phone or not delivery_date or not delivery_time:
+        return jsonify({'success': False, 'msg': '請填寫完整資訊 (含日期與時間)'})
     
-    settings = get_delivery_settings()
+    # 隨機 User-Agent 避免封鎖
+    ua_string = f"mbdv_delivery_app_user_{random.randint(10000, 99999)}"
+    geolocator = Nominatim(user_agent=ua_string)
+    
+    location = None
+    fallback_level = 0
+    settings = get_delivery_settings() # 這裡會取得正確的 DB 設定
+
     scheduled_for = f"{delivery_date} {delivery_time}"
 
-    # 1. 清洗地址
-    search_target = advanced_taiwan_address_cleaner(raw_address)
-    
-    # 2. 第一次嘗試定位
-    user_coords = nlsc_geocode(search_target)
-    
-    # 3. 補齊縣市邏輯 (針對 台北市/台 -> 臺北市)
-    if not user_coords and "臺北" not in search_target:
-        user_coords = nlsc_geocode("臺北市" + search_target.replace("台北市", ""))
-
-    if user_coords:
-        dist = haversine(RESTAURANT_COORDS, user_coords, unit=Unit.KILOMETERS)
+    try:
+        # --- 第一層：標準清洗 ---
+        search_addr = normalize_address(raw_address)
+        query = f"台灣 {search_addr}"
+        location = geolocator.geocode(query, timeout=5)
         
-        if dist > settings['max_km']:
+        # --- 第二層：去連字號 ---
+        if not location:
+            addr_no_dash = re.sub(r'(\d+)[-‐‑]\d+號', r'\1號', search_addr)
+            addr_no_dash = re.sub(r'(\d+號)之\d+', r'\1', addr_no_dash)
+            if addr_no_dash != search_addr:
+                print(f"嘗試降級搜尋 (去號): {addr_no_dash}")
+                location = geolocator.geocode(f"台灣 {addr_no_dash}", timeout=5)
+                fallback_level = 1
+
+        # --- 第三層：只搜路名 ---
+        if not location:
+            road_only = extract_road_only(search_addr)
+            if road_only != search_addr:
+                print(f"嘗試終極搜尋 (只搜路名): {road_only}")
+                location = geolocator.geocode(f"台灣 {road_only}", timeout=5)
+                fallback_level = 2
+
+        # --- 判斷結果 ---
+        if location:
+            user_coords = (location.latitude, location.longitude)
+            dist = haversine(RESTAURANT_COORDS, user_coords, unit=Unit.KILOMETERS)
+            
+            # 使用從 DB 讀取的 max_km
+            if dist > settings['max_km']:
+                return jsonify({
+                    'success': False, 
+                    'msg': f'超出外送範圍 (距離 {dist:.1f}km, 目前限制 {settings["max_km"]}km)'
+                })
+
+            # 計算運費：基本費 (從 DB delivery_fee_base 讀來) + (距離 * 每公里費率)
+            shipping_fee = settings['base_fee'] + int(dist * settings['fee_per_km'])
+            
+            note = ""
+            if fallback_level == 2:
+                note = "(以路段中心估算)"
+
+            session['delivery_data'] = {
+                'name': name,
+                'phone': phone,
+                'address': raw_address,
+                'scheduled_for': scheduled_for
+            }
+            session['delivery_info'] = {
+                'is_delivery': True,
+                'distance_km': round(dist, 1),
+                'shipping_fee': shipping_fee,
+                'min_price': settings['min_price'],
+                'note': note
+            }
+            session['table_num'] = '外送'
+            session.modified = True
+            
+            return jsonify({'success': True, 'redirect': url_for('menu.menu', lang='zh')})
+
+        else:
             return jsonify({
                 'success': False, 
-                'msg': f'超出外送範圍 (距離 {dist:.1f}km, 限制 {settings["max_km"]}km)'
+                'msg': '找不到此地址，請確認路名是否正確。'
             })
 
-        shipping_fee = settings['base_fee'] + int(dist * settings['fee_per_km'])
-
+    except Exception as e:
+        print(f"Geo Error (切換至人工模式): {e}")
+        
+        # 發生錯誤時，運費暫時設為基本費
         session['delivery_data'] = {
-            'name': name, 'phone': phone, 'address': raw_address, 'scheduled_for': scheduled_for
+            'name': name,
+            'phone': phone,
+            'address': raw_address,
+            'scheduled_for': scheduled_for
         }
+        
         session['delivery_info'] = {
             'is_delivery': True,
-            'distance_km': round(dist, 1),
-            'shipping_fee': shipping_fee,
+            'distance_km': 0,
+            'shipping_fee': settings['base_fee'], # 使用 DB 設定的基礎運費
             'min_price': settings['min_price'],
-            'note': ""
+            'note': "⚠️ 地圖連線忙碌，運費僅為預估，將由專人電話確認"
         }
+        
         session['table_num'] = '外送'
         session.modified = True
         
-        return jsonify({'success': True, 'redirect': url_for('menu.menu', lang='zh')})
-    
-    else:
-        # 如果 NLSC 依然失敗 (例如伺服器依然 SSL 報錯)，轉為人工模式確保使用者能下單
-        session['delivery_data'] = {'name': name, 'phone': phone, 'address': raw_address, 'scheduled_for': scheduled_for}
-        session['delivery_info'] = {
-            'is_delivery': True, 'distance_km': 0, 'shipping_fee': settings['base_fee'],
-            'min_price': settings['min_price'], 'note': "⚠️ 地址解析忙碌，運費改由專人電話確認"
-        }
-        session.modified = True
-        return jsonify({'success': True, 'redirect': url_for('menu.menu', lang='zh')})
+        return jsonify({
+            'success': True, 
+            'redirect': url_for('menu.menu', lang='zh'),
+            'msg': '地圖連線忙碌，將轉為人工確認模式'
+        })
