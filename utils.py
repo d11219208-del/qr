@@ -181,7 +181,7 @@ def run_maintenance_tasks(app):
                 # 1. Ping 網站
                 try:
                     # 這裡請確保網址是您正確的 Render 網址
-                    urllib.request.urlopen("https://qr-mbdv.onrender.com", timeout=5)
+                    urllib.request.urlopen("https://qr-mbdv.onrender.com/", timeout=5)
                     print(f"[{now_str}] ✅ Web Ping 成功")
                 except Exception: 
                     pass # 失敗不報錯，保持安靜

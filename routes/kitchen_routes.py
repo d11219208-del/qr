@@ -245,7 +245,7 @@ def check_new_orders():
         return jsonify({'html': f"載入錯誤: {str(e)}", 'max_seq': 0, 'new_ids': []})
 
 
-# --- 3. 核心列印路由 (已優化速度 + 多語系結帳單支援) ---
+# --- 3. 核心列印路由 (已優化速度 + 多語系結帳單支援 + 資料庫動態翻譯) ---
 @kitchen_bp.route('/print_order/<int:oid>')
 def print_order(oid):
     try:
@@ -254,7 +254,7 @@ def print_order(oid):
         conn = get_db_connection()
         cur = conn.cursor()
         
-        # SQL 查詢：新增讀取 'lang' 欄位
+        # SQL 查詢：讀取 'lang' 欄位
         query = """
             SELECT table_number, total_price, daily_seq, content_json, created_at, status,
                    customer_name, customer_phone, customer_address, delivery_fee, scheduled_for, 
@@ -276,14 +276,34 @@ def print_order(oid):
             """, (oid,))
             order = cur.fetchone()
 
-        cur.execute("SELECT name, print_category FROM products")
-        product_map = {row[0]: row[1] for row in cur.fetchall()}
+        # --- 【關鍵修正】撈取資料庫中所有的客製化選項翻譯 ---
+        cur.execute("""
+            SELECT name, print_category, 
+                   custom_options, custom_options_en, custom_options_jp, custom_options_kr 
+            FROM products
+        """)
+        product_map = {}
+        for row in cur.fetchall():
+            p_name = row[0]
+            
+            # 輔助函式：將以逗號分隔的字串轉為串列
+            def split_opts(opt_str):
+                if not opt_str: return []
+                return [o.strip() for o in opt_str.split(',') if o.strip()]
+            
+            product_map[p_name] = {
+                'cat': row[1] or 'Other',
+                'zh': split_opts(row[2]),
+                'en': split_opts(row[3]),
+                'jp': split_opts(row[4]),
+                'kr': split_opts(row[5])
+            }
         conn.close()
         
         if not order:
             return "訂單不存在", 404
         
-        # 解包資料 (新增 c_lang)
+        # 解包資料
         table_num, total_price, seq, content_json, created_at, status, \
         c_name, c_phone, c_addr, c_fee, c_schedule, c_type, c_lang = order
         
@@ -314,7 +334,10 @@ def print_order(oid):
             display_tbl_name = "外送" if is_delivery else (table_str if table_str else "外帶")
 
         if isinstance(content_json, str):
-            items = json.loads(content_json)
+            try:
+                items = json.loads(content_json)
+            except:
+                items = []
         elif isinstance(content_json, (list, dict)):
             items = content_json if isinstance(content_json, list) else [content_json]
         else:
@@ -323,12 +346,12 @@ def print_order(oid):
         # 下單時間
         time_str = (created_at + timedelta(hours=8)).strftime('%Y-%m-%d %H:%M:%S')
 
-        # 分類邏輯 (用於分單列印) - 修正這裡！補上第三個空串列 []
+        # 分類邏輯 (用於分單列印)
         noodle_items, soup_items, other_items = [], [], []
         
         for item in items:
             p_name = item.get('name_zh') or item.get('name')
-            p_cat = product_map.get(p_name, 'Other') 
+            p_cat = product_map.get(p_name, {}).get('cat', 'Other') 
             if p_cat == 'Noodle': noodle_items.append(item)
             elif p_cat == 'Soup': soup_items.append(item)
             else: other_items.append(item)
@@ -364,6 +387,29 @@ def print_order(oid):
         </style>
         """
 
+        # --- 根據資料庫 mapping 動態翻譯選項 ---
+        def translate_option(p_name, opt_str, target_lang):
+            if p_name not in product_map:
+                return opt_str
+            
+            p_data = product_map[p_name]
+            found_idx = -1
+            
+            # 尋找該選項原本是在哪一個語言的陣列中，取得其 Index
+            for lang in ['zh', 'en', 'jp', 'kr']:
+                if opt_str in p_data[lang]:
+                    found_idx = p_data[lang].index(opt_str)
+                    break
+            
+            # 如果有找到對應的 Index，就從目標語言的陣列中取出對應的翻譯
+            if found_idx != -1:
+                target_list = p_data.get(target_lang, [])
+                if found_idx < len(target_list):
+                    return target_list[found_idx]
+            
+            # 找不到就回傳原字串
+            return opt_str
+
         def generate_html(title, item_list, is_receipt=False):
             if not item_list and not is_receipt: return "" 
             if not item_list and is_receipt and c_fee == 0: return ""
@@ -386,24 +432,37 @@ def print_order(oid):
             
             for i in item_list:
                 name_zh = i.get('name_zh') or i.get('name')
-                opts_zh = i.get('options_zh') or i.get('options', [])
+                
+                # 結帳單依據客人的語系，廚房單強制中文
+                target_lang = c_lang if is_receipt else 'zh'
                 
                 main_name = name_zh
                 sub_name = ""
-                opts_display = opts_zh
 
-                if is_receipt:
-                    if c_lang and c_lang != 'zh':
-                        lang_name_key = f"name_{c_lang}"
-                        target_name = i.get(lang_name_key) or i.get('name_en')
-                        if target_name:
-                            main_name = target_name
-                            sub_name = name_zh 
-                        
-                        lang_opt_key = f"options_{c_lang}"
-                        target_opts = i.get(lang_opt_key) or i.get('options_en')
-                        if target_opts:
-                            opts_display = target_opts
+                # 處理商品名稱多語系
+                if target_lang != 'zh':
+                    lang_name_key = f"name_{target_lang}"
+                    target_name = i.get(lang_name_key) or i.get('name_en')
+                    if target_name:
+                        main_name = target_name
+                        sub_name = name_zh 
+                
+                # --- 處理客製化選項多語系 ---
+                opts_display = []
+                # 1. 優先看前端是否有直接傳送對應語言的選項陣列
+                lang_opts = i.get(f"options_{target_lang}")
+                if lang_opts and isinstance(lang_opts, list) and len(lang_opts) > 0:
+                    opts_display = lang_opts
+                else:
+                    # 2. 如果沒有，抓取現存選項，丟入翻譯引擎翻譯
+                    raw_opts = i.get('options') or i.get('options_zh') or i.get('options_en') or []
+                    if isinstance(raw_opts, str): 
+                        raw_opts = [raw_opts]
+                    
+                    for opt in raw_opts:
+                        opt_str = str(opt).strip()
+                        translated = translate_option(name_zh, opt_str, target_lang)
+                        opts_display.append(translated)
                 
                 name_html = f"<div class='name-col'><span class='item-name-main'>{main_name}</span>"
                 if sub_name and sub_name != main_name:
@@ -441,7 +500,6 @@ def print_order(oid):
             return "<script>alert('無內容可列印');window.close();</script>", 200
 
         # RawBT 整合 (APP 列印)
-        import base64
         rawbt_html_source = f"<html><head><meta charset='utf-8'>{style}</head><body>{content}</body></html>"
         b64_data = base64.b64encode(rawbt_html_source.encode('utf-8')).decode('utf-8')
         intent_url = (
@@ -450,7 +508,6 @@ def print_order(oid):
             f"S.jobName=Order_{seq}_{print_type};S.editor=false;end;"
         )
 
-        # 極速版 JavaScript：不等待 DOMContentLoaded，直接在 Body 尾端觸發
         final_html = f"""
         <!DOCTYPE html>
         <html>
@@ -462,7 +519,6 @@ def print_order(oid):
         <body>
             {content}
             <script>
-                // 將 Script 放在 body 最後面，確保 HTML 已經載入，不浪費時間等待事件
                 var ua = navigator.userAgent || navigator.vendor || window.opera;
                 if (/android/i.test(ua)) {{
                     var msg = document.createElement('div');
@@ -470,10 +526,6 @@ def print_order(oid):
                     document.body.appendChild(msg);
                     window.location.href = "{intent_url}";
                     setTimeout(function() {{ if(window.opener) window.close(); }}, 1500);
-                }} else {{
-                    // PC / Chrome Kiosk 模式
-                    // ⚠️ 將原本的 window.print() 和關閉視窗的程式碼通通刪除！
-                    // 現在統一由前端看板的 iframe.contentWindow.print() 來觸發列印，避免印兩次。
                 }}
             </script>
         </body>
@@ -482,7 +534,6 @@ def print_order(oid):
         return final_html
 
     except Exception as e:
-        import traceback
         traceback.print_exc()
         return f"Print Error: {str(e)}", 500
 
@@ -714,5 +765,6 @@ def daily_report():
     </body>
     </html>
     """
+
 
 

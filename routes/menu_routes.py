@@ -351,13 +351,14 @@ def delivery_menu():
 def order_success():
     oid = request.args.get('order_id')
     lang = request.args.get('lang', 'zh')
+    # 假設你有 load_translations() 函式，請確認環境中有這支函式
     translations = load_translations()
     t = translations.get(lang, translations['zh'])
     
     conn = get_db_connection()
     cur = conn.cursor()
     
-    # 讀取訂單詳細資料
+    # 1. 讀取訂單詳細資料
     cur.execute("""
         SELECT daily_seq, content_json, total_price, created_at, 
                order_type, delivery_info, delivery_fee,
@@ -366,11 +367,34 @@ def order_success():
         FROM orders WHERE id=%s
     """, (oid,))
     row = cur.fetchone()
-    cur.close(); conn.close()
+    
+    # 2. 【新增】讀取所有產品的客製化選項，用來建立動態翻譯字典
+    cur.execute("""
+        SELECT name, custom_options, custom_options_en, custom_options_jp, custom_options_kr 
+        FROM products
+    """)
+    product_map = {}
+    for p_row in cur.fetchall():
+        p_name = p_row[0]
+        
+        # 輔助函式：切分逗號字串
+        def split_opts(opt_str):
+            if not opt_str: return []
+            return [o.strip() for o in opt_str.split(',') if o.strip()]
+        
+        product_map[p_name] = {
+            'zh': split_opts(p_row[1]),
+            'en': split_opts(p_row[2]),
+            'jp': split_opts(p_row[3]),
+            'kr': split_opts(p_row[4])
+        }
+        
+    cur.close()
+    conn.close()
     
     if not row: return "Order Not Found", 404
     
-    # 解構資料
+    # 解構訂單資料
     seq, json_str, total, created_at, order_type, delivery_info_json, delivery_fee, c_name, c_phone, c_addr, c_time, table_num_db = row
     
     # 判斷是否為外送 (根據 type 或 table_number)
@@ -401,6 +425,26 @@ def order_success():
     if d_scheduled and len(d_scheduled) > 16:
         d_scheduled = d_scheduled[:16]
 
+    # --- 【新增】選項動態翻譯函式 ---
+    def translate_option(p_name, opt_str, target_lang):
+        if p_name not in product_map:
+            return opt_str
+        
+        p_data = product_map[p_name]
+        found_idx = -1
+        
+        for l in ['zh', 'en', 'jp', 'kr']:
+            if opt_str in p_data[l]:
+                found_idx = p_data[l].index(opt_str)
+                break
+        
+        if found_idx != -1:
+            target_list = p_data.get(target_lang, [])
+            if found_idx < len(target_list):
+                return target_list[found_idx]
+                
+        return opt_str
+
     # 生成商品列表 HTML
     items = json.loads(json_str) if json_str else []
     items_html = ""
@@ -408,9 +452,22 @@ def order_success():
     for i in items:
         row_total = int(float(i['unit_price'])) * int(float(i['qty']))
         
-        d_name_prod = i.get(f'name_{lang}', i.get('name_zh', 'Product'))
-        ops = i.get(f'options_{lang}', i.get('options_zh', []))
-        opt_str = f"<br><small style='color:#777; font-size:0.9em;'>└ {', '.join(ops)}</small>" if ops else ""
+        # 取得基準的中文商品名稱 (用作查字典的 Key)
+        name_zh = i.get('name_zh', i.get('name', 'Product'))
+        # 顯示用的商品名稱 (客人選的語言)
+        d_name_prod = i.get(f'name_{lang}', name_zh)
+        
+        # --- 【修改這裡】抓取選項並動態翻譯 ---
+        raw_ops = i.get(f'options_{lang}') or i.get('options_zh') or i.get('options') or []
+        if isinstance(raw_ops, str):
+            raw_ops = [raw_ops]
+            
+        translated_ops = []
+        for opt in raw_ops:
+            # 傳入：(產品中文名稱, 要翻譯的選項字串, 目標語言)
+            translated_ops.append(translate_option(name_zh, str(opt).strip(), lang))
+            
+        opt_str = f"<br><small style='color:#777; font-size:0.9em;'>└ {', '.join(translated_ops)}</small>" if translated_ops else ""
         
         items_html += f"""
         <div style='display:flex; justify-content:space-between; align-items: flex-start; border-bottom:1px solid #eee; padding:15px 0;'>
@@ -461,9 +518,6 @@ def order_success():
     tw_time = created_at + timedelta(hours=8)
     time_str = tw_time.strftime('%Y-%m-%d %H:%M:%S')
 
-    # 返回連結邏輯
-    # back_link = url_for('menu.delivery_menu', lang=lang) if is_delivery else url_for('menu.index', lang=lang)
-    # back_text = "Back to Delivery" if is_delivery else "Back to Menu"
     back_link = url_for('menu.index', lang=lang) if is_delivery else url_for('menu.index', lang=lang)
     back_text = "Back to Menu" if is_delivery else "Back to Menu"
 
