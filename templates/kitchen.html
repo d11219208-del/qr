@@ -3,7 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>🍳 廚房出餐看板 Pro (USB 直接列印版)</title>
+    <title>🍳 廚房出餐看板 Pro (USB 修正版)</title>
+    <script src="https://cdn.jsdelivr.net/npm/text-encoding-utf-8@1.0.2/lib/encoding-indexes.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/text-encoding-utf-8@1.0.2/lib/encoding.js"></script>
     <style>
         :root {
             --pending: #fff4e5; --completed: #e8f5e9; --cancelled: rgba(244, 67, 54, 0.15);
@@ -13,7 +15,6 @@
         }
         body { font-family: "Microsoft JhengHei", sans-serif; background: #f0f2f5; margin: 0; padding: 15px; color: var(--main-text); }
         
-        /* 頂部導航列 */
         header { 
             display: flex; justify-content: space-between; align-items: center; 
             background: #fff; padding: 10px 20px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1);
@@ -21,7 +22,6 @@
         }
         .nav-links { display: flex; gap: 10px; }
 
-        /* 訂單網格佈局 */
         .order-grid { 
             display: grid; 
             grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); 
@@ -29,7 +29,6 @@
             align-items: flex-start; 
         }
         
-        /* 卡片基礎樣式 */
         .card { 
             background: white; border-radius: 12px; border: 1px solid #ddd;
             display: flex; flex-direction: column; overflow: hidden;
@@ -80,18 +79,15 @@
         .btn-print { background: var(--accent-blue); color: white; }
         .btn-void { background: var(--accent-red); color: white; }
         
-        /* 印表機連線按鈕特效 */
         #btnConnectPrinter.connected { background: #4caf50; animation: none; }
         #btnConnectPrinter { background: #e91e63; color: white; animation: pulse 2s infinite; }
         @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(233, 30, 99, 0.7); } 70% { box-shadow: 0 0 0 10px rgba(233, 30, 99, 0); } 100% { box-shadow: 0 0 0 0 rgba(233, 30, 99, 0); } }
 
-        /* 彈窗樣式 */
         .modal { display: none; position: fixed; z-index: 2000; left: 0; top: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.6); backdrop-filter: blur(3px); }
         .modal-content { background-color: #fff; margin: 10% auto; padding: 25px; border-radius: 12px; width: 90%; max-width: 350px; text-align: center; box-shadow: 0 5px 20px rgba(0,0,0,0.3); position: relative; }
         .modal-content.wide { max-width: 600px; }
         .modal-btn { width: 100%; padding: 15px; margin: 10px 0; font-size: 18px; border-radius: 8px; border: none; cursor: pointer; font-weight: bold; }
 
-        /* 銷售排行區塊 */
         .sales-controls { display: flex; flex-direction: column; gap: 10px; margin-bottom: 15px; background: #f8f9fa; padding: 15px; border-radius: 8px; border: 1px solid #eee; }
         .date-group { display: flex; justify-content: space-between; align-items: center; gap: 5px; }
         .date-input { padding: 8px; border: 1px solid #ccc; border-radius: 4px; flex-grow: 1; font-family: inherit; }
@@ -115,7 +111,6 @@
     </div>
     <div class="nav-links">
         <button id="btnConnectPrinter" onclick="connectPrinter()" class="btn">🔌 點擊連接 USB 印表機</button>
-        
         <button onclick="testAudioAndRefresh()" class="btn" style="background:#eee;">🔄 刷新 / 測試音效</button>
         <button onclick="openSalesModal()" class="btn" style="background:var(--accent-orange); color:white;">📈 銷售排行</button>
         <a href="/kitchen/report" target="_blank" class="btn" style="background:#673ab7; color:white; text-decoration:none;">📊 營收報表</a>
@@ -170,19 +165,15 @@
     // 🖨️ 核心機制：Web USB API 直接列印
     // ==========================================
     let usbDevice = null;
-    let usbEndpoint = null; // 儲存輸出端點位址
+    let usbEndpoint = null; 
 
-    // 1. 要求授權連接 USB 裝置 (使用者點擊觸發)
     async function connectPrinter() {
         try {
-            // 彈出視窗讓使用者選擇 USB 設備
             usbDevice = await navigator.usb.requestDevice({ filters: [] });
-            
             await usbDevice.open();
             await usbDevice.selectConfiguration(1);
             await usbDevice.claimInterface(0); 
 
-            // 自動尋找 Bulk Out Endpoint
             const interface = usbDevice.configuration.interfaces[0];
             const alternate = interface.alternates[0];
             const endpoint = alternate.endpoints.find(e => e.direction === 'out' && e.type === 'bulk');
@@ -198,11 +189,10 @@
             }
         } catch (err) {
             console.error("連接失敗:", err);
-            alert("連接失敗: " + err.message);
+            alert("連接失敗: " + err.message + "\n(請確認是否已使用 Zadig 替換為 WinUSB 驅動)");
         }
     }
 
-    // 2. 透過 USB 傳送 ESC/POS 指令
     async function printDataViaUSB(uint8Array) {
         if (!usbDevice || usbEndpoint === null) {
             console.warn("尚未連接 USB 印表機");
@@ -219,7 +209,6 @@
         }
     }
 
-    // 3. 攔截 HTML 並轉為指令
     function fetchAndPrint(oid, type) {
         if (!usbDevice) {
             alert("請先點擊上方按鈕連接 USB 印表機！");
@@ -241,14 +230,15 @@
                 let plainText = tempDiv.innerText;
                 document.body.removeChild(tempDiv);
 
-                // 組合指令
-                const encoder = new TextEncoder();
-                const initCmd = new Uint8Array([0x1B, 0x40]); // 初始化
-                const chineseCmd = new Uint8Array([0x1C, 0x26]); // 啟動中文
-                const textBytes = encoder.encode("\n" + plainText + "\n");
-                const cutCmd = new Uint8Array([0x0A, 0x0A, 0x0A, 0x0A, 0x1D, 0x56, 0x00]); // 切紙
+                // --- 重要：轉換為 Big5 編碼以解決亂碼 ---
+                const big5Encoder = new CustomTextEncoder("big5", { NONSTANDARD_allowLegacyEncoding: true });
+                const textBytes = big5Encoder.encode("\n" + plainText + "\n");
 
-                // 合併所有 Uint8Array
+                // ESC/POS 指令組裝
+                const initCmd = new Uint8Array([0x1B, 0x40]); // 初始化
+                const chineseCmd = new Uint8Array([0x1C, 0x26]); // 啟用中文模式
+                const cutCmd = new Uint8Array([0x0A, 0x0A, 0x0A, 0x0A, 0x1D, 0x56, 0x00]); // 切紙指令
+
                 const combined = new Uint8Array(initCmd.length + chineseCmd.length + textBytes.length + cutCmd.length);
                 combined.set(initCmd);
                 combined.set(chineseCmd, initCmd.length);
@@ -261,7 +251,7 @@
     }
 
     // ==========================================
-    // 其他常規業務邏輯 (不變)
+    // 業務邏輯與介面控制
     // ==========================================
 
     function speakNewOrder() {
