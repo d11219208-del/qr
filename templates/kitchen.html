@@ -209,7 +209,7 @@
         }
     }
 
-    function fetchAndPrint(oid, type) {
+ function fetchAndPrint(oid, type) {
         if (!usbDevice) {
             alert("請先點擊上方按鈕連接 USB 印表機！");
             return;
@@ -220,34 +220,44 @@
             .then(res => res.text())
             .then(html => {
                 const tempDiv = document.createElement('div');
-                tempDiv.style.position = 'absolute';
-                tempDiv.style.left = '-9999px';
-                tempDiv.style.width = '300px'; 
-                
-                const brRegex = /<br\s*[\/]?>/gi;
-                tempDiv.innerHTML = html.replace(brRegex, "\n");
-                document.body.appendChild(tempDiv);
+                // 處理換行
+                tempDiv.innerHTML = html.replace(/<br\s*[\/]?>/gi, "\n");
                 let plainText = tempDiv.innerText;
-                document.body.removeChild(tempDiv);
 
-                // --- 重要：轉換為 Big5 編碼以解決亂碼 ---
-                const big5Encoder = new CustomTextEncoder("big5", { NONSTANDARD_allowLegacyEncoding: true });
-                const textBytes = big5Encoder.encode("\n" + plainText + "\n");
+                // --- 修正編碼器宣告 ---
+                let textBytes;
+                try {
+                    // 優先嘗試庫提供的 Big5 編碼
+                    const encoder = new TextEncoder("big5", { NONSTANDARD_allowLegacyEncoding: true });
+                    textBytes = encoder.encode("\n" + plainText + "\n");
+                } catch (e) {
+                    console.warn("Big5 編碼器啟動失敗，改用標準編碼:", e);
+                    textBytes = new TextEncoder().encode("\n" + plainText + "\n");
+                }
 
-                // ESC/POS 指令組裝
-                const initCmd = new Uint8Array([0x1B, 0x40]); // 初始化
-                const chineseCmd = new Uint8Array([0x1C, 0x26]); // 啟用中文模式
-                const cutCmd = new Uint8Array([0x0A, 0x0A, 0x0A, 0x0A, 0x1D, 0x56, 0x00]); // 切紙指令
+                // ESC/POS 標準指令組
+                const initCmd = new Uint8Array([0x1B, 0x40]);      // 初始化
+                const chineseCmd = new Uint8Array([0x1C, 0x26]);   // 進入中文模式
+                // 修正切紙指令：部分機型需要先走紙再切紙
+                const cutCmd = new Uint8Array([0x0A, 0x0A, 0x0A, 0x0A, 0x1D, 0x56, 0x42, 0x00]); 
 
-                const combined = new Uint8Array(initCmd.length + chineseCmd.length + textBytes.length + cutCmd.length);
-                combined.set(initCmd);
-                combined.set(chineseCmd, initCmd.length);
-                combined.set(textBytes, initCmd.length + chineseCmd.length);
-                combined.set(cutCmd, initCmd.length + chineseCmd.length + textBytes.length);
+                // 精確計算合併長度
+                const totalLength = initCmd.length + chineseCmd.length + textBytes.length + cutCmd.length;
+                const combined = new Uint8Array(totalLength);
+                
+                let pos = 0;
+                combined.set(initCmd, pos); pos += initCmd.length;
+                combined.set(chineseCmd, pos); pos += chineseCmd.length;
+                combined.set(textBytes, pos); pos += textBytes.length;
+                combined.set(cutCmd, pos);
 
+                // 執行傳輸
                 printDataViaUSB(combined);
             })
-            .catch(err => console.error("獲取單據失敗:", err));
+            .catch(err => {
+                console.error("列印流程發生錯誤:", err);
+                alert("列印失敗，請查看控制台 (F12)");
+            });
     }
 
     // ==========================================
@@ -368,3 +378,4 @@
 
 </body>
 </html>
+
