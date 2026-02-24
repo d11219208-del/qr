@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>🍳 廚房出餐看板 Pro (純前端靜默列印)</title>
+    <title>🍳 廚房出餐看板 Pro (USB 直接列印版)</title>
     <style>
         :root {
             --pending: #fff4e5; --completed: #e8f5e9; --cancelled: rgba(244, 67, 54, 0.15);
@@ -114,7 +114,7 @@
         <span id="update-time" style="font-size:12px; color:#888;">正在連線...</span>
     </div>
     <div class="nav-links">
-        <button id="btnConnectPrinter" onclick="connectPrinter()" class="btn">🔌 點擊連接印表機</button>
+        <button id="btnConnectPrinter" onclick="connectPrinter()" class="btn">🔌 點擊連接 USB 印表機</button>
         
         <button onclick="testAudioAndRefresh()" class="btn" style="background:#eee;">🔄 刷新 / 測試音效</button>
         <button onclick="openSalesModal()" class="btn" style="background:var(--accent-orange); color:white;">📈 銷售排行</button>
@@ -167,68 +167,61 @@
     const synth = window.speechSynthesis;
 
     // ==========================================
-    // 🖨️ 核心機制：Web Serial API 靜默列印
+    // 🖨️ 核心機制：Web USB API 直接列印
     // ==========================================
-    let printerPort = null;
+    let usbDevice = null;
+    let usbEndpoint = null; // 儲存輸出端點位址
 
-    // 1. 要求授權連接印表機 (使用者點擊觸發)
+    // 1. 要求授權連接 USB 裝置 (使用者點擊觸發)
     async function connectPrinter() {
         try {
-            // 彈出視窗讓使用者選擇 USB (COM Port) 設備
-            printerPort = await navigator.serial.requestPort();
-            // 一般出單機 Baud Rate 為 9600 或 115200
-            await printerPort.open({ baudRate: 9600 }); 
+            // 彈出視窗讓使用者選擇 USB 設備
+            usbDevice = await navigator.usb.requestDevice({ filters: [] });
             
-            const btn = document.getElementById('btnConnectPrinter');
-            btn.innerText = "✅ 印表機已就緒";
-            btn.classList.add('connected');
-            alert("印表機連接成功！系統現在會全自動無感列印。");
+            await usbDevice.open();
+            await usbDevice.selectConfiguration(1);
+            await usbDevice.claimInterface(0); 
+
+            // 自動尋找 Bulk Out Endpoint
+            const interface = usbDevice.configuration.interfaces[0];
+            const alternate = interface.alternates[0];
+            const endpoint = alternate.endpoints.find(e => e.direction === 'out' && e.type === 'bulk');
+            
+            if (endpoint) {
+                usbEndpoint = endpoint.endpointNumber;
+                const btn = document.getElementById('btnConnectPrinter');
+                btn.innerText = "✅ USB 印表機已就緒";
+                btn.classList.add('connected');
+                alert("USB 印表機連接成功！");
+            } else {
+                throw new Error("找不到可用的輸出端點");
+            }
         } catch (err) {
             console.error("連接失敗:", err);
-            alert("連接失敗或取消。若要自動列印請重新點擊連接。");
+            alert("連接失敗: " + err.message);
         }
     }
 
-    // 2. 傳送純文字給印表機 (ESC/POS 指令)
-    async function printTextViaSerial(text) {
-        if (!printerPort) {
-            console.warn("尚未連接印表機，略過實體列印");
+    // 2. 透過 USB 傳送 ESC/POS 指令
+    async function printDataViaUSB(uint8Array) {
+        if (!usbDevice || usbEndpoint === null) {
+            console.warn("尚未連接 USB 印表機");
             return;
         }
         try {
-            const writer = printerPort.writable.getWriter();
-            
-            // 準備 ESC/POS 基礎指令
-            const initCmd = new Uint8Array([0x1B, 0x40]); // 初始化/清空緩衝區
-            const chineseCmd = new Uint8Array([0x1C, 0x26]); // 啟用中文字元模式 (多數熱感機必備)
-            // 自動換 4 行然後切紙 (0x1D 0x56 0x00)
-            const cutCmd = new Uint8Array([0x0A, 0x0A, 0x0A, 0x0A, 0x1D, 0x56, 0x00]); 
-
-            // 將文字轉為 UTF-8 Byte 陣列
-            const encoder = new TextEncoder();
-            const textBytes = encoder.encode(text);
-
-            // 依序寫入硬體
-            await writer.write(initCmd);
-            await writer.write(chineseCmd);
-            await writer.write(textBytes);
-            await writer.write(cutCmd);
-
-            // 釋放鎖定
-            writer.releaseLock();
-            console.log("🖨️ 列印指令已發送！");
+            await usbDevice.transferOut(usbEndpoint, uint8Array);
+            console.log("🖨️ USB 資料已送出");
         } catch (err) {
-            console.error("列印發生錯誤:", err);
-            // 若發生錯誤，可能是線被拔掉，重置狀態
-            printerPort = null;
-            document.getElementById('btnConnectPrinter').innerText = "🔌 點擊連接印表機";
+            console.error("USB 列印發生錯誤:", err);
+            usbDevice = null;
+            document.getElementById('btnConnectPrinter').innerText = "🔌 點擊連接 USB 印表機";
             document.getElementById('btnConnectPrinter').classList.remove('connected');
         }
     }
 
-    // 3. 攔截原有的 HTML 單據，轉換為純文字
+    // 3. 攔截 HTML 並轉為指令
     function fetchAndPrint(oid, type) {
-        if (!printerPort) {
+        if (!usbDevice) {
             alert("請先點擊上方按鈕連接 USB 印表機！");
             return;
         }
@@ -237,36 +230,38 @@
         fetch(url)
             .then(res => res.text())
             .then(html => {
-                // 建立一個隱藏的 div 區塊
                 const tempDiv = document.createElement('div');
-                // 將它移出畫面外，並設定寬度模擬熱感紙，確保排版不斷層
                 tempDiv.style.position = 'absolute';
                 tempDiv.style.left = '-9999px';
                 tempDiv.style.width = '300px'; 
                 
-                // 粗略替換 br 為換行，其餘交給瀏覽器渲染
                 const brRegex = /<br\s*[\/]?>/gi;
                 tempDiv.innerHTML = html.replace(brRegex, "\n");
-                
-                // 【關鍵】必須加到 body 裡，瀏覽器才會計算真實的換行與空白
                 document.body.appendChild(tempDiv);
-                
-                // 取得擁有正確視覺換行的純文字
                 let plainText = tempDiv.innerText;
-                
-                // 拔除這個隱藏元素
                 document.body.removeChild(tempDiv);
 
-                // 加上一點上下邊距後送出列印
-                plainText = "\n" + plainText + "\n";
-                printTextViaSerial(plainText);
+                // 組合指令
+                const encoder = new TextEncoder();
+                const initCmd = new Uint8Array([0x1B, 0x40]); // 初始化
+                const chineseCmd = new Uint8Array([0x1C, 0x26]); // 啟動中文
+                const textBytes = encoder.encode("\n" + plainText + "\n");
+                const cutCmd = new Uint8Array([0x0A, 0x0A, 0x0A, 0x0A, 0x1D, 0x56, 0x00]); // 切紙
+
+                // 合併所有 Uint8Array
+                const combined = new Uint8Array(initCmd.length + chineseCmd.length + textBytes.length + cutCmd.length);
+                combined.set(initCmd);
+                combined.set(chineseCmd, initCmd.length);
+                combined.set(textBytes, initCmd.length + chineseCmd.length);
+                combined.set(cutCmd, initCmd.length + chineseCmd.length + textBytes.length);
+
+                printDataViaUSB(combined);
             })
             .catch(err => console.error("獲取單據失敗:", err));
     }
 
-
     // ==========================================
-    // 其他常規業務邏輯
+    // 其他常規業務邏輯 (不變)
     // ==========================================
 
     function speakNewOrder() {
@@ -294,14 +289,12 @@
                         .then(() => setTimeout(speakNewOrder, 800))
                         .catch(() => speakNewOrder());
 
-                    // 🔥 自動列印恢復運作！
-                    // 有新單時，直接丟給 USB 列印，完全不會有任何視窗彈出
                     data.new_ids.forEach((oid, index) => {
                         setTimeout(() => {
-                            if (printerPort) {
+                            if (usbDevice) {
                                 fetchAndPrint(oid, 'all');
                             }
-                        }, index * 1000); // 錯開 1 秒避免硬體塞車
+                        }, index * 1000);
                     });
                 }
 
@@ -321,7 +314,6 @@
         });
     }
 
-    // --- 手動列印相關 ---
     function askPrintType(oid) {
         currentPrintOid = oid;
         document.getElementById('printModal').style.display = "block";
@@ -334,14 +326,10 @@
 
     function doPrint(type) {
         if (!currentPrintOid) return;
-        
-        // 改用全新的 Web Serial 列印法
         fetchAndPrint(currentPrintOid, type);
-        
         closePrintModal();
     }
 
-    // --- 銷售排行相關 ---
     function openSalesModal() { document.getElementById('salesModal').style.display = "block"; setTodayRange(); }
     function closeSalesModal() { document.getElementById('salesModal').style.display = "none"; }
     function setTodayRange() {
@@ -377,7 +365,6 @@
             .catch(err => { tbody.innerHTML = '<tr><td colspan="3" style="text-align:center; color:red;">讀取失敗</td></tr>'; });
     }
 
-    // 啟動定時刷新
     setInterval(refreshOrders, 3000);
     refreshOrders();
 
