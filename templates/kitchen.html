@@ -230,9 +230,16 @@
                 let plainText = tempDiv.innerText;
                 document.body.removeChild(tempDiv);
 
-                // --- 重要：轉換為 Big5 編碼以解決亂碼 ---
-                const big5Encoder = new CustomTextEncoder("big5", { NONSTANDARD_allowLegacyEncoding: true });
-                const textBytes = big5Encoder.encode("\n" + plainText + "\n");
+                // --- 修正：正確啟動 Big5 編碼器 ---
+                let textBytes;
+                try {
+                    // 使用載入庫提供的 TextEncoder 介面 (部分庫名稱仍叫 TextEncoder 但支援 Big5)
+                    const big5Encoder = new TextEncoder("big5", { NONSTANDARD_allowLegacyEncoding: true });
+                    textBytes = big5Encoder.encode("\n" + plainText + "\n");
+                } catch (e) {
+                    console.warn("Big5 編碼啟動失敗，改用標準 UTF8:", e);
+                    textBytes = new TextEncoder().encode("\n" + plainText + "\n");
+                }
 
                 // ESC/POS 指令組裝
                 const initCmd = new Uint8Array([0x1B, 0x40]); // 初始化
