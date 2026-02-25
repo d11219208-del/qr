@@ -161,6 +161,9 @@
     const audio = document.getElementById('newOrderSound');
     const synth = window.speechSynthesis;
 
+    // ==========================================
+    // 🖨️ 核心機制：Web USB API 直接列印
+    // ==========================================
     let usbDevice = null;
     let usbEndpoint = null; 
 
@@ -178,7 +181,7 @@
             if (endpoint) {
                 usbEndpoint = endpoint.endpointNumber;
                 const btn = document.getElementById('btnConnectPrinter');
-                btn.innerText = "✅ USB 印表機已就緒";
+                btn.innerText = "✅ CP-Q8BF 已連接";
                 btn.classList.add('connected');
                 alert("USB 印表機連接成功！");
             } else {
@@ -191,9 +194,13 @@
     }
 
     async function printDataViaUSB(uint8Array) {
-        if (!usbDevice || usbEndpoint === null) return;
+        if (!usbDevice || usbEndpoint === null) {
+            console.warn("尚未連接 USB 印表機");
+            return;
+        }
         try {
             await usbDevice.transferOut(usbEndpoint, uint8Array);
+            console.log("🖨️ USB 資料已送出");
         } catch (err) {
             console.error("USB 列印發生錯誤:", err);
             usbDevice = null;
@@ -203,7 +210,10 @@
     }
 
     function fetchAndPrint(oid, type) {
-        if (!usbDevice) return;
+        if (!usbDevice) {
+            alert("請先點擊上方按鈕連接 USB 印表機！");
+            return;
+        }
 
         const url = `/kitchen/print_order/${oid}?type=${type}`;
         fetch(url)
@@ -213,46 +223,46 @@
                 tempDiv.innerHTML = html.replace(/<br\s*[\/]?>/gi, "\n");
                 let plainText = tempDiv.innerText;
 
-                // --- 1. 準備 Big5 編碼資料 ---
+                // --- 修改處：使用 Big5 編碼庫轉換文字 ---
                 let textBytes;
                 try {
-                    // 使用 text-encoding-utf-8 庫正確處理 big5
-                    const encoder = new TextEncoder("big5", { NONSTANDARD_allowLegacyEncoding: true });
-                    textBytes = encoder.encode(plainText + "\n");
+                    const big5Encoder = new TextEncoder("big5", { NONSTANDARD_allowLegacyEncoding: true });
+                    textBytes = big5Encoder.encode("\n" + plainText + "\n");
                 } catch (e) {
-                    console.error("Big5 編碼失敗", e);
-                    textBytes = new TextEncoder().encode(plainText);
+                    console.warn("Big5 轉換失敗，降級使用 UTF-8:", e);
+                    textBytes = new TextEncoder().encode("\n" + plainText + "\n");
                 }
 
-                // --- 2. 核心硬體指令組裝 ---
+                // --- 修改處：CP-Q8BF 專用 ESC/POS 指令序列 ---
                 const initCmd = [0x1B, 0x40];           // 初始化
-                const setBig5 = [0x1C, 0x26];           // 啟用漢字模式 (FS &)
-                const selectTradChinese = [0x1C, 0x2E]; // 禁用日文/韓文模式確保繁體 (FS .)
-                const selectCodePage = [0x1B, 0x74, 13]; // 切換 Code Page 到 13 (常用於繁體)
-                
-                // 走紙與切紙指令 (GS V 66 0)
-                const cutCmd = [0x0A, 0x0A, 0x0A, 0x0A, 0x1D, 0x56, 0x42, 0x00]; 
+                const setBig5 = [0x1C, 0x26];           // 啟動漢字模式 (FS &)
+                const selectCP950 = [0x1B, 0x74, 13];   // 選擇繁體中文頁碼 (ESC t 13)
+                const cutCmd = [0x0A, 0x0A, 0x0A, 0x0A, 0x1D, 0x56, 0x42, 0x00]; // 切紙
 
-                // 合併所有位元組
-                const finalArray = new Uint8Array([
-                    ...initCmd, 
-                    ...setBig5, 
-                    ...selectTradChinese, 
-                    ...selectCodePage, 
-                    ...textBytes, 
+                // 組合所有指令與內文
+                const combined = new Uint8Array([
+                    ...initCmd,
+                    ...setBig5,
+                    ...selectCP950,
+                    ...textBytes,
                     ...cutCmd
                 ]);
 
-                printDataViaUSB(finalArray);
+                printDataViaUSB(combined);
             })
             .catch(err => console.error("獲取單據失敗:", err));
     }
 
-    // --- 保留原有功能 ---
+    // ==========================================
+    // 其他常規業務邏輯 (不變)
+    // ==========================================
+
     function speakNewOrder() {
         if (synth.speaking) return;
         const utterThis = new SpeechSynthesisUtterance("有新訂單，請注意");
-        utterThis.lang = 'zh-TW'; utterThis.rate = 1; synth.speak(utterThis);
+        utterThis.lang = 'zh-TW'; 
+        utterThis.rate = 1;        
+        synth.speak(utterThis);
     }
 
     function testAudioAndRefresh() {
@@ -266,32 +276,63 @@
             .then(data => {
                 if (data.html) grid.innerHTML = data.html;
                 updateTimeText.innerText = '最後更新: ' + new Date().toLocaleTimeString();
+
                 if (data.new_ids && data.new_ids.length > 0) {
-                    audio.play().then(() => setTimeout(speakNewOrder, 800)).catch(() => speakNewOrder());
+                    audio.play()
+                        .then(() => setTimeout(speakNewOrder, 800))
+                        .catch(() => speakNewOrder());
+
                     data.new_ids.forEach((oid, index) => {
-                        setTimeout(() => { if (usbDevice) fetchAndPrint(oid, 'all'); }, index * 1000);
+                        setTimeout(() => {
+                            if (usbDevice) {
+                                fetchAndPrint(oid, 'all');
+                            }
+                        }, index * 1000);
                     });
                 }
-                if (data.max_seq && data.max_seq > lastMaxSeq) lastMaxSeq = data.max_seq;
+
+                if (data.max_seq && data.max_seq > lastMaxSeq) {
+                    lastMaxSeq = data.max_seq;
+                }
             })
-            .catch(err => { updateTimeText.innerText = '連線失敗'; });
+            .catch(err => { 
+                updateTimeText.innerText = '連線失敗'; 
+            });
     }
 
     function action(url) {
-        fetch(url).then(res => { if (res.ok) refreshOrders(); else alert("動作執行失敗"); });
+        fetch(url).then(res => { 
+            if (res.ok) refreshOrders(); 
+            else alert("動作執行失敗");
+        });
     }
 
-    function askPrintType(oid) { currentPrintOid = oid; document.getElementById('printModal').style.display = "block"; }
-    function closePrintModal() { document.getElementById('printModal').style.display = "none"; currentPrintOid = null; }
-    function doPrint(type) { if (!currentPrintOid) return; fetchAndPrint(currentPrintOid, type); closePrintModal(); }
+    function askPrintType(oid) {
+        currentPrintOid = oid;
+        document.getElementById('printModal').style.display = "block";
+    }
+
+    function closePrintModal() {
+        document.getElementById('printModal').style.display = "none";
+        currentPrintOid = null;
+    }
+
+    function doPrint(type) {
+        if (!currentPrintOid) return;
+        fetchAndPrint(currentPrintOid, type);
+        closePrintModal();
+    }
 
     function openSalesModal() { document.getElementById('salesModal').style.display = "block"; setTodayRange(); }
     function closeSalesModal() { document.getElementById('salesModal').style.display = "none"; }
     function setTodayRange() {
         const now = new Date();
-        const toLocalISO = (d) => { d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 16); };
-        document.getElementById('rankEndTime').value = toLocalISO(new Date());
-        const start = new Date(); start.setHours(0,0,0,0);
+        const toLocalISO = (date) => {
+            const offset = date.getTimezoneOffset() * 60000;
+            return (new Date(date - offset)).toISOString().slice(0, 16);
+        };
+        document.getElementById('rankEndTime').value = toLocalISO(now);
+        const start = new Date(now); start.setHours(0, 0, 0, 0);
         document.getElementById('rankStartTime').value = toLocalISO(start);
     }
     
@@ -299,23 +340,32 @@
         const start = document.getElementById('rankStartTime').value;
         const end = document.getElementById('rankEndTime').value;
         const tbody = document.getElementById('salesListBody');
+        if (!start || !end) { alert("請選擇開始與結束時間"); return; }
+        
         tbody.innerHTML = '<tr><td colspan="3" style="text-align:center; padding:20px;">數據計算中...</td></tr>';
         fetch(`/kitchen/sales_ranking?start_time=${start}&end_time=${end}`)
             .then(res => res.json())
             .then(data => {
                 tbody.innerHTML = '';
-                if (!data || data.length === 0) { tbody.innerHTML = '<tr><td colspan="3" style="text-align:center; padding:20px;">無數據</td></tr>'; return; }
+                if (!data || data.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="3" style="text-align:center; padding:20px;">無銷售數據</td></tr>'; return;
+                }
                 data.forEach((item, index) => {
                     let rankClass = index === 0 ? 'rank-1' : index === 1 ? 'rank-2' : index === 2 ? 'rank-3' : '';
-                    tbody.innerHTML += `<tr><td style="text-align:center;"><span class="rank-badge ${rankClass}">${index+1}</span></td><td>${item.name}</td><td style="text-align:right;">${item.count}</td></tr>`;
+                    tbody.innerHTML += `<tr><td style="text-align:center;"><span class="rank-badge ${rankClass}">${index + 1}</span></td><td>${item.name}</td><td style="text-align:right; font-weight:bold;">${item.count}</td></tr>`;
                 });
-            });
+            })
+            .catch(err => { tbody.innerHTML = '<tr><td colspan="3" style="text-align:center; color:red;">讀取失敗</td></tr>'; });
     }
 
     setInterval(refreshOrders, 3000);
     refreshOrders();
-    window.onclick = function(e) {
-        if (e.target.className == 'modal') { closePrintModal(); closeSalesModal(); }
+
+    window.onclick = function(event) {
+        const pModal = document.getElementById('printModal');
+        const sModal = document.getElementById('salesModal');
+        if (event.target == pModal) closePrintModal();
+        if (event.target == sModal) closeSalesModal();
     }
 </script>
 
