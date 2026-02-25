@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>🍳 廚房出餐看板 Pro (USB 修正版)</title>
+    <title>🍳 廚房出餐看板 Pro (USB 直接列印版)</title>
     <script src="https://cdn.jsdelivr.net/npm/text-encoding-utf-8@1.0.2/lib/encoding-indexes.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/text-encoding-utf-8@1.0.2/lib/encoding.js"></script>
     <style>
@@ -162,7 +162,7 @@
     const synth = window.speechSynthesis;
 
     // ==========================================
-    // 🖨️ 核心機制：Web USB API 直接列印 (修正版)
+    // 🖨️ 核心機制：Web USB API 直接列印
     // ==========================================
     let usbDevice = null;
     let usbEndpoint = null; 
@@ -189,7 +189,7 @@
             }
         } catch (err) {
             console.error("連接失敗:", err);
-            alert("連接失敗: " + err.message + "\n(請確認是否已使用 Zadig 替換為 WinUSB 驅動)");
+            alert("連接失敗: " + err.message);
         }
     }
 
@@ -203,7 +203,6 @@
             console.log("🖨️ USB 資料已送出");
         } catch (err) {
             console.error("USB 列印發生錯誤:", err);
-            // 不刪除功能，僅更新介面狀態提示
             usbDevice = null;
             document.getElementById('btnConnectPrinter').innerText = "🔌 點擊連接 USB 印表機";
             document.getElementById('btnConnectPrinter').classList.remove('connected');
@@ -221,33 +220,30 @@
             .then(res => res.text())
             .then(html => {
                 const tempDiv = document.createElement('div');
-                // 處理換行，保留原有邏輯
-                tempDiv.innerHTML = html.replace(/<br\s*[\/]?>/gi, "\n");
+                tempDiv.style.position = 'absolute';
+                tempDiv.style.left = '-9999px';
+                tempDiv.style.width = '300px'; 
+                
+                const brRegex = /<br\s*[\/]?>/gi;
+                tempDiv.innerHTML = html.replace(brRegex, "\n");
+                document.body.appendChild(tempDiv);
                 let plainText = tempDiv.innerText;
+                document.body.removeChild(tempDiv);
 
-                // --- 修正：正確呼叫 TextEncoder ---
-                // 修正原先 CustomTextEncoder 可能導致的錯誤，改用庫標準寫法
-                let textBytes;
-                try {
-                    const big5Encoder = new TextEncoder("big5", { NONSTANDARD_allowLegacyEncoding: true });
-                    textBytes = big5Encoder.encode("\n" + plainText + "\n");
-                } catch (e) {
-                    console.error("編碼器錯誤，嘗試後備方案:", e);
-                    textBytes = new TextEncoder().encode("\n" + plainText + "\n");
-                }
+                // --- 重要：轉換為 Big5 編碼以解決亂碼 ---
+                const big5Encoder = new CustomTextEncoder("big5", { NONSTANDARD_allowLegacyEncoding: true });
+                const textBytes = big5Encoder.encode("\n" + plainText + "\n");
 
                 // ESC/POS 指令組裝
                 const initCmd = new Uint8Array([0x1B, 0x40]); // 初始化
                 const chineseCmd = new Uint8Array([0x1C, 0x26]); // 啟用中文模式
-                // 修正切紙指令為更通用的 GS V 66 0 (模式 B)
-                const cutCmd = new Uint8Array([0x0A, 0x0A, 0x0A, 0x0A, 0x1D, 0x56, 0x42, 0x00]); 
+                const cutCmd = new Uint8Array([0x0A, 0x0A, 0x0A, 0x0A, 0x1D, 0x56, 0x00]); // 切紙指令
 
                 const combined = new Uint8Array(initCmd.length + chineseCmd.length + textBytes.length + cutCmd.length);
-                let pos = 0;
-                combined.set(initCmd, pos); pos += initCmd.length;
-                combined.set(chineseCmd, pos); pos += chineseCmd.length;
-                combined.set(textBytes, pos); pos += textBytes.length;
-                combined.set(cutCmd, pos);
+                combined.set(initCmd);
+                combined.set(chineseCmd, initCmd.length);
+                combined.set(textBytes, initCmd.length + chineseCmd.length);
+                combined.set(cutCmd, initCmd.length + chineseCmd.length + textBytes.length);
 
                 printDataViaUSB(combined);
             })
@@ -255,7 +251,7 @@
     }
 
     // ==========================================
-    // 業務邏輯與介面控制 (保留所有既有功能)
+    // 其他常規業務邏輯 (不變)
     // ==========================================
 
     function speakNewOrder() {
@@ -324,7 +320,6 @@
         closePrintModal();
     }
 
-    // --- 銷售排行功能保留 ---
     function openSalesModal() { document.getElementById('salesModal').style.display = "block"; setTodayRange(); }
     function closeSalesModal() { document.getElementById('salesModal').style.display = "none"; }
     function setTodayRange() {
@@ -373,5 +368,3 @@
 
 </body>
 </html>
-
-
