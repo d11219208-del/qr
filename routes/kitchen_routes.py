@@ -245,12 +245,12 @@ def check_new_orders():
         return jsonify({'html': f"載入錯誤: {str(e)}", 'max_seq': 0, 'new_ids': []})
 
 
-# --- 3. 核心列印路由 (已優化速度 + 多語系結帳單支援 + 資料庫動態翻譯) ---
+# --- 3. 核心列印路由 (已優化：支援 WebUSB Base54 繁體中文 & 原有功能) ---
 @kitchen_bp.route('/print_order/<int:oid>')
 def print_order(oid):
     try:
         print_type = request.args.get('type', 'all')
-        output_format = request.args.get('format', 'html') # 新增格式判斷
+        output_format = request.args.get('format', 'html') # 支援 html, raw, base64
         
         conn = get_db_connection()
         cur = conn.cursor()
@@ -341,7 +341,6 @@ def print_order(oid):
             elif p_cat == 'Soup': soup_items.append(item)
             else: other_items.append(item)
 
-        # --- 根據資料庫 mapping 動態翻譯選項 ---
         def translate_option(p_name, opt_str, target_lang):
             if p_name not in product_map: return opt_str
             p_data = product_map[p_name]
@@ -360,7 +359,7 @@ def print_order(oid):
             if not item_list and is_receipt and c_fee == 0: return ""
 
             res = ""
-            if output_format == 'raw':
+            if output_format in ['raw', 'base64']:
                 # 純文字格式 (USB 用)
                 res += f"[{title}]\n"
                 res += f"NO: #{seq:03d}\n"
@@ -369,7 +368,7 @@ def print_order(oid):
                 if has_schedule: res += f"預約: {c_schedule}\n"
                 if c_name: res += f"客戶: {c_name}\n"
                 if has_addr: res += f"地址: {c_addr}\n"
-                res += "-"*20 + "\n"
+                res += "-"*30 + "\n"
                 for i in item_list:
                     name_zh = i.get('name_zh') or i.get('name')
                     qty = i.get('qty', 1)
@@ -377,9 +376,9 @@ def print_order(oid):
                     raw_opts = i.get('options') or i.get('options_zh') or []
                     if raw_opts: res += f"  ({', '.join(raw_opts)})\n"
                 if is_receipt: res += f"TOTAL: ${int(total_price or 0)}\n"
-                res += "\n\n"
+                res += "-"*30 + "\n\n"
             else:
-                # HTML 格式 (APP 用)
+                # HTML 格式
                 void_mark = "<div class='void-watermark'>作廢單</div>" if status == 'Cancelled' else ""
                 h = f"<div class='ticket'>{void_mark}<div class='head'><h2>{title}</h2><h1>#{seq:03d}</h1></div>"
                 h += f"<div class='info-box'><div class='table-row'><span class='table-label'>Type</span><span class='table-val'>{display_tbl_name}</span></div>"
@@ -424,21 +423,41 @@ def print_order(oid):
             if soup_items: content += generate_content("廚房單 - 湯區", soup_items)
             if other_items: content += generate_content("廚房單 - 其他", other_items)
 
+        # --- 重點：處理 WebUSB 用的 Base64 格式 (含 Big5 編碼) ---
+        if output_format == 'base64':
+            # 初始化指令 (ESC @), 進入漢字模式 (FS &), 設定 CodePage 為 950 (ESC t 13)
+            init_cmds = b'\x1b\x40\x1c\x26\x1b\x74\x0d'
+            try:
+                # 將內容轉為繁體中文專用的 big5-hkscs
+                encoded_body = content.encode('big5-hkscs', errors='replace')
+            except:
+                encoded_body = content.encode('big5', errors='replace')
+            
+            # 結束指令 (走紙 4 行 + 切紙)
+            end_cmds = b'\x0a\x0a\x0a\x0a\x1d\x56\x42\x00'
+            
+            full_payload = init_cmds + encoded_body + end_cmds
+            b64_str = base64.b64encode(full_payload).decode('utf-8')
+            
+            return jsonify({
+                "status": "success",
+                "blob": b64_str
+            })
+
         if output_format == 'raw':
             return content
 
-        # 以下為原有 HTML 邏輯 (略，保持不變)
+        # 以下為原有 HTML / RawBT 邏輯
         style = "<style>@page { size: 80mm auto; margin: 0mm; } body { font-family: 'Microsoft JhengHei', sans-serif; width: 78mm; margin: 0 auto; padding: 2px; } .ticket { border-bottom: 3px dashed #000; padding: 10px 0 30px 0; margin-bottom: 10px; page-break-after: always; position: relative; } .head h2 { font-size: 24px; margin: 0; border: 2px solid #000; padding: 4px 10px; display: inline-block; font-weight: 900; } .head h1 { font-size: 42px; margin: 5px 0; font-weight: 900; } .info-box { border-bottom: 2px solid #000; padding-bottom: 5px; } .table-row { display: flex; justify-content: center; align-items: baseline; gap: 10px; } .table-val { font-size: 36px; font-weight: 900; } .time-row { font-size: 14px; text-align: center; } .customer-info { border: 2px solid #000; padding: 6px; font-size: 18px; font-weight: bold; } .addr-row { font-size: 24px; font-weight: 900; border-top: 1px dashed #000; } .schedule-row { font-size: 22px; font-weight: 900; background: #000; color: #fff; text-align: center; } .item-row { display: flex; justify-content: space-between; font-size: 22px; font-weight: 900; } .opt { font-size: 16px; font-weight: bold; } .total { text-align: right; font-size: 24px; font-weight: 900; border-top: 2px solid #000; }</style>"
         rawbt_html_source = f"<html><head><meta charset='utf-8'>{style}</head><body>{content}</body></html>"
-        b64_data = base64.b64encode(rawbt_html_source.encode('utf-8')).decode('utf-8')
-        intent_url = f"intent:base64,{b64_data}#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;S.jobName=Order_{seq};S.editor=false;end;"
+        b64_html_data = base64.b64encode(rawbt_html_source.encode('utf-8')).decode('utf-8')
+        intent_url = f"intent:base64,{b64_html_data}#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;S.jobName=Order_{seq};S.editor=false;end;"
 
         return f"<!DOCTYPE html><html><head><meta charset='utf-8'><title>Print Order</title>{style}</head><body>{content}<script>if(/android/i.test(navigator.userAgent)){{window.location.href='{intent_url}';setTimeout(function(){{if(window.opener)window.close();}},1500);}}</script></body></html>"
 
     except Exception as e:
         traceback.print_exc()
         return f"Print Error: {str(e)}", 500
-
 # --- 4. 狀態變更 (完成/作廢) ---
 @kitchen_bp.route('/complete/<int:oid>')
 def complete_order(oid):
@@ -667,6 +686,7 @@ def daily_report():
     </body>
     </html>
     """
+
 
 
 
