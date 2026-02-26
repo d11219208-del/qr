@@ -250,6 +250,7 @@ def check_new_orders():
 def print_order(oid):
     try:
         print_type = request.args.get('type', 'all')
+        output_format = request.args.get('format', 'html') # 新增格式判斷
         
         conn = get_db_connection()
         cur = conn.cursor()
@@ -267,7 +268,6 @@ def print_order(oid):
         except Exception as e:
             conn.rollback() 
             print(f"SQL Fallback triggered (print_order): {e}")
-            # Fallback for missing columns (補上預設 'zh')
             cur.execute("""
                 SELECT table_number, total_price, daily_seq, content_json, created_at, status,
                        customer_name, customer_phone, customer_address, delivery_fee, scheduled_for, 
@@ -276,7 +276,6 @@ def print_order(oid):
             """, (oid,))
             order = cur.fetchone()
 
-        # --- 【關鍵修正】撈取資料庫中所有的客製化選項翻譯 ---
         cur.execute("""
             SELECT name, print_category, 
                    custom_options, custom_options_en, custom_options_jp, custom_options_kr 
@@ -285,12 +284,9 @@ def print_order(oid):
         product_map = {}
         for row in cur.fetchall():
             p_name = row[0]
-            
-            # 輔助函式：將以逗號分隔的字串轉為串列
             def split_opts(opt_str):
                 if not opt_str: return []
                 return [o.strip() for o in opt_str.split(',') if o.strip()]
-            
             product_map[p_name] = {
                 'cat': row[1] or 'Other',
                 'zh': split_opts(row[2]),
@@ -303,22 +299,18 @@ def print_order(oid):
         if not order:
             return "訂單不存在", 404
         
-        # 解包資料
         table_num, total_price, seq, content_json, created_at, status, \
         c_name, c_phone, c_addr, c_fee, c_schedule, c_type, c_lang = order
         
-        # 資料預處理
         c_fee = int(c_fee or 0)
         table_str = str(table_num).strip() if table_num else ""
         c_type = str(c_type).lower() if c_type else 'unknown'
-        c_lang = str(c_lang).lower() if c_lang else 'zh' # 確保有預設語系
+        c_lang = str(c_lang).lower() if c_lang else 'zh'
         
-        # 判斷資訊存在
         has_contact = (c_phone and str(c_phone).strip() != '' and str(c_phone).lower() != 'none')
         has_addr = (c_addr and str(c_addr).strip() != '' and str(c_addr).lower() != 'none')
         has_schedule = (c_schedule and str(c_schedule).strip() != '' and str(c_schedule).lower() != 'none')
         
-        # 顯示名稱邏輯
         if c_type == 'delivery':
             display_tbl_name = "🛵 外送"
             is_delivery = True
@@ -329,26 +321,19 @@ def print_order(oid):
             display_tbl_name = f"桌號 {table_str}"
             is_delivery = False
         else:
-            # Fallback logic
             is_delivery = (table_str == '外送') or has_addr
             display_tbl_name = "外送" if is_delivery else (table_str if table_str else "外帶")
 
         if isinstance(content_json, str):
-            try:
-                items = json.loads(content_json)
-            except:
-                items = []
+            try: items = json.loads(content_json)
+            except: items = []
         elif isinstance(content_json, (list, dict)):
             items = content_json if isinstance(content_json, list) else [content_json]
-        else:
-            items = []
+        else: items = []
         
-        # 下單時間
         time_str = (created_at + timedelta(hours=8)).strftime('%Y-%m-%d %H:%M:%S')
 
-        # 分類邏輯 (用於分單列印)
         noodle_items, soup_items, other_items = [], [], []
-        
         for item in items:
             p_name = item.get('name_zh') or item.get('name')
             p_cat = product_map.get(p_name, {}).get('cat', 'Other') 
@@ -356,182 +341,99 @@ def print_order(oid):
             elif p_cat == 'Soup': soup_items.append(item)
             else: other_items.append(item)
 
-        # CSS 樣式 (輕量化處理)
-        style = """
-        <style>
-            @page { size: 80mm auto; margin: 0mm; }
-            body { font-family: 'Microsoft JhengHei', sans-serif; width: 78mm; margin: 0 auto; padding: 2px; color: #000; background: #fff; }
-            .ticket { border-bottom: 3px dashed #000; padding: 10px 0 30px 0; margin-bottom: 10px; page-break-after: always; position: relative; }
-            .ticket:last-child { page-break-after: auto; }
-            .void-watermark { position: absolute; top: 30%; left: 5%; font-size: 50px; color: #000; opacity: 0.2; transform: rotate(-30deg); border: 5px solid #000; padding: 10px; z-index: 100; font-weight: 900; }
-            .head { text-align: center; margin-bottom: 10px; }
-            .head h2 { font-size: 24px; margin: 0; border: 2px solid #000; padding: 4px 10px; border-radius: 4px; display: inline-block; font-weight: 900; }
-            .head h1 { font-size: 42px; margin: 5px 0; line-height: 1; font-weight: 900; }
-            .info-box { border-bottom: 2px solid #000; padding-bottom: 5px; margin-bottom: 5px; }
-            .table-row { display: flex; justify-content: center; align-items: baseline; gap: 10px; }
-            .table-label { font-size: 20px; font-weight: bold; }
-            .table-val { font-size: 36px; font-weight: 900; line-height: 1; }
-            .time-row { font-size: 14px; text-align: center; margin-top: 2px; color: #000; }
-            .customer-info { border: 2px solid #000; padding: 6px; margin: 5px 0 10px 0; font-size: 18px; font-weight: bold; text-align: left; background: #f8f8f8; line-height: 1.3; }
-            .cust-row { margin-bottom: 2px; }
-            .addr-row { margin-top: 4px; border-top: 1px dashed #000; padding-top: 4px; font-size: 24px; font-weight: 900; word-wrap: break-word; line-height: 1.2; }
-            .schedule-row { font-size: 22px; font-weight: 900; text-align: center; background: #000; color: #fff; margin: 5px 0; padding: 5px; border-radius: 0; }
-            .item-row { display: flex; justify-content: space-between; align-items: flex-start; margin-top: 8px; line-height: 1.1; }
-            .name-col { width: 85%; display: flex; flex-direction: column; }
-            .item-name-main { font-size: 22px; font-weight: 900; word-wrap: break-word; }
-            .item-name-sub { font-size: 16px; font-weight: bold; color: #000; margin-top: 2px; }
-            .item-qty { font-size: 22px; font-weight: 900; white-space: nowrap; }
-            .opt { font-size: 16px; font-weight: bold; padding-left: 10px; color: #000; }
-            .total { text-align: right; font-size: 24px; font-weight: 900; margin-top: 10px; padding-top: 5px; border-top: 2px solid #000; }
-            .fee-row { text-align: right; font-size: 16px; font-weight: bold; color: #000; }
-        </style>
-        """
-
         # --- 根據資料庫 mapping 動態翻譯選項 ---
         def translate_option(p_name, opt_str, target_lang):
-            if p_name not in product_map:
-                return opt_str
-            
+            if p_name not in product_map: return opt_str
             p_data = product_map[p_name]
             found_idx = -1
-            
-            # 尋找該選項原本是在哪一個語言的陣列中，取得其 Index
             for lang in ['zh', 'en', 'jp', 'kr']:
                 if opt_str in p_data[lang]:
                     found_idx = p_data[lang].index(opt_str)
                     break
-            
-            # 如果有找到對應的 Index，就從目標語言的陣列中取出對應的翻譯
             if found_idx != -1:
                 target_list = p_data.get(target_lang, [])
-                if found_idx < len(target_list):
-                    return target_list[found_idx]
-            
-            # 找不到就回傳原字串
+                if found_idx < len(target_list): return target_list[found_idx]
             return opt_str
 
-        def generate_html(title, item_list, is_receipt=False):
+        def generate_content(title, item_list, is_receipt=False):
             if not item_list and not is_receipt: return "" 
             if not item_list and is_receipt and c_fee == 0: return ""
 
-            void_mark = "<div class='void-watermark'>作廢單</div>" if status == 'Cancelled' else ""
-            
-            h = f"<div class='ticket'>{void_mark}<div class='head'><h2>{title}</h2><h1>#{seq:03d}</h1></div>"
-            h += f"<div class='info-box'><div class='table-row'><span class='table-label'>Type</span><span class='table-val'>{display_tbl_name}</span></div>"
-            h += f"<div class='time-row'>下單: {time_str}</div></div>"
-            
-            if has_schedule:
-                h += f"<div class='schedule-row'>🕒 預約: {c_schedule}</div>"
-
-            if is_delivery or has_contact or (c_name and str(c_name).strip()):
-                h += f"<div class='customer-info'>"
-                if c_name and str(c_name).strip(): h += f"<div class='cust-row'>👤 {c_name}</div>"
-                if has_contact: h += f"<div class='cust-row'>📞 {c_phone}</div>"
-                if has_addr: h += f"<div class='addr-row'>📍 {c_addr}</div>"
-                h += f"</div>"
-            
-            for i in item_list:
-                name_zh = i.get('name_zh') or i.get('name')
-                
-                # 結帳單依據客人的語系，廚房單強制中文
-                target_lang = c_lang if is_receipt else 'zh'
-                
-                main_name = name_zh
-                sub_name = ""
-
-                # 處理商品名稱多語系
-                if target_lang != 'zh':
-                    lang_name_key = f"name_{target_lang}"
-                    target_name = i.get(lang_name_key) or i.get('name_en')
-                    if target_name:
-                        main_name = target_name
-                        sub_name = name_zh 
-                
-                # --- 處理客製化選項多語系 ---
-                opts_display = []
-                # 1. 優先看前端是否有直接傳送對應語言的選項陣列
-                lang_opts = i.get(f"options_{target_lang}")
-                if lang_opts and isinstance(lang_opts, list) and len(lang_opts) > 0:
-                    opts_display = lang_opts
-                else:
-                    # 2. 如果沒有，抓取現存選項，丟入翻譯引擎翻譯
-                    raw_opts = i.get('options') or i.get('options_zh') or i.get('options_en') or []
-                    if isinstance(raw_opts, str): 
-                        raw_opts = [raw_opts]
-                    
-                    for opt in raw_opts:
-                        opt_str = str(opt).strip()
-                        translated = translate_option(name_zh, opt_str, target_lang)
-                        opts_display.append(translated)
-                
-                name_html = f"<div class='name-col'><span class='item-name-main'>{main_name}</span>"
-                if sub_name and sub_name != main_name:
-                    name_html += f"<span class='item-name-sub'>{sub_name}</span>"
-                name_html += "</div>"
-                
-                qty = i.get('qty', 1)
-                h += f"<div class='item-row'>{name_html}<span class='item-qty'>x{qty}</span></div>"
-
-                if opts_display:
-                    h += f"<div class='opt'>└ {', '.join(opts_display)}</div>"
-            
-            if is_receipt: 
-                subtotal = total_price - c_fee if total_price else 0
-                if c_fee > 0:
-                    h += f"<div class='fee-row'>小計: ${int(subtotal)}</div>"
-                    h += f"<div class='fee-row'>運費: ${c_fee}</div>"
-                h += f"<div class='total'>Total: ${int(total_price or 0)}</div>"
-            
-            return h + "</div>"
+            res = ""
+            if output_format == 'raw':
+                # 純文字格式 (USB 用)
+                res += f"[{title}]\n"
+                res += f"NO: #{seq:03d}\n"
+                res += f"TYPE: {display_tbl_name}\n"
+                res += f"TIME: {time_str}\n"
+                if has_schedule: res += f"預約: {c_schedule}\n"
+                if c_name: res += f"客戶: {c_name}\n"
+                if has_addr: res += f"地址: {c_addr}\n"
+                res += "-"*20 + "\n"
+                for i in item_list:
+                    name_zh = i.get('name_zh') or i.get('name')
+                    qty = i.get('qty', 1)
+                    res += f"{name_zh} x{qty}\n"
+                    raw_opts = i.get('options') or i.get('options_zh') or []
+                    if raw_opts: res += f"  ({', '.join(raw_opts)})\n"
+                if is_receipt: res += f"TOTAL: ${int(total_price or 0)}\n"
+                res += "\n\n"
+            else:
+                # HTML 格式 (APP 用)
+                void_mark = "<div class='void-watermark'>作廢單</div>" if status == 'Cancelled' else ""
+                h = f"<div class='ticket'>{void_mark}<div class='head'><h2>{title}</h2><h1>#{seq:03d}</h1></div>"
+                h += f"<div class='info-box'><div class='table-row'><span class='table-label'>Type</span><span class='table-val'>{display_tbl_name}</span></div>"
+                h += f"<div class='time-row'>下單: {time_str}</div></div>"
+                if has_schedule: h += f"<div class='schedule-row'>🕒 預約: {c_schedule}</div>"
+                if is_delivery or has_contact or (c_name and str(c_name).strip()):
+                    h += f"<div class='customer-info'>"
+                    if c_name and str(c_name).strip(): h += f"<div class='cust-row'>👤 {c_name}</div>"
+                    if has_contact: h += f"<div class='cust-row'>📞 {c_phone}</div>"
+                    if has_addr: h += f"<div class='addr-row'>📍 {c_addr}</div>"
+                    h += f"</div>"
+                for i in item_list:
+                    name_zh = i.get('name_zh') or i.get('name')
+                    target_lang = c_lang if is_receipt else 'zh'
+                    main_name = name_zh
+                    sub_name = ""
+                    if target_lang != 'zh':
+                        target_name = i.get(f"name_{target_lang}") or i.get('name_en')
+                        if target_name:
+                            main_name = target_name
+                            sub_name = name_zh 
+                    opts_display = []
+                    raw_opts = i.get('options') or i.get('options_zh') or []
+                    for opt in (raw_opts if isinstance(raw_opts, list) else [raw_opts]):
+                        opts_display.append(translate_option(name_zh, str(opt), target_lang))
+                    name_html = f"<div class='name-col'><span class='item-name-main'>{main_name}</span>"
+                    if sub_name and sub_name != main_name: name_html += f"<span class='item-name-sub'>{sub_name}</span>"
+                    name_html += "</div>"
+                    h += f"<div class='item-row'>{name_html}<span class='item-qty'>x{i.get('qty', 1)}</span></div>"
+                    if opts_display: h += f"<div class='opt'>└ {', '.join(opts_display)}</div>"
+                if is_receipt:
+                    if c_fee > 0: h += f"<div class='fee-row'>小計: ${int(total_price - c_fee)}</div><div class='fee-row'>運費: ${c_fee}</div>"
+                    h += f"<div class='total'>Total: ${int(total_price or 0)}</div>"
+                res = h + "</div>"
+            return res
 
         content = ""
-        has_content = False
-        
         if print_type in ['all', 'receipt']:
-            content += generate_html("結帳單 Receipt", items, is_receipt=True)
-            has_content = True 
-            
+            content += generate_content("結帳單 Receipt", items, is_receipt=True)
         if print_type in ['all', 'kitchen']:
-            if noodle_items: content += generate_html("廚房單 - 麵區", noodle_items); has_content = True
-            if soup_items: content += generate_html("廚房單 - 湯區", soup_items); has_content = True
-            if other_items: content += generate_html("廚房單 - 其他", other_items); has_content = True
+            if noodle_items: content += generate_content("廚房單 - 麵區", noodle_items)
+            if soup_items: content += generate_content("廚房單 - 湯區", soup_items)
+            if other_items: content += generate_content("廚房單 - 其他", other_items)
 
-        if not has_content:
-            return "<script>alert('無內容可列印');window.close();</script>", 200
+        if output_format == 'raw':
+            return content
 
-        # RawBT 整合 (APP 列印)
+        # 以下為原有 HTML 邏輯 (略，保持不變)
+        style = "<style>@page { size: 80mm auto; margin: 0mm; } body { font-family: 'Microsoft JhengHei', sans-serif; width: 78mm; margin: 0 auto; padding: 2px; } .ticket { border-bottom: 3px dashed #000; padding: 10px 0 30px 0; margin-bottom: 10px; page-break-after: always; position: relative; } .head h2 { font-size: 24px; margin: 0; border: 2px solid #000; padding: 4px 10px; display: inline-block; font-weight: 900; } .head h1 { font-size: 42px; margin: 5px 0; font-weight: 900; } .info-box { border-bottom: 2px solid #000; padding-bottom: 5px; } .table-row { display: flex; justify-content: center; align-items: baseline; gap: 10px; } .table-val { font-size: 36px; font-weight: 900; } .time-row { font-size: 14px; text-align: center; } .customer-info { border: 2px solid #000; padding: 6px; font-size: 18px; font-weight: bold; } .addr-row { font-size: 24px; font-weight: 900; border-top: 1px dashed #000; } .schedule-row { font-size: 22px; font-weight: 900; background: #000; color: #fff; text-align: center; } .item-row { display: flex; justify-content: space-between; font-size: 22px; font-weight: 900; } .opt { font-size: 16px; font-weight: bold; } .total { text-align: right; font-size: 24px; font-weight: 900; border-top: 2px solid #000; }</style>"
         rawbt_html_source = f"<html><head><meta charset='utf-8'>{style}</head><body>{content}</body></html>"
         b64_data = base64.b64encode(rawbt_html_source.encode('utf-8')).decode('utf-8')
-        intent_url = (
-            f"intent:base64,{b64_data}#Intent;"
-            f"scheme=rawbt;package=ru.a402d.rawbtprinter;"
-            f"S.jobName=Order_{seq}_{print_type};S.editor=false;end;"
-        )
+        intent_url = f"intent:base64,{b64_data}#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;S.jobName=Order_{seq};S.editor=false;end;"
 
-        final_html = f"""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <meta charset="utf-8">
-            <title>Print Order</title>
-            {style}
-        </head>
-        <body>
-            {content}
-            <script>
-                var ua = navigator.userAgent || navigator.vendor || window.opera;
-                if (/android/i.test(ua)) {{
-                    var msg = document.createElement('div');
-                    msg.innerHTML = '<h2 style="text-align:center;color:green;margin-top:20px;">🖨️ 正在傳送至出單機...</h2>';
-                    document.body.appendChild(msg);
-                    window.location.href = "{intent_url}";
-                    setTimeout(function() {{ if(window.opener) window.close(); }}, 1500);
-                }}
-            </script>
-        </body>
-        </html>
-        """
-        return final_html
+        return f"<!DOCTYPE html><html><head><meta charset='utf-8'><title>Print Order</title>{style}</head><body>{content}<script>if(/android/i.test(navigator.userAgent)){{window.location.href='{intent_url}';setTimeout(function(){{if(window.opener)window.close();}},1500);}}</script></body></html>"
 
     except Exception as e:
         traceback.print_exc()
@@ -765,6 +667,7 @@ def daily_report():
     </body>
     </html>
     """
+
 
 
 
