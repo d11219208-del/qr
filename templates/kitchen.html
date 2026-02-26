@@ -206,45 +206,36 @@
         }
     }
 
-    function fetchAndPrint(oid, type) {
+    // 修改此函式：從後端獲取 Base64 格式的二進制列印數據 (包含編碼與 ESC 指令)
+    async function fetchAndPrint(oid, type) {
         if (!usbDevice) {
             alert("請先點擊上方按鈕連接印表機");
             return;
         }
 
-        const url = `/kitchen/print_order/${oid}?type=${type}&format=raw`;
-        fetch(url)
-            .then(res => res.text())
-            .then(text => {
-                let contentToPrint = text;
-                if (!contentToPrint || contentToPrint.trim() === "" || contentToPrint.includes("print order")) {
-                    const card = document.querySelector(`[data-oid="${oid}"]`);
-                    if (card) {
-                        const clone = card.cloneNode(true);
-                        const actions = clone.querySelector('.actions');
-                        if(actions) actions.remove();
-                        contentToPrint = clone.innerText.trim();
-                    }
+        // 修改 API 路徑以符合後端 Base64 輸出的路徑
+        const url = `/kitchen/print_order/${oid}?type=${type}&format=base64`;
+        
+        try {
+            const response = await fetch(url);
+            const data = await response.json();
+
+            if (data.status === "success" && data.blob) {
+                // 將 Base64 轉回 Uint8Array
+                const binaryString = window.atob(data.blob);
+                const bytes = new Uint8Array(binaryString.length);
+                for (let i = 0; i < binaryString.length; i++) {
+                    bytes[i] = binaryString.charCodeAt(i);
                 }
-                contentToPrint = contentToPrint.replace(/<br\s*[\/]?>/gi, "\n");
-
-                let textBytes;
-                try {
-                    const encoder = new TextEncoder("big5", { NONSTANDARD_allowLegacyEncoding: true });
-                    textBytes = encoder.encode(contentToPrint + "\n\n");
-                } catch (e) {
-                    textBytes = new TextEncoder().encode(contentToPrint + "\n\n");
-                }
-
-                const initCmd = [0x1B, 0x40]; 
-                const setBig5 = [0x1C, 0x26]; 
-                const selectCP950 = [0x1B, 0x74, 13]; 
-                const cutCmd = [0x0A, 0x0A, 0x0A, 0x1D, 0x56, 0x42, 0x00]; 
-
-                const combined = new Uint8Array([...initCmd, ...setBig5, ...selectCP950, ...textBytes, ...cutCmd]);
-                printDataViaUSB(combined);
-            })
-            .catch(err => console.error("列印資料獲取失敗:", err));
+                
+                // 直接透過 USB 送出後端已經封裝好的 Big5 內容與 ESC/POS 指令
+                await printDataViaUSB(bytes);
+            } else {
+                console.error("後端未回傳有效列印 Blob");
+            }
+        } catch (err) {
+            console.error("獲取列印內容失敗:", err);
+        }
     }
 
     // ==========================================
@@ -274,7 +265,6 @@
                 updateTimeText.innerText = '最後更新: ' + new Date().toLocaleTimeString();
 
                 if (data.new_ids && data.new_ids.length > 0) {
-                    // 撥放提示音與播報仍維持運作
                     audio.play()
                         .then(() => setTimeout(speakNewOrder, 800))
                         .catch(() => speakNewOrder());
