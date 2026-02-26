@@ -15,6 +15,7 @@
         }
         body { font-family: "Microsoft JhengHei", sans-serif; background: #f0f2f5; margin: 0; padding: 15px; color: var(--main-text); }
         
+        /* 頂部導航列 */
         header { 
             display: flex; justify-content: space-between; align-items: center; 
             background: #fff; padding: 10px 20px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1);
@@ -22,6 +23,7 @@
         }
         .nav-links { display: flex; gap: 10px; }
 
+        /* 訂單網格佈局 */
         .order-grid { 
             display: grid; 
             grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); 
@@ -29,6 +31,7 @@
             align-items: flex-start; 
         }
         
+        /* 卡片基礎樣式 */
         .card { 
             background: white; border-radius: 12px; border: 1px solid #ddd;
             display: flex; flex-direction: column; overflow: hidden;
@@ -79,15 +82,18 @@
         .btn-print { background: var(--accent-blue); color: white; }
         .btn-void { background: var(--accent-red); color: white; }
         
+        /* 印表機連線按鈕特效 */
         #btnConnectPrinter.connected { background: #4caf50; animation: none; }
         #btnConnectPrinter { background: #e91e63; color: white; animation: pulse 2s infinite; }
         @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(233, 30, 99, 0.7); } 70% { box-shadow: 0 0 0 10px rgba(233, 30, 99, 0); } 100% { box-shadow: 0 0 0 0 rgba(233, 30, 99, 0); } }
 
+        /* 彈窗樣式 */
         .modal { display: none; position: fixed; z-index: 2000; left: 0; top: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.6); backdrop-filter: blur(3px); }
         .modal-content { background-color: #fff; margin: 10% auto; padding: 25px; border-radius: 12px; width: 90%; max-width: 350px; text-align: center; box-shadow: 0 5px 20px rgba(0,0,0,0.3); position: relative; }
         .modal-content.wide { max-width: 600px; }
         .modal-btn { width: 100%; padding: 15px; margin: 10px 0; font-size: 18px; border-radius: 8px; border: none; cursor: pointer; font-weight: bold; }
 
+        /* 銷售排行區塊 */
         .sales-controls { display: flex; flex-direction: column; gap: 10px; margin-bottom: 15px; background: #f8f9fa; padding: 15px; border-radius: 8px; border: 1px solid #eee; }
         .date-group { display: flex; justify-content: space-between; align-items: center; gap: 5px; }
         .date-input { padding: 8px; border: 1px solid #ccc; border-radius: 4px; flex-grow: 1; font-family: inherit; }
@@ -194,10 +200,7 @@
     }
 
     async function printDataViaUSB(uint8Array) {
-        if (!usbDevice || usbEndpoint === null) {
-            console.warn("尚未連接 USB 印表機");
-            return;
-        }
+        if (!usbDevice || usbEndpoint === null) return;
         try {
             await usbDevice.transferOut(usbEndpoint, uint8Array);
             console.log("🖨️ USB 資料已送出");
@@ -209,37 +212,44 @@
         }
     }
 
+    // --- 修改 fetchAndPrint 以確保正確抓取內容 ---
     function fetchAndPrint(oid, type) {
-        if (!usbDevice) {
-            alert("請先點擊上方按鈕連接 USB 印表機！");
-            return;
-        }
+        if (!usbDevice) return;
 
         const url = `/kitchen/print_order/${oid}?type=${type}`;
         fetch(url)
             .then(res => res.text())
             .then(html => {
-                const tempDiv = document.createElement('div');
-                tempDiv.innerHTML = html.replace(/<br\s*[\/]?>/gi, "\n");
-                let plainText = tempDiv.innerText;
+                // 排除空白並檢查回傳值
+                if (!html || html.trim() === "" || html.includes("print order")) {
+                    console.error("API 回傳異常:", html);
+                    // 如果 API 只回傳 print order 字串，我們就改從目前頁面的 Card 抓內容
+                    const card = document.querySelector(`[data-oid="${oid}"]`);
+                    if (card) {
+                        html = card.innerHTML;
+                    }
+                }
 
-                // --- 修改處：使用 Big5 編碼庫轉換文字 ---
+                const tempDiv = document.createElement('div');
+                // 將 <br> 換成換行，移除 HTML 標籤
+                tempDiv.innerHTML = html.replace(/<br\s*[\/]?>/gi, "\n");
+                let plainText = tempDiv.innerText.trim();
+
+                // 進行 Big5 編碼轉換
                 let textBytes;
                 try {
                     const big5Encoder = new TextEncoder("big5", { NONSTANDARD_allowLegacyEncoding: true });
-                    textBytes = big5Encoder.encode("\n" + plainText + "\n");
+                    textBytes = big5Encoder.encode(plainText + "\n\n");
                 } catch (e) {
-                    console.warn("Big5 轉換失敗，降級使用 UTF-8:", e);
-                    textBytes = new TextEncoder().encode("\n" + plainText + "\n");
+                    textBytes = new TextEncoder().encode(plainText + "\n\n");
                 }
 
-                // --- 修改處：CP-Q8BF 專用 ESC/POS 指令序列 ---
-                const initCmd = [0x1B, 0x40];           // 初始化
-                const setBig5 = [0x1C, 0x26];           // 啟動漢字模式 (FS &)
-                const selectCP950 = [0x1B, 0x74, 13];   // 選擇繁體中文頁碼 (ESC t 13)
-                const cutCmd = [0x0A, 0x0A, 0x0A, 0x0A, 0x1D, 0x56, 0x42, 0x00]; // 切紙
+                // CP-Q8BF 硬體指令：初始化 -> 啟動漢字模式 -> 指定 CP950
+                const initCmd = [0x1B, 0x40];           // ESC @
+                const setBig5 = [0x1C, 0x26];           // FS &
+                const selectCP950 = [0x1B, 0x74, 13];   // ESC t 13
+                const cutCmd = [0x0A, 0x0A, 0x0A, 0x0A, 0x1D, 0x56, 0x42, 0x00]; // 走紙切紙
 
-                // 組合所有指令與內文
                 const combined = new Uint8Array([
                     ...initCmd,
                     ...setBig5,
@@ -250,11 +260,11 @@
 
                 printDataViaUSB(combined);
             })
-            .catch(err => console.error("獲取單據失敗:", err));
+            .catch(err => console.error("列印獲取失敗:", err));
     }
 
     // ==========================================
-    // 其他常規業務邏輯 (不變)
+    // 其他業務邏輯 (不變)
     // ==========================================
 
     function speakNewOrder() {
