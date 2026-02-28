@@ -255,6 +255,7 @@ def print_order(oid):
         conn = get_db_connection()
         cur = conn.cursor()
         
+        # 1. 取得訂單資料
         query = """
             SELECT table_number, total_price, daily_seq, content_json, created_at, status,
                    customer_name, customer_phone, customer_address, delivery_fee, scheduled_for, 
@@ -274,6 +275,7 @@ def print_order(oid):
             """, (oid,))
             order = cur.fetchone()
 
+        # 2. 取得產品分類與選項對照表
         cur.execute("""
             SELECT name, print_category, 
                    custom_options, custom_options_en, custom_options_jp, custom_options_kr 
@@ -348,83 +350,79 @@ def print_order(oid):
                 if found_idx < len(target_list): return target_list[found_idx]
             return opt_str
 
-        # 核心內容生成函數 (包含 ESC/POS 指令)
+        # 3. 核心 ESC/POS 生成函數
         def generate_content(title, item_list, is_receipt=False):
             if not item_list and not is_receipt: return b"" 
             
-            ESC = b'\x1b'
-            GS = b'\x1d'
+            ESC, GS = b'\x1b', b'\x1d'
             RESET = ESC + b'@'
-            BOLD_ON = ESC + b'E\x01'
-            BOLD_OFF = ESC + b'E\x00'
-            
-            # 【字體大小參數說明】
-            # GS + b'!\x11' : 16進制 11 代表寬2倍、高2倍 (常用於標題/品項)
-            # GS + b'!\x00' : 16進制 00 代表正常大小
-            # 如果想更大，可用 b'!\x22' (寬3倍、高3倍)，但 80mm 紙張容易溢出
-            DBL_SIZE = GS + b'!\x11'  
-            NORMAL_SIZE = GS + b'!\x00'
-            
-            CENTER = ESC + b'a\x01'
-            LEFT = ESC + b'a\x00'
+            BOLD_ON, BOLD_OFF = ESC + b'E\x01', ESC + b'E\x00'
+            CENTER, LEFT = ESC + b'a\x01', ESC + b'a\x00'
             CUT = GS + b'V\x42\x00' 
-            
             ENCODE = 'big5-hkscs' 
 
-            # 標題部分
+            # 大小公式定義
+            # GS ! n -> n = (寬倍率-1)*16 + (高倍率-1)
+            DBL_SIZE = GS + b'!\x11'     # 寬2高2 (Hex 11)
+            CUSTOM_SIZE = GS + b'!\x01'  # 寬1高2 (Hex 01) -> 1.5倍體感，高度增加但寬度不變
+            NORMAL_SIZE = GS + b'!\x00'  # 正常大小 (Hex 00)
+            
+            # --- 單據開頭 ---
             res = RESET + CENTER + BOLD_ON + DBL_SIZE + title.encode(ENCODE, 'replace') + b"\n"
             
-            # 流水號 (與桌號一樣放大)
-            res += DBL_SIZE + f"NO: #{seq:03d}\n".encode(ENCODE)
+            # 流水號 (與標題/桌號一樣大)
+            res += f"NO: #{seq:03d}\n".encode(ENCODE)
             
-            # 桌號/類型 (放大)
-            res += f"{display_tbl_name}\n".encode(ENCODE, 'replace') + NORMAL_SIZE
+            # 桌號 (下方留一行空白 \n\n)
+            res += f"{display_tbl_name}\n\n".encode(ENCODE, 'replace') + NORMAL_SIZE
             
-            # 時間 (正常大小)
+            # --- 客戶資訊 (1.5倍大) ---
             res += LEFT + f"TIME: {time_str}\n".encode(ENCODE)
-            
-            # 客戶資訊 (修復電話)
+            res += CUSTOM_SIZE
             if has_schedule: res += f"預約: {c_schedule}\n".encode(ENCODE, 'replace')
             if c_name: res += f"客戶: {c_name}\n".encode(ENCODE, 'replace')
-            if has_contact: res += f"電話: {c_phone}\n".encode(ENCODE, 'replace') # 已新增
+            if has_contact: res += f"電話: {c_phone}\n".encode(ENCODE, 'replace') # 修復電話
             if has_addr: res += f"地址: {c_addr}\n".encode(ENCODE, 'replace')
+            res += NORMAL_SIZE
             
             res += b"-"*32 + b"\n"
             
+            # --- 品項清單 ---
             for i in item_list:
                 name_zh = i.get('name_zh') or i.get('name')
                 qty = i.get('qty', 1)
-                
                 target_lang = c_lang if is_receipt else 'zh'
-                # 【Fallback 邏輯】日韓文不支援時回退到中文
+
+                # Fallback: 日韓文改回中文避免亂碼
                 if target_lang in ['jp', 'kr']:
-                    display_name = name_zh # 已更改為中文 Fallback
+                    display_name = name_zh
                 elif target_lang == 'en':
                     display_name = i.get('name_en') or name_zh
                 else:
                     display_name = name_zh
                 
-                # 品項名稱 (放大)
+                # 品項名稱與數量 (大字)
                 res += BOLD_ON + DBL_SIZE + f"{display_name} x{qty}\n".encode(ENCODE, 'replace') + NORMAL_SIZE + BOLD_OFF
                 
-                # 選項部分 (保持正常大小)
+                # 客製化選項 (1.5倍大)
                 raw_opts = i.get('options') or i.get('options_zh') or []
                 opts_list = (raw_opts if isinstance(raw_opts, list) else [raw_opts])
-                opt_lang = target_lang if target_lang not in ['jp', 'kr'] else 'zh' # 選項同步中文回退
+                opt_lang = 'zh' if target_lang in ['jp', 'kr'] else target_lang
                 translated_opts = [translate_option(name_zh, str(opt), opt_lang) for opt in opts_list]
                 
                 if translated_opts:
-                    res += f"  ({', '.join(translated_opts)})\n".encode(ENCODE, 'replace')
+                    res += CUSTOM_SIZE + f"  ({', '.join(translated_opts)})\n".encode(ENCODE, 'replace') + NORMAL_SIZE
             
             res += b"-"*32 + b"\n"
             if is_receipt:
-                # 總金額 (放大)
+                # 總計 (大字)
                 res += DBL_SIZE + BOLD_ON + f"TOTAL: ${int(total_price or 0)}\n".encode(ENCODE) + NORMAL_SIZE + BOLD_OFF
             
-            res += b"\n\n\n\n" + CUT 
+            # 減少結尾留白 (減為 2 個 \n)
+            res += b"\n\n" + CUT 
             return res
 
-        # HTML 部分 (用於手機與預覽)
+        # 4. HTML 預覽生成
         def generate_html_content(title, item_list, is_receipt=False):
             if not item_list and not is_receipt: return ""
             void_mark = "<div class='void-watermark'>作廢單</div>" if status == 'Cancelled' else ""
@@ -435,7 +433,7 @@ def print_order(oid):
             if is_delivery or has_contact or (c_name and str(c_name).strip()):
                 h += f"<div class='customer-info'>"
                 if c_name: h += f"<div class='cust-row'>👤 {c_name}</div>"
-                if has_contact: h += f"<div class='cust-row'>📞 {c_phone}</div>" # HTML 電話
+                if has_contact: h += f"<div class='cust-row'>📞 {c_phone}</div>"
                 if has_addr: h += f"<div class='addr-row'>📍 {c_addr}</div>"
                 h += f"</div>"
             for i in item_list:
@@ -454,9 +452,10 @@ def print_order(oid):
                 h += f"<div class='total'>Total: ${int(total_price or 0)}</div>"
             return h + "</div>"
 
+        # 5. 輸出處理
         if output_format == 'base64':
             full_bin_payload = b""
-            init_cmds = b'\x1b\x40\x1c\x26\x1b\x74\x0d'
+            init_cmds = b'\x1b\x40\x1c\x26\x1b\x74\x0d' # Reset + Big5 Mode
             
             if print_type in ['all', 'receipt']:
                 full_bin_payload += init_cmds + generate_content("結帳單 Receipt", items, is_receipt=True)
@@ -470,6 +469,7 @@ def print_order(oid):
                 "blob": base64.b64encode(full_bin_payload).decode('utf-8')
             })
 
+        # --- HTML 渲染與 Intent 跳轉 ---
         html_content = ""
         if print_type in ['all', 'receipt']:
             html_content += generate_html_content("結帳單 Receipt", items, is_receipt=True)
@@ -478,9 +478,6 @@ def print_order(oid):
             if soup_items: html_content += generate_html_content("廚房單 - 湯區", soup_items)
             if other_items: html_content += generate_html_content("廚房單 - 其他", other_items)
 
-        # 【HTML 字體大小調整處】
-        # .head h1 控制流水號大小
-        # .item-row 控制品項大小
         style = "<style>@page { size: 80mm auto; margin: 0mm; } body { font-family: 'Microsoft JhengHei', sans-serif; width: 78mm; margin: 0 auto; padding: 2px; } .ticket { border-bottom: 3px dashed #000; padding: 10px 0 30px 0; margin-bottom: 10px; page-break-after: always; position: relative; } .head h2 { font-size: 24px; margin: 0; border: 2px solid #000; padding: 4px 10px; display: inline-block; font-weight: 900; } .head h1 { font-size: 42px; margin: 5px 0; font-weight: 900; } .info-box { border-bottom: 2px solid #000; padding-bottom: 5px; } .table-row { text-align: center; } .table-val { font-size: 36px; font-weight: 900; } .time-row { font-size: 14px; text-align: center; } .customer-info { border: 2px solid #000; padding: 6px; font-size: 18px; font-weight: bold; } .addr-row { font-size: 24px; font-weight: 900; border-top: 1px dashed #000; } .schedule-row { font-size: 22px; font-weight: 900; background: #000; color: #fff; text-align: center; } .item-row { display: flex; justify-content: space-between; font-size: 24px; font-weight: 900; margin-top: 5px;} .item-name-sub { font-size: 16px; display: block; color: #555; } .opt { font-size: 18px; font-weight: bold; padding-left: 10px; } .total { text-align: right; font-size: 28px; font-weight: 900; border-top: 2px solid #000; margin-top: 10px; }</style>"
         
         if output_format == 'raw':
@@ -496,6 +493,7 @@ def print_order(oid):
         traceback.print_exc()
         return f"Print Error: {str(e)}", 500
 
+        
 # --- 4. 狀態變更 (完成/作廢) ---
 @kitchen_bp.route('/complete/<int:oid>')
 def complete_order(oid):
@@ -724,6 +722,7 @@ def daily_report():
     </body>
     </html>
     """
+
 
 
 
