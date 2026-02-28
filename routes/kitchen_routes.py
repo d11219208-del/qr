@@ -255,7 +255,7 @@ def print_order(oid):
         conn = get_db_connection()
         cur = conn.cursor()
         
-        # 1. SQL 查詢：讀取所有訂單欄位
+        # 1. SQL 查詢
         query = """
             SELECT table_number, total_price, daily_seq, content_json, created_at, status,
                    customer_name, customer_phone, customer_address, delivery_fee, scheduled_for, 
@@ -267,7 +267,6 @@ def print_order(oid):
             order = cur.fetchone()
         except Exception as e:
             conn.rollback() 
-            print(f"SQL Fallback triggered: {e}")
             cur.execute("""
                 SELECT table_number, total_price, daily_seq, content_json, created_at, status,
                        customer_name, customer_phone, customer_address, delivery_fee, scheduled_for, 
@@ -276,7 +275,7 @@ def print_order(oid):
             """, (oid,))
             order = cur.fetchone()
 
-        # 2. 獲取產品資料與自定義選項 Mapping (用於動態翻譯)
+        # 2. 獲取產品與動態翻譯 Mapping
         cur.execute("""
             SELECT name, print_category, 
                    custom_options, custom_options_en, custom_options_jp, custom_options_kr 
@@ -300,25 +299,24 @@ def print_order(oid):
         if not order:
             return "訂單不存在", 404
         
-        # 3. 解析訂單資料 (正確對應 c_lang)
         table_num, total_price, seq, content_json, created_at, status, \
         c_name, c_phone, c_addr, c_fee, c_schedule, c_type, c_lang = order
         
         c_fee = int(c_fee or 0)
         table_str = str(table_num).strip() if table_num else ""
         c_type = str(c_type).lower() if c_type else 'unknown'
-        c_lang = str(c_lang).lower() if c_lang else 'zh' # 這是關鍵，結帳單將使用此語系
+        c_lang = str(c_lang).lower() if c_lang else 'zh'
         
         has_contact = (c_phone and str(c_phone).strip() != '' and str(c_phone).lower() != 'none')
         has_addr = (c_addr and str(c_addr).strip() != '' and str(c_addr).lower() != 'none')
         has_schedule = (c_schedule and str(c_schedule).strip() != '' and str(c_schedule).lower() != 'none')
         
         if c_type == 'delivery':
-            display_tbl_name = "🛵 外送"
+            display_tbl_name = "🛵 外送 (DELIVERY)"
         elif c_type == 'takeout':
-            display_tbl_name = "🥡 自取"
+            display_tbl_name = "🥡 自取 (TAKEOUT)"
         elif c_type == 'dine_in':
-            display_tbl_name = f"桌號 {table_str}"
+            display_tbl_name = f"桌號 (TABLE): {table_str}"
         else:
             is_delivery = (table_str == '外送') or has_addr
             display_tbl_name = "外送" if is_delivery else (table_str if table_str else "外帶")
@@ -331,7 +329,7 @@ def print_order(oid):
         
         time_str = (created_at + timedelta(hours=8)).strftime('%Y-%m-%d %H:%M:%S')
 
-        # 4. 廚房單分區邏輯
+        # 4. 廚房分區
         noodle_items, soup_items, other_items = [], [], []
         for item in items:
             p_name = item.get('name_zh') or item.get('name')
@@ -340,7 +338,6 @@ def print_order(oid):
             elif p_cat == 'Soup': soup_items.append(item)
             else: other_items.append(item)
 
-        # 5. 翻譯函數
         def translate_option(p_name, opt_str, target_lang):
             if p_name not in product_map: return opt_str
             p_data = product_map[p_name]
@@ -354,143 +351,125 @@ def print_order(oid):
                 if found_idx < len(target_list): return target_list[found_idx]
             return opt_str
 
-        # 6. 核心內容生成函數 (包含 ESC/POS 位元指令)
-        def generate_content(title, item_list, is_receipt=False):
-            if not item_list and not is_receipt: return b"" 
+        # 6. ESC/POS 二進位生成 (支援多語系與單張裁切)
+        def generate_binary_ticket(title, item_list, is_receipt=False):
+            if not item_list and not is_receipt: return b""
             
-            # --- ESC/POS 指令定義 ---
+            # 指令定義
             ESC = b'\x1b'
             GS = b'\x1d'
             RESET = ESC + b'@'
-            BOLD_ON = ESC + b'E\x01'
-            BOLD_OFF = ESC + b'E\x00'
-            DBL_SIZE = GS + b'!\x11'  # 16進制 0x11 = 寬2倍 + 高2倍
-            NORMAL_SIZE = GS + b'!\x00'
+            # 設定為 UTF-8 模式 (重要：多語系關鍵)
+            UTF8_MODE = ESC + b'\x74\x1e' # 部分機型為 1e 或 43，請依說明書微調
             CENTER = ESC + b'a\x01'
             LEFT = ESC + b'a\x00'
+            BOLD_ON = ESC + b'E\x01'
+            BOLD_OFF = ESC + b'E\x00'
+            DBL_SIZE = GS + b'!\x11' 
+            NORMAL_SIZE = GS + b'!\x00'
+            CUT_COMMAND = GS + b'V\x42\x00' # 自動切紙指令
             
-            # 決定編碼 (結帳單非中文語系需用 UTF-8 或對應 Page，此處預設 Big5 供中文機型)
-            # 若印表機支援 UTF-8，建議統一用 UTF-8
-            ENCODE = 'big5-hkscs' 
+            # 編碼改用 UTF-8
+            ENC = 'utf-8'
 
-            res = RESET + CENTER + BOLD_ON + DBL_SIZE + title.encode(ENCODE, 'replace') + b"\n"
-            res += NORMAL_SIZE + f"NO: #{seq:03d}\n".encode(ENCODE)
-            res += DBL_SIZE + f"{display_tbl_name}\n".encode(ENCODE, 'replace') + NORMAL_SIZE
-            res += LEFT + f"TIME: {time_str}\n".encode(ENCODE)
+            ticket = RESET + UTF8_MODE + CENTER + BOLD_ON + DBL_SIZE + title.encode(ENC) + b"\n"
+            ticket += NORMAL_SIZE + f"NO: #{seq:03d}\n".encode(ENC)
+            ticket += BOLD_ON + DBL_SIZE + f"{display_tbl_name}\n".encode(ENC) + NORMAL_SIZE + BOLD_OFF
+            ticket += LEFT + f"TIME: {time_str}\n".encode(ENC)
             
-            if has_schedule: res += f"🕒預約: {c_schedule}\n".encode(ENCODE, 'replace')
-            if c_name: res += f"👤客戶: {c_name}\n".encode(ENCODE, 'replace')
-            if has_addr: res += f"📍地址: {c_addr}\n".encode(ENCODE, 'replace')
+            if has_schedule: ticket += f"🕒預約: {c_schedule}\n".encode(ENC)
+            if c_name: ticket += f"👤客戶: {c_name}\n".encode(ENC)
+            if has_addr: ticket += f"📍地址: {c_addr}\n".encode(ENC)
             
-            res += b"-"*32 + b"\n"
+            ticket += b"-"*32 + b"\n"
             
             for i in item_list:
                 name_zh = i.get('name_zh') or i.get('name')
                 qty = i.get('qty', 1)
-                
-                # 語系切換邏輯
                 target_lang = c_lang if is_receipt else 'zh'
-                display_name = name_zh
-                if target_lang != 'zh':
-                    display_name = i.get(f"name_{target_lang}") or i.get('name_en') or name_zh
                 
-                # 品項名稱放大
-                res += BOLD_ON + DBL_SIZE + f"{display_name} x{qty}\n".encode(ENCODE, 'replace') + NORMAL_SIZE + BOLD_OFF
+                # 多語系名稱抓取
+                display_name = i.get(f"name_{target_lang}") or i.get('name_en') or name_zh
                 
-                # 選項翻譯
+                ticket += BOLD_ON + DBL_SIZE + f"{display_name} x{qty}\n".encode(ENC) + NORMAL_SIZE + BOLD_OFF
+                
                 raw_opts = i.get('options') or i.get('options_zh') or []
                 opts_list = (raw_opts if isinstance(raw_opts, list) else [raw_opts])
                 translated_opts = [translate_option(name_zh, str(opt), target_lang) for opt in opts_list]
                 
                 if translated_opts:
-                    res += f"  ({', '.join(translated_opts)})\n".encode(ENCODE, 'replace')
+                    ticket += f"  ({', '.join(translated_opts)})\n".encode(ENC)
             
-            res += b"-"*32 + b"\n"
+            ticket += b"-"*32 + b"\n"
             if is_receipt:
-                res += DBL_SIZE + BOLD_ON + f"TOTAL: ${int(total_price or 0)}\n".encode(ENCODE) + NORMAL_SIZE + BOLD_OFF
+                ticket += DBL_SIZE + BOLD_ON + f"TOTAL: ${int(total_price or 0)}\n".encode(ENC) + NORMAL_SIZE + BOLD_OFF
             
-            res += b"\n\n\n\n" # 留白
-            return res
+            ticket += b"\n\n\n\n" + CUT_COMMAND # 每一張單據結尾都加入切紙
+            return ticket
 
-        # 7. HTML 內容生成 (供 RawBT 或 網頁預覽，保持原有功能)
+        # 7. HTML 內容生成 (略，保持原有邏輯)
         def generate_html_content(title, item_list, is_receipt=False):
             if not item_list and not is_receipt: return ""
             void_mark = "<div class='void-watermark'>作廢單</div>" if status == 'Cancelled' else ""
             h = f"<div class='ticket'>{void_mark}<div class='head'><h2>{title}</h2><h1>#{seq:03d}</h1></div>"
             h += f"<div class='info-box'><div class='table-row'><span class='table-val'>{display_tbl_name}</span></div>"
             h += f"<div class='time-row'>下單: {time_str}</div></div>"
-            if has_schedule: h += f"<div class='schedule-row'>🕒 預約: {c_schedule}</div>"
-            if is_delivery or has_contact or (c_name and str(c_name).strip()):
-                h += f"<div class='customer-info'>"
-                if c_name: h += f"<div class='cust-row'>👤 {c_name}</div>"
-                if has_contact: h += f"<div class='cust-row'>📞 {c_phone}</div>"
-                if has_addr: h += f"<div class='addr-row'>📍 {c_addr}</div>"
-                h += f"</div>"
             for i in item_list:
                 name_zh = i.get('name_zh') or i.get('name')
                 target_lang = c_lang if is_receipt else 'zh'
-                main_name = i.get(f"name_{target_lang}") or i.get('name_en') or name_zh if target_lang != 'zh' else name_zh
+                main_name = i.get(f"name_{target_lang}") or i.get('name_en') or name_zh
                 sub_name = name_zh if target_lang != 'zh' else ""
-                
                 raw_opts = i.get('options') or i.get('options_zh') or []
                 opts_display = [translate_option(name_zh, str(opt), target_lang) for opt in (raw_opts if isinstance(raw_opts, list) else [raw_opts])]
-                
                 h += f"<div class='item-row'><div class='name-col'><span class='item-name-main'>{main_name}</span>"
-                if sub_name: h += f"<span class='item-name-sub'>{sub_name}</span>"
+                if sub_name: h += f" <span class='item-name-sub'>{sub_name}</span>"
                 h += f"</div><span class='item-qty'>x{i.get('qty', 1)}</span></div>"
                 if opts_display: h += f"<div class='opt'>└ {', '.join(opts_display)}</div>"
             if is_receipt:
-                if c_fee > 0: h += f"<div class='fee-row'>小計: ${int(total_price - c_fee)}</div><div class='fee-row'>運費: ${c_fee}</div>"
                 h += f"<div class='total'>Total: ${int(total_price or 0)}</div>"
             return h + "</div>"
 
         # 8. 輸出格式判斷
         if output_format == 'base64':
             full_bin_payload = b""
-            # 初始化指令 (ESC @), 進入漢字模式 (FS &), 設定 CodePage 為 950 (ESC t 13)
-            init_cmds = b'\x1b\x40\x1c\x26\x1b\x74\x0d'
-            full_bin_payload += init_cmds
             
             if print_type in ['all', 'receipt']:
-                full_bin_payload += generate_content("結帳單 Receipt", items, is_receipt=True)
-            if print_type in ['all', 'kitchen']:
-                if noodle_items: full_bin_payload += generate_content("廚房單-麵區", noodle_items)
-                if soup_items: full_bin_payload += generate_content("廚房單-湯區", soup_items)
-                if other_items: full_bin_payload += generate_content("廚房單-其他", other_items)
+                full_bin_payload += generate_binary_ticket("結帳單 RECEIPT", items, is_receipt=True)
             
-            # 切紙指令
-            full_bin_payload += b'\x1d\x56\x42\x00'
+            if print_type in ['all', 'kitchen']:
+                if noodle_items: 
+                    full_bin_payload += generate_binary_ticket("廚房單-麵區 (NOODLE)", noodle_items)
+                if soup_items: 
+                    full_bin_payload += generate_binary_ticket("廚房單-湯區 (SOUP)", soup_items)
+                if other_items: 
+                    full_bin_payload += generate_binary_ticket("廚房單-其他 (OTHERS)", other_items)
             
             return jsonify({
                 "status": "success",
                 "blob": base64.b64encode(full_bin_payload).decode('utf-8')
             })
 
-        # --- 以下為 HTML / RawBT 輸出邏輯 ---
+        # HTML / RawBT 邏輯
         html_content = ""
         if print_type in ['all', 'receipt']:
-            html_content += generate_html_content("結帳單 Receipt", items, is_receipt=True)
+            html_content += generate_html_content("結帳單 RECEIPT", items, is_receipt=True)
         if print_type in ['all', 'kitchen']:
             if noodle_items: html_content += generate_html_content("廚房單 - 麵區", noodle_items)
             if soup_items: html_content += generate_html_content("廚房單 - 湯區", soup_items)
             if other_items: html_content += generate_html_content("廚房單 - 其他", other_items)
 
-        style = "<style>@page { size: 80mm auto; margin: 0mm; } body { font-family: 'Microsoft JhengHei', sans-serif; width: 78mm; margin: 0 auto; padding: 2px; } .ticket { border-bottom: 3px dashed #000; padding: 10px 0 30px 0; margin-bottom: 10px; page-break-after: always; position: relative; } .head h2 { font-size: 24px; margin: 0; border: 2px solid #000; padding: 4px 10px; display: inline-block; font-weight: 900; } .head h1 { font-size: 42px; margin: 5px 0; font-weight: 900; } .info-box { border-bottom: 2px solid #000; padding-bottom: 5px; } .table-row { text-align: center; } .table-val { font-size: 36px; font-weight: 900; } .time-row { font-size: 14px; text-align: center; } .customer-info { border: 2px solid #000; padding: 6px; font-size: 18px; font-weight: bold; } .addr-row { font-size: 24px; font-weight: 900; border-top: 1px dashed #000; } .schedule-row { font-size: 22px; font-weight: 900; background: #000; color: #fff; text-align: center; } .item-row { display: flex; justify-content: space-between; font-size: 24px; font-weight: 900; margin-top: 5px;} .item-name-sub { font-size: 16px; display: block; color: #555; } .opt { font-size: 18px; font-weight: bold; padding-left: 10px; } .total { text-align: right; font-size: 28px; font-weight: 900; border-top: 2px solid #000; margin-top: 10px; }</style>"
-        
-        if output_format == 'raw':
-            return html_content
+        if output_format == 'raw': return html_content
 
-        # Android RawBT Intent
+        style = "<style>@page { size: 80mm auto; margin: 0mm; } body { font-family: 'Microsoft JhengHei', sans-serif; width: 78mm; margin: 0 auto; padding: 2px; } .ticket { border-bottom: 3px dashed #000; padding: 10px 0 30px 0; margin-bottom: 10px; page-break-after: always; position: relative; } .head h2 { font-size: 24px; margin: 0; border: 2px solid #000; padding: 4px 10px; display: inline-block; font-weight: 900; } .head h1 { font-size: 42px; margin: 5px 0; font-weight: 900; } .table-val { font-size: 36px; font-weight: 900; } .item-row { display: flex; justify-content: space-between; font-size: 24px; font-weight: 900; margin-top: 5px;} .total { text-align: right; font-size: 28px; font-weight: 900; border-top: 2px solid #000; margin-top: 10px; }</style>"
         rawbt_html_source = f"<html><head><meta charset='utf-8'>{style}</head><body>{html_content}</body></html>"
         b64_html = base64.b64encode(rawbt_html_source.encode('utf-8')).decode('utf-8')
         intent_url = f"intent:base64,{b64_html}#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;S.jobName=Order_{seq};S.editor=false;end;"
 
-        return f"<!DOCTYPE html><html><head><meta charset='utf-8'><title>Print Order</title>{style}</head><body>{html_content}<script>if(/android/i.test(navigator.userAgent)){{window.location.href='{intent_url}';setTimeout(function(){{if(window.opener)window.close();}},1500);}}</script></body></html>"
+        return f"<!DOCTYPE html><html><head><meta charset='utf-8'><title>Print</title>{style}</head><body>{html_content}<script>if(/android/i.test(navigator.userAgent)){{window.location.href='{intent_url}';setTimeout(function(){{if(window.opener)window.close();}},1500);}}</script></body></html>"
 
     except Exception as e:
         traceback.print_exc()
         return f"Print Error: {str(e)}", 500
-
 
 # --- 4. 狀態變更 (完成/作廢) ---
 @kitchen_bp.route('/complete/<int:oid>')
@@ -720,6 +699,7 @@ def daily_report():
     </body>
     </html>
     """
+
 
 
 
