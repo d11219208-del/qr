@@ -362,18 +362,20 @@ def print_order(oid):
             ENCODE = 'big5-hkscs' 
 
             # 大小公式定義
-            # GS ! n -> n = (寬倍率-1)*16 + (高倍率-1)
-            DBL_SIZE = GS + b'!\x11'     # 寬2高2 (Hex 11)
-            CUSTOM_SIZE = GS + b'!\x01'  # 寬1高2 (Hex 01) -> 1.5倍體感，高度增加但寬度不變
-            NORMAL_SIZE = GS + b'!\x00'  # 正常大小 (Hex 00)
+            DBL_SIZE = GS + b'!\x11'     # 寬2高2
+            CUSTOM_SIZE = GS + b'!\x01'  # 1.5倍體感 (高度2倍)
+            NORMAL_SIZE = GS + b'!\x00'
             
+            # 微量送紙指令 (ESC J n)，n=20 約為 0.5 行高度
+            HALF_LINE = ESC + b'J\x14'
+
             # --- 單據開頭 ---
             res = RESET + CENTER + BOLD_ON + DBL_SIZE + title.encode(ENCODE, 'replace') + b"\n"
             
-            # 流水號 (與標題/桌號一樣大)
+            # 流水號
             res += f"NO: #{seq:03d}\n".encode(ENCODE)
             
-            # 桌號 (下方留一行空白 \n\n)
+            # 桌號 (下方留一行空白)
             res += f"{display_tbl_name}\n\n".encode(ENCODE, 'replace') + NORMAL_SIZE
             
             # --- 客戶資訊 (1.5倍大) ---
@@ -381,41 +383,47 @@ def print_order(oid):
             res += CUSTOM_SIZE
             if has_schedule: res += f"預約: {c_schedule}\n".encode(ENCODE, 'replace')
             if c_name: res += f"客戶: {c_name}\n".encode(ENCODE, 'replace')
-            if has_contact: res += f"電話: {c_phone}\n".encode(ENCODE, 'replace') # 修復電話
+            if has_contact: res += f"電話: {c_phone}\n".encode(ENCODE, 'replace')
             if has_addr: res += f"地址: {c_addr}\n".encode(ENCODE, 'replace')
             res += NORMAL_SIZE
             
             res += b"-"*32 + b"\n"
             
-           for i in item_list:
+            # --- 品項清單 ---
+            for i in item_list:
                 name_zh = i.get('name_zh') or i.get('name')
                 qty = i.get('qty', 1)
                 target_lang = c_lang if is_receipt else 'zh'
+
+                # Fallback: 日韓文改回中文
+                if target_lang in ['jp', 'kr']:
+                    display_name = name_zh
+                elif target_lang == 'en':
+                    display_name = i.get('name_en') or name_zh
+                else:
+                    display_name = name_zh
                 
-                # 語系 Fallback
-                display_name = name_zh if target_lang in ['jp', 'kr'] else (i.get(f"name_{target_lang}") or name_zh)
+                # 品項名稱與數量 (大字)
+                res += BOLD_ON + DBL_SIZE + f"{display_name} x{qty}\n".encode(ENCODE, 'replace') + NORMAL_SIZE + BOLD_OFF
                 
-                # A. 品項名稱 (大字)
-                res += BOLD_ON + DBL_SIZE + f"{display_name} x{qty}\n".encode(ENCODE, 'replace') + BOLD_OFF
-                
-                # B. 【新增：品項與客製化中間的 0.5 行空格】
-                # 切換回正常大小並印一個換行，視覺上約為 0.5 行間距
-                res += NORMAL_SIZE + b"\n" 
-                
-                # C. 客製化選項 (1.5倍大)
+                # 客製化選項處理
                 raw_opts = i.get('options') or i.get('options_zh') or []
                 opts_list = (raw_opts if isinstance(raw_opts, list) else [raw_opts])
                 opt_lang = 'zh' if target_lang in ['jp', 'kr'] else target_lang
                 translated_opts = [translate_option(name_zh, str(opt), opt_lang) for opt in opts_list]
                 
                 if translated_opts:
+                    # 在品項名稱與選項間加入 0.5 行空格
+                    res += HALF_LINE
+                    # 選項內容 (1.5倍大)
                     res += CUSTOM_SIZE + f"  ({', '.join(translated_opts)})\n".encode(ENCODE, 'replace') + NORMAL_SIZE
             
             res += b"-"*32 + b"\n"
             if is_receipt:
                 res += DBL_SIZE + BOLD_ON + f"TOTAL: ${int(total_price or 0)}\n".encode(ENCODE) + NORMAL_SIZE + BOLD_OFF
             
-            res += b"\n" + CUT # 減少留白
+            # 減少結尾留白
+            res += b"\n\n" + CUT 
             return res
 
         # 4. HTML 預覽生成
@@ -439,10 +447,14 @@ def print_order(oid):
                 sub_name = name_zh if target_lang != 'zh' else ""
                 raw_opts = i.get('options') or i.get('options_zh') or []
                 opts_display = [translate_option(name_zh, str(opt), target_lang) for opt in (raw_opts if isinstance(raw_opts, list) else [raw_opts])]
+                
+                # HTML 預覽中的 0.5 行間隔由 margin-top 達成
                 h += f"<div class='item-row'><div class='name-col'><span class='item-name-main'>{main_name}</span>"
                 if sub_name: h += f"<span class='item-name-sub'>{sub_name}</span>"
                 h += f"</div><span class='item-qty'>x{i.get('qty', 1)}</span></div>"
-                if opts_display: h += f"<div class='opt'>└ {', '.join(opts_display)}</div>"
+                if opts_display: 
+                    h += f"<div class='opt' style='margin-top: 4px;'>└ {', '.join(opts_display)}</div>"
+            
             if is_receipt:
                 if c_fee > 0: h += f"<div class='fee-row'>小計: ${int(total_price - c_fee)}</div><div class='fee-row'>運費: ${c_fee}</div>"
                 h += f"<div class='total'>Total: ${int(total_price or 0)}</div>"
@@ -451,7 +463,7 @@ def print_order(oid):
         # 5. 輸出處理
         if output_format == 'base64':
             full_bin_payload = b""
-            init_cmds = b'\x1b\x40\x1c\x26\x1b\x74\x0d' # Reset + Big5 Mode
+            init_cmds = b'\x1b\x40\x1c\x26\x1b\x74\x0d' 
             
             if print_type in ['all', 'receipt']:
                 full_bin_payload += init_cmds + generate_content("結帳單 Receipt", items, is_receipt=True)
@@ -465,7 +477,7 @@ def print_order(oid):
                 "blob": base64.b64encode(full_bin_payload).decode('utf-8')
             })
 
-        # --- HTML 渲染與 Intent 跳轉 ---
+        # --- HTML 渲染 ---
         html_content = ""
         if print_type in ['all', 'receipt']:
             html_content += generate_html_content("結帳單 Receipt", items, is_receipt=True)
@@ -488,6 +500,7 @@ def print_order(oid):
     except Exception as e:
         traceback.print_exc()
         return f"Print Error: {str(e)}", 500
+        
 
         
 # --- 4. 狀態變更 (完成/作廢) ---
@@ -718,6 +731,7 @@ def daily_report():
     </body>
     </html>
     """
+
 
 
 
