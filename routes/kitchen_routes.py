@@ -387,7 +387,7 @@ def print_order(oid):
             if has_addr: res += f"地址: {c_addr}\n".encode(ENCODE, 'replace')
             res += NORMAL_SIZE
             
-            res += b"-"*32 + b"\n"
+            res += b"="*32 + b"\n"
             
             # --- 品項清單 ---
             for i in item_list:
@@ -395,7 +395,6 @@ def print_order(oid):
                 qty = i.get('qty', 1)
                 target_lang = c_lang if is_receipt else 'zh'
 
-                # Fallback: 日韓文改回中文
                 if target_lang in ['jp', 'kr']:
                     display_name = name_zh
                 elif target_lang == 'en':
@@ -417,12 +416,14 @@ def print_order(oid):
                     res += HALF_LINE
                     # 選項內容 (1.5倍大)
                     res += CUSTOM_SIZE + f"  ({', '.join(translated_opts)})\n".encode(ENCODE, 'replace') + NORMAL_SIZE
+
+                res += b"-"*32 + b"\n"
             
-            res += b"-"*32 + b"\n"
+            res += b"="*32 + b"\n"
             if is_receipt:
                 res += DBL_SIZE + BOLD_ON + f"TOTAL: ${int(total_price or 0)}\n".encode(ENCODE) + NORMAL_SIZE + BOLD_OFF
             
-            # 減少結尾留白
+            # 減少結尾留白 (原本4行減為2行)
             res += b"\n\n" + CUT 
             return res
 
@@ -448,7 +449,6 @@ def print_order(oid):
                 raw_opts = i.get('options') or i.get('options_zh') or []
                 opts_display = [translate_option(name_zh, str(opt), target_lang) for opt in (raw_opts if isinstance(raw_opts, list) else [raw_opts])]
                 
-                # HTML 預覽中的 0.5 行間隔由 margin-top 達成
                 h += f"<div class='item-row'><div class='name-col'><span class='item-name-main'>{main_name}</span>"
                 if sub_name: h += f"<span class='item-name-sub'>{sub_name}</span>"
                 h += f"</div><span class='item-qty'>x{i.get('qty', 1)}</span></div>"
@@ -477,7 +477,6 @@ def print_order(oid):
                 "blob": base64.b64encode(full_bin_payload).decode('utf-8')
             })
 
-        # --- HTML 渲染 ---
         html_content = ""
         if print_type in ['all', 'receipt']:
             html_content += generate_html_content("結帳單 Receipt", items, is_receipt=True)
@@ -731,6 +730,7 @@ def daily_report():
     </body>
     </html>
     """
+
 
 
 
