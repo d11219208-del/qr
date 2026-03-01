@@ -387,24 +387,22 @@ def print_order(oid):
             
             res += b"-"*32 + b"\n"
             
-            # --- 品項清單 ---
-            for i in item_list:
+           for i in item_list:
                 name_zh = i.get('name_zh') or i.get('name')
                 qty = i.get('qty', 1)
                 target_lang = c_lang if is_receipt else 'zh'
-
-                # Fallback: 日韓文改回中文避免亂碼
-                if target_lang in ['jp', 'kr']:
-                    display_name = name_zh
-                elif target_lang == 'en':
-                    display_name = i.get('name_en') or name_zh
-                else:
-                    display_name = name_zh
                 
-                # 品項名稱與數量 (大字)
-                res += BOLD_ON + DBL_SIZE + f"{display_name} x{qty}\n".encode(ENCODE, 'replace') + NORMAL_SIZE + BOLD_OFF
+                # 語系 Fallback
+                display_name = name_zh if target_lang in ['jp', 'kr'] else (i.get(f"name_{target_lang}") or name_zh)
                 
-                # 客製化選項 (1.5倍大)
+                # A. 品項名稱 (大字)
+                res += BOLD_ON + DBL_SIZE + f"{display_name} x{qty}\n".encode(ENCODE, 'replace') + BOLD_OFF
+                
+                # B. 【新增：品項與客製化中間的 0.5 行空格】
+                # 切換回正常大小並印一個換行，視覺上約為 0.5 行間距
+                res += NORMAL_SIZE + b"\n" 
+                
+                # C. 客製化選項 (1.5倍大)
                 raw_opts = i.get('options') or i.get('options_zh') or []
                 opts_list = (raw_opts if isinstance(raw_opts, list) else [raw_opts])
                 opt_lang = 'zh' if target_lang in ['jp', 'kr'] else target_lang
@@ -415,11 +413,9 @@ def print_order(oid):
             
             res += b"-"*32 + b"\n"
             if is_receipt:
-                # 總計 (大字)
                 res += DBL_SIZE + BOLD_ON + f"TOTAL: ${int(total_price or 0)}\n".encode(ENCODE) + NORMAL_SIZE + BOLD_OFF
             
-            # 減少結尾留白 (減為 2 個 \n)
-            res += b"\n\n" + CUT 
+            res += b"\n" + CUT # 減少留白
             return res
 
         # 4. HTML 預覽生成
