@@ -683,6 +683,7 @@ def daily_report():
             <input type="date" id="dateInput" value="{target_date_str}" onchange="location.href='?date='+this.value">
             <button id="btnPrint" onclick="handlePrintClick()">🖨️ 列印報表</button>
             <div id="usbStatus" style="font-size:12px; margin-top:5px; color:#666;">偵測印表機中...</div>
+            <button onclick="location.href='/kitchen'" style="padding:10px 20px; font-size:16px; background:#fff; color:#000; border:2px solid #000; font-weight:bold; cursor:pointer; margin-left:10px;">🔙 返回看板</button>
         </div>
 
         <div class="ticket">
@@ -770,4 +771,5 @@ def daily_report():
     </body>
     </html>
     """
+
 
