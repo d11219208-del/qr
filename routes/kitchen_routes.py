@@ -616,50 +616,65 @@ def daily_report():
     v_stats = agg(v_raw)
     x_stats = agg(x_raw)
 
-    # --- 3. 生成 ESC/POS 二進制 (blob 格式) ---
+    # --- 3. 生成 ESC/POS 二進制 (所有文字放大至 x11) ---
     if output_format == 'blob':
         ESC, GS = b'\x1b', b'\x1d'
         ENCODE = 'cp950'
+        SIZE_LARGE = GS + b'!\x11' # 倍寬倍高 (x11)
         
-        res = ESC + b'@' 
-        res += ESC + b'a\x01' # 置中
-        res += GS + b'!\x11' + "日結營收報表\n".encode(ENCODE)
-        res += GS + b'!\x00' + f"{target_date_str}\n".encode(ENCODE)
-        res += f"列印時間: {now_tw.strftime('%H:%M:%S')}\n".encode(ENCODE)
-        res += b"="*32 + b"\n"
+        res = ESC + b'@' # 初始化
+        res += SIZE_LARGE # 設定全域最小尺寸為 x11
         
-        res += b"\n" + ESC + b'a\x00' # 靠左
+        # 標題區 (置中)
+        res += ESC + b'a\x01'
+        res += "日結營收報表\n".encode(ENCODE)
+        res += f"{target_date_str}\n".encode(ENCODE)
+        res += f"時間:{now_tw.strftime('%H:%M:%S')}\n".encode(ENCODE)
+        res += b"="*16 + b"\n"  # 字體變大，分隔線縮短為 16 個
+        
+        # 有效營收 (靠左)
+        res += b"\n" + ESC + b'a\x00'
         res += ESC + b'E\x01' + "有效營收\n".encode(ENCODE) + ESC + b'E\x00'
-        res += f"訂單: {v_count} 單  總計: ${v_total:,}\n".encode(ENCODE)
-        res += b"\n" + ESC + b'a\x01' + b"-"*32 + b"\n"
+        res += f"單數: {v_count}\n".encode(ENCODE)
+        res += f"總計: ${v_total:,}\n".encode(ENCODE)
+        res += b"\n" + ESC + b'a\x01' + b"-"*20 + b"\n"
         
+        # 作廢統計
         res += ESC + b'a\x00'
         res += ESC + b'E\x01' + "作廢統計\n".encode(ENCODE) + ESC + b'E\x00'
-        res += f"作廢: {x_count} 單  作廢額: ${x_total:,}\n".encode(ENCODE)
-        res += ESC + b'a\x01' + b"="*32 + b"\n"
+        res += f"單數: {x_count}\n".encode(ENCODE)
+        res += f"額度: ${x_total:,}\n".encode(ENCODE)
+        res += ESC + b'a\x01' + b"="*16 + b"\n"
         
+        # 商品銷售明細 (字大，建議名稱與數據分行或截短)
         res += b"\n" + ESC + b'a\x00'
-        res += ESC + b'E\x01' + "商品銷售明細\n".encode(ENCODE) + ESC + b'E\x00'
+        res += ESC + b'E\x01' + "銷售明細\n".encode(ENCODE) + ESC + b'E\x00'
         if not v_stats:
             res += "無\n".encode(ENCODE)
         else:
             for k, v in sorted(v_stats.items(), key=lambda x:x[1]['qty'], reverse=True):
-                res += f"{k[:14]:<16} x{v['qty']:>3} ${v['amt']:,}\n".encode(ENCODE, 'replace')
-        res += b"\n" + ESC + b'a\x01' + b"-"*32 + b"\n"
+                # 因為字體大，採「名稱」一行，「數量金額」一行
+                res += f"{k[:16]}\n".encode(ENCODE, 'replace')
+                res += f"  x{v['qty']:>2} ${v['amt']:,}\n".encode(ENCODE)
+        res += b"\n" + ESC + b'a\x01' + b"-"*20 + b"\n"
         
+        # 作廢商品明細
         res += ESC + b'a\x00'
-        res += ESC + b'E\x01' + "作廢商品明細\n".encode(ENCODE) + ESC + b'E\x00'
+        res += ESC + b'E\x01' + "作廢明細\n".encode(ENCODE) + ESC + b'E\x00'
         if not x_stats:
             res += "無\n".encode(ENCODE)
         else:
             for k, v in sorted(x_stats.items(), key=lambda x:x[1]['qty'], reverse=True):
-                res += f"{k[:14]:<16} x{v['qty']:>3} ${v['amt']:,}\n".encode(ENCODE, 'replace')
-        res += b"\n" + ESC + b'a\x01' + b"="*32 + b"\n"
+                res += f"{k[:16]}\n".encode(ENCODE, 'replace')
+                res += f"  x{v['qty']:>2} ${v['amt']:,}\n".encode(ENCODE)
+        res += b"\n" + ESC + b'a\x01' + b"="*16 + b"\n"
         
-        res += b"\n\n" + "經手人簽名\n\n\n".encode(ENCODE)
-        res += "____________________\n".encode(ENCODE)
-        res += "- End of Report -\n\n".encode(ENCODE)
-        res += b"\n\n\n" + GS + b'V\x42\x00'
+        # 簽名區
+        res += b"\n" + ESC + b'a\x00'
+        res += "經手人簽名:\n\n\n".encode(ENCODE)
+        res += "________________\n".encode(ENCODE)
+        res += "- End Report -\n\n".encode(ENCODE)
+        res += b"\n\n\n" + GS + b'V\x42\x00' # 切刀
         
         return jsonify({"status": "success", "blob": base64.b64encode(res).decode('utf-8')})
 
@@ -777,3 +792,4 @@ def daily_report():
     </body>
     </html>
     """
+
