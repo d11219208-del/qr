@@ -563,7 +563,7 @@ def sales_ranking():
 
 
 # --- 6. 日結報表 (HTML) - 補完部分 ---
-kitchen_bp.route('/report')
+@kitchen_bp.route('/report')
 def daily_report():
     # --- 1. 時間處理 (台灣時區 UTC+8) ---
     now_tw = datetime.utcnow() + timedelta(hours=8)
@@ -787,3 +787,4 @@ def daily_report():
     </body>
     </html>
     """
+
