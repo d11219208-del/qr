@@ -696,7 +696,7 @@ def daily_report():
             <div style="text-align:left;"><b>有效營收</b></div>
             <div style="text-align:left;">訂單: {v_count} 單  總計: ${v_total:,}</div>
             <br>
-            <div>-----------------------------------------------</div>
+            <div>----------------------------------------------------------</div>
             <div style="text-align:left;"><b>作廢統計</b></div>
             <div style="text-align:left;">作廢: {x_count} 單  作廢額: ${x_total:,}</div>
             <div>=================================</div>
@@ -705,7 +705,7 @@ def daily_report():
             <div class="detail-list">
                 {"".join([f"<div>{k} x{v['qty']} ${v['amt']:,}</div>" for k, v in v_stats.items()]) if v_stats else "無"}
             </div>
-            <div>-----------------------------------------------</div>
+            <div>----------------------------------------------------------</div>
             <div class="section-title">作廢商品明細</div>
             <div class="detail-list">
                 {"".join([f"<div>{k} x{v['qty']} ${v['amt']:,}</div>" for k, v in x_stats.items()]) if x_stats else "無"}
@@ -766,5 +766,6 @@ def daily_report():
     </body>
     </html>
     """
+
 
 
