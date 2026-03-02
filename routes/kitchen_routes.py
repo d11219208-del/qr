@@ -574,29 +574,25 @@ def daily_report():
     conn = get_db_connection()
     cur = conn.cursor()
     
-    # --- 2. 取得產品價格與訂單數據 ---
+    # --- 2. 取得產品數據 ---
     cur.execute("SELECT name, price FROM products")
     price_map = {row[0]: row[1] for row in cur.fetchall()}
     
-    # 有效訂單 (Pending, Completed)
     cur.execute("SELECT total_price, content_json FROM orders WHERE created_at >= %s AND created_at <= %s AND status IN ('Pending', 'Completed')", (utc_start, utc_end))
     v_raw = cur.fetchall()
     v_count, v_total = len(v_raw), sum([r[0] for r in v_raw if r[0]])
 
-    # 作廢訂單 (Cancelled)
     cur.execute("SELECT total_price, content_json FROM orders WHERE created_at >= %s AND created_at <= %s AND status = 'Cancelled'", (utc_start, utc_end))
     x_raw = cur.fetchall()
     x_count, x_total = len(x_raw), sum([r[0] for r in x_raw if r[0]])
     conn.close()
 
-    # 聚合商品統計函式
     def agg(rows):
         result = {}
         for r in rows:
             if not r[1]: continue
             try:
                 items = json.loads(r[1]) if isinstance(r[1], str) else r[1]
-                if not isinstance(items, list): items = []
                 for i in items:
                     name = i.get('name_zh', i.get('name', '商品'))
                     qty = int(float(i.get('qty', 1)))
@@ -611,60 +607,61 @@ def daily_report():
     v_stats = agg(v_raw)
     x_stats = agg(x_raw)
 
-    # --- 3. 生成 ESC/POS 二進制 (變數統一使用 res) ---
+    # --- 3. 生成 ESC/POS 二進制 (與 HTML 排版完全同步) ---
     if output_format == 'blob':
         ESC, GS = b'\x1b', b'\x1d'
-        ENCODE = 'cp950' # Big5
+        ENCODE = 'cp950'
         
         res = ESC + b'@' # 初始化
-        res += ESC + b'a\x01' # 全域置中
+        res += ESC + b'a\x01' # 置中
         
-        # 標題與日期
-        res += GS + b'!\x11' + "日結營收報表\n".encode(ENCODE) # 倍高倍寬
+        # 標題與時間
+        res += GS + b'!\x11' + "日結營收報表\n".encode(ENCODE)
         res += GS + b'!\x00' + f"{target_date_str}\n".encode(ENCODE)
         res += f"列印時間: {now_tw.strftime('%H:%M:%S')}\n".encode(ENCODE)
-        res += b"="*32 + b"\n"
+        res += b"="*32 + b"\n"  # 對應 HTML 的 ===
         
-        # 有效營收區塊
-        res += b"\n" + ESC + b'E\x01' + "有效營收\n".encode(ENCODE) + ESC + b'E\x00'
+        # 有效營收
+        res += b"\n" + ESC + b'a\x00' # 靠左
+        res += ESC + b'E\x01' + "有效營收\n".encode(ENCODE) + ESC + b'E\x00'
         res += f"訂單: {v_count} 單  總計: ${v_total:,}\n".encode(ENCODE)
-        res += b"-"*32 + b"\n"
+        res += b"\n" + ESC + b'a\x01' + b"-"*32 + b"\n" # 對應 HTML 的 ---
         
-        # 作廢統計區塊
-        res += b"\n" + ESC + b'E\x01' + "作廢統計\n".encode(ENCODE) + ESC + b'E\x00'
+        # 作廢統計
+        res += ESC + b'a\x00'
+        res += ESC + b'E\x01' + "作廢統計\n".encode(ENCODE) + ESC + b'E\x00'
         res += f"作廢: {x_count} 單  作廢額: ${x_total:,}\n".encode(ENCODE)
-        res += b"-"*32 + b"\n"
+        res += ESC + b'a\x01' + b"="*32 + b"\n" # 對應 HTML 的 ===
         
-        # 商品明細 (靠左對齊)
-        res += b"\n" + ESC + b'a\x00' 
+        # 商品銷售明細
+        res += b"\n" + ESC + b'a\x00'
         res += ESC + b'E\x01' + "商品銷售明細\n".encode(ENCODE) + ESC + b'E\x00'
-        if not v_stats: 
-            res += " (無數據)\n".encode(ENCODE)
+        if not v_stats:
+            res += "無\n".encode(ENCODE)
         else:
             for k, v in sorted(v_stats.items(), key=lambda x:x[1]['qty'], reverse=True):
-                # 限制品項名稱長度並填充空白
-                res += f"{k[:14]:<16} x{v['qty']:>3}  ${v['amt']:,}\n".encode(ENCODE, 'replace')
-        res += b"="*32 + b"\n"    
+                res += f"{k[:14]:<16} x{v['qty']:>3} ${v['amt']:,}\n".encode(ENCODE, 'replace')
+        res += b"\n" + ESC + b'a\x01' + b"-"*32 + b"\n"
         
         # 作廢商品明細
-        res += b"\n" + ESC + b'E\x01' + "作廢商品明細\n".encode(ENCODE) + ESC + b'E\x00'
-        if not x_stats: 
-            res += " (無數據)\n".encode(ENCODE)
+        res += ESC + b'a\x00'
+        res += ESC + b'E\x01' + "作廢商品明細\n".encode(ENCODE) + ESC + b'E\x00'
+        if not x_stats:
+            res += "無\n".encode(ENCODE)
         else:
             for k, v in sorted(x_stats.items(), key=lambda x:x[1]['qty'], reverse=True):
-                res += f"{k[:14]:<16} x{v['qty']:>3}  ${v['amt']:,}\n".encode(ENCODE, 'replace')
-        res += b"="*32 + b"\n"
+                res += f"{k[:14]:<16} x{v['qty']:>3} ${v['amt']:,}\n".encode(ENCODE, 'replace')
+        res += b"\n" + ESC + b'a\x01' + b"="*32 + b"\n"
         
-        # 結尾區塊
-        res += b"\n" + ESC + b'a\x01' # 恢復置中
-        res += b"\n" + "經手人簽名\n\n\n".encode(ENCODE)
+        # 簽名區
+        res += b"\n\n" + "經手人簽名\n\n\n".encode(ENCODE)
         res += "____________________\n".encode(ENCODE)
         res += "- End of Report -\n\n".encode(ENCODE)
-        res += b"\n\n\n" + GS + b'V\x42\x00' # 切刀指令
+        res += b"\n\n\n" + GS + b'V\x42\x00'
         
         return jsonify({"status": "success", "blob": base64.b64encode(res).decode('utf-8')})
 
-    # --- 4. HTML 頁面 (保持原邏輯供預覽與自動連線) ---
+    # --- 4. HTML 頁面 (保持原邏輯) ---
     return f"""
     <!DOCTYPE html>
     <html>
@@ -673,11 +670,12 @@ def daily_report():
         <title>日結報表_{target_date_str}</title>
         <style>
             body {{ font-family: sans-serif; background: #eee; display: flex; flex-direction: column; align-items: center; padding: 20px; }}
-            .ticket {{ background: white; width: 80mm; padding: 20px; text-align: center; border: 1px solid #ccc; }}
+            .ticket {{ background: white; width: 80mm; padding: 20px; text-align: center; border: 1px solid #ccc; box-sizing: border-box; }}
             .no-print {{ margin-bottom: 20px; }}
             button {{ padding: 10px 25px; font-weight: bold; cursor: pointer; background: #27ae60; color: white; border: none; border-radius: 5px; }}
             .detail-list {{ font-size: 13px; text-align: left; min-height: 30px; line-height: 1.6; }}
             .section-title {{ text-align: left; border-bottom: 1px solid #000; margin-top: 15px; font-weight: bold; }}
+            .line-divider {{ margin: 10px 0; overflow: hidden; white-space: nowrap; }}
         </style>
     </head>
     <body onload="autoConnectUSB()">
@@ -691,26 +689,32 @@ def daily_report():
             <h2 style="margin-bottom:5px;">日結營收報表</h2>
             <div>{target_date_str}</div>
             <div style="font-size:12px;">列印時間: {now_tw.strftime('%H:%M:%S')}</div>
-            <div>=================================</div>
-            <br>
+            <div class="line-divider">=================================</div>
+            
             <div style="text-align:left;"><b>有效營收</b></div>
             <div style="text-align:left;">訂單: {v_count} 單  總計: ${v_total:,}</div>
-            <br>
-            <div>----------------------------------------------------------</div>
+            
+            <div class="line-divider">---------------------------------</div>
+            
             <div style="text-align:left;"><b>作廢統計</b></div>
             <div style="text-align:left;">作廢: {x_count} 單  作廢額: ${x_total:,}</div>
-            <div>=================================</div>
+            
+            <div class="line-divider">=================================</div>
             
             <div class="section-title">商品銷售明細</div>
             <div class="detail-list">
                 {"".join([f"<div>{k} x{v['qty']} ${v['amt']:,}</div>" for k, v in v_stats.items()]) if v_stats else "無"}
             </div>
-            <div>----------------------------------------------------------</div>
+            
+            <div class="line-divider">---------------------------------</div>
+            
             <div class="section-title">作廢商品明細</div>
             <div class="detail-list">
                 {"".join([f"<div>{k} x{v['qty']} ${v['amt']:,}</div>" for k, v in x_stats.items()]) if x_stats else "無"}
             </div>
-            <div>=================================</div>
+            
+            <div class="line-divider">=================================</div>
+            
             <br><br>
             <div>經手人簽名</div>
             <br><br>
@@ -766,6 +770,3 @@ def daily_report():
     </body>
     </html>
     """
-
-
-
