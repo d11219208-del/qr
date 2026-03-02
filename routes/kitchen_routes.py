@@ -1,3 +1,4 @@
+
 from flask import Blueprint, render_template, request, jsonify
 import json
 import base64  # 用於 RawBT 編6ㄡ碼
@@ -350,7 +351,7 @@ def print_order(oid):
                 if found_idx < len(target_list): return target_list[found_idx]
             return opt_str
 
-        # 3. ESC/POS 生成函數
+        # 3. 核心 ESC/POS 生成函數
         def generate_content(title, item_list, is_receipt=False):
             if not item_list and not is_receipt: return b"" 
             
@@ -361,14 +362,24 @@ def print_order(oid):
             CUT = GS + b'V\x42\x00' 
             ENCODE = 'big5-hkscs' 
 
-            DBL_SIZE = GS + b'!\x11'     
-            CUSTOM_SIZE = GS + b'!\x01'  
+            # 大小公式定義
+            DBL_SIZE = GS + b'!\x11'     # 寬2高2
+            CUSTOM_SIZE = GS + b'!\x01'  # 1.5倍體感 (高度2倍)
             NORMAL_SIZE = GS + b'!\x00'
+            
+            # 微量送紙指令 (ESC J n)，n=20 約為 0.5 行高度
             HALF_LINE = ESC + b'J\x14'
 
+            # --- 單據開頭 ---
             res = RESET + CENTER + BOLD_ON + DBL_SIZE + title.encode(ENCODE, 'replace') + b"\n"
+            
+            # 流水號
             res += f"NO: #{seq:03d}\n".encode(ENCODE)
+            
+            # 桌號 (下方留一行空白)
             res += f"{display_tbl_name}\n\n".encode(ENCODE, 'replace') + NORMAL_SIZE
+            
+            # --- 客戶資訊 (1.5倍大) ---
             res += LEFT + f"TIME: {time_str}\n".encode(ENCODE)
             res += CUSTOM_SIZE
             if has_schedule: res += f"預約: {c_schedule}\n".encode(ENCODE, 'replace')
@@ -376,31 +387,45 @@ def print_order(oid):
             if has_contact: res += f"電話: {c_phone}\n".encode(ENCODE, 'replace')
             if has_addr: res += f"地址: {c_addr}\n".encode(ENCODE, 'replace')
             res += NORMAL_SIZE
+            
             res += b"="*32 + b"\n"
             
+            # --- 品項清單 ---
             for i in item_list:
                 name_zh = i.get('name_zh') or i.get('name')
                 qty = i.get('qty', 1)
                 target_lang = c_lang if is_receipt else 'zh'
-                display_name = name_zh
-                if not is_receipt and target_lang == 'en':
+
+                if target_lang in ['jp', 'kr']:
+                    display_name = name_zh
+                elif target_lang == 'en':
                     display_name = i.get('name_en') or name_zh
+                else:
+                    display_name = name_zh
                 
+                # 品項名稱與數量 (大字)
                 res += BOLD_ON + DBL_SIZE + f"{display_name} x{qty}\n".encode(ENCODE, 'replace') + NORMAL_SIZE + BOLD_OFF
+                
+                # 客製化選項處理
                 raw_opts = i.get('options') or i.get('options_zh') or []
                 opts_list = (raw_opts if isinstance(raw_opts, list) else [raw_opts])
                 opt_lang = 'zh' if target_lang in ['jp', 'kr'] else target_lang
                 translated_opts = [translate_option(name_zh, str(opt), opt_lang) for opt in opts_list]
                 
                 if translated_opts:
+                    # 在品項名稱與選項間加入 0.5 行空格
                     res += HALF_LINE
+                    # 選項內容 (1.5倍大)
                     res += CUSTOM_SIZE + f"  ({', '.join(translated_opts)})\n".encode(ENCODE, 'replace') + NORMAL_SIZE
+
                 res += b"-"*32 + b"\n"
             
-            res += b"\n"
+            #res += b"="*32 + b"\n"
+            res +=  b"\n"
             if is_receipt:
                 res += DBL_SIZE + BOLD_ON + f"TOTAL: ${int(total_price or 0)}\n".encode(ENCODE) + NORMAL_SIZE + BOLD_OFF
             
+            # 減少結尾留白 (原本4行減為2行)
             res += b"\n\n" + CUT 
             return res
 
@@ -412,7 +437,7 @@ def print_order(oid):
             h += f"<div class='info-box'><div class='table-row'><span class='table-val'>{display_tbl_name}</span></div>"
             h += f"<div class='time-row'>下單: {time_str}</div></div>"
             if has_schedule: h += f"<div class='schedule-row'>🕒 預約: {c_schedule}</div>"
-            if has_addr or has_contact or (c_name and str(c_name).strip()):
+            if is_delivery or has_contact or (c_name and str(c_name).strip()):
                 h += f"<div class='customer-info'>"
                 if c_name: h += f"<div class='cust-row'>👤 {c_name}</div>"
                 if has_contact: h += f"<div class='cust-row'>📞 {c_phone}</div>"
@@ -437,10 +462,11 @@ def print_order(oid):
                 h += f"<div class='total'>Total: ${int(total_price or 0)}</div>"
             return h + "</div>"
 
-        # --- 5. Base64 指令輸出模式 (用於 WebUSB) ---
+        # 5. 輸出處理
         if output_format == 'base64':
             full_bin_payload = b""
             init_cmds = b'\x1b\x40\x1c\x26\x1b\x74\x0d' 
+            
             if print_type in ['all', 'receipt']:
                 full_bin_payload += init_cmds + generate_content("結帳單 Receipt", items, is_receipt=True)
             if print_type in ['all', 'kitchen']:
@@ -453,7 +479,6 @@ def print_order(oid):
                 "blob": base64.b64encode(full_bin_payload).decode('utf-8')
             })
 
-        # --- 6. HTML 頁面模式 (含 WebUSB 控制器) ---
         html_content = ""
         if print_type in ['all', 'receipt']:
             html_content += generate_html_content("結帳單 Receipt", items, is_receipt=True)
@@ -462,121 +487,16 @@ def print_order(oid):
             if soup_items: html_content += generate_html_content("廚房單 - 湯區", soup_items)
             if other_items: html_content += generate_html_content("廚房單 - 其他", other_items)
 
-        style = """
-        <style>
-            @page { size: 80mm auto; margin: 0mm; } 
-            body { font-family: 'Microsoft JhengHei', sans-serif; width: 78mm; margin: 0 auto; padding: 2px; background: #f0f0f0; } 
-            .ticket { background: white; border-bottom: 3px dashed #000; padding: 10px; margin-bottom: 10px; position: relative; box-shadow: 0 2px 5px rgba(0,0,0,0.1); } 
-            .head h2 { font-size: 24px; margin: 0; border: 2px solid #000; padding: 4px 10px; display: inline-block; font-weight: 900; } 
-            .head h1 { font-size: 42px; margin: 5px 0; font-weight: 900; } 
-            .info-box { border-bottom: 2px solid #000; padding-bottom: 5px; } 
-            .table-val { font-size: 36px; font-weight: 900; } 
-            .time-row { font-size: 14px; text-align: center; } 
-            .customer-info { border: 2px solid #000; padding: 6px; font-size: 18px; font-weight: bold; margin-top: 5px; } 
-            .addr-row { font-size: 24px; font-weight: 900; border-top: 1px dashed #000; } 
-            .schedule-row { font-size: 22px; font-weight: 900; background: #000; color: #fff; text-align: center; } 
-            .item-row { display: flex; justify-content: space-between; font-size: 24px; font-weight: 900; margin-top: 5px;} 
-            .item-name-sub { font-size: 16px; display: block; color: #555; } 
-            .opt { font-size: 18px; font-weight: bold; padding-left: 10px; } 
-            .total { text-align: right; font-size: 28px; font-weight: 900; border-top: 2px solid #000; margin-top: 10px; }
-            .no-print-area { position: sticky; top: 0; background: #fff; padding: 10px; border: 1px solid #ccc; z-index: 100; text-align: center; }
-            .btn-print { background: #27ae60; color: white; padding: 10px 20px; font-size: 20px; font-weight: bold; border: none; border-radius: 5px; cursor: pointer; }
-            .usb-status { font-size: 12px; color: #666; margin-top: 5px; }
-            .void-watermark { position: absolute; top: 20%; left: 10%; font-size: 80px; color: rgba(255,0,0,0.2); transform: rotate(-30deg); font-weight: 900; z-index: 10; pointer-events: none; }
-        </style>
-        """
+        style = "<style>@page { size: 80mm auto; margin: 0mm; } body { font-family: 'Microsoft JhengHei', sans-serif; width: 78mm; margin: 0 auto; padding: 2px; } .ticket { border-bottom: 3px dashed #000; padding: 10px 0 30px 0; margin-bottom: 10px; page-break-after: always; position: relative; } .head h2 { font-size: 24px; margin: 0; border: 2px solid #000; padding: 4px 10px; display: inline-block; font-weight: 900; } .head h1 { font-size: 42px; margin: 5px 0; font-weight: 900; } .info-box { border-bottom: 2px solid #000; padding-bottom: 5px; } .table-row { text-align: center; } .table-val { font-size: 36px; font-weight: 900; } .time-row { font-size: 14px; text-align: center; } .customer-info { border: 2px solid #000; padding: 6px; font-size: 18px; font-weight: bold; } .addr-row { font-size: 24px; font-weight: 900; border-top: 1px dashed #000; } .schedule-row { font-size: 22px; font-weight: 900; background: #000; color: #fff; text-align: center; } .item-row { display: flex; justify-content: space-between; font-size: 24px; font-weight: 900; margin-top: 5px;} .item-name-sub { font-size: 16px; display: block; color: #555; } .opt { font-size: 18px; font-weight: bold; padding-left: 10px; } .total { text-align: right; font-size: 28px; font-weight: 900; border-top: 2px solid #000; margin-top: 10px; }</style>"
+        
+        if output_format == 'raw':
+            return html_content
 
-        return f"""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <meta charset="UTF-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <title>列印單據 #{seq}</title>
-            {style}
-        </head>
-        <body onload="autoConnectUSB()">
-            <div class="no-print-area">
-                <button class="btn-print" id="btnPrint" onclick="handlePrint()">🖨️ 立即列印</button>
-                <div class="usb-status" id="usbStatus">正在檢查印表機連線...</div>
-                <button onclick="window.close()" style="margin-top:10px; background:#666; color:#fff; border:none; padding:5px 10px; border-radius:3px; cursor:pointer;">🔙 返回看板</button>
-            </div>
-            
-            <div id="printContent">
-                {html_content}
-            </div>
+        rawbt_html_source = f"<html><head><meta charset='utf-8'>{style}</head><body>{html_content}</body></html>"
+        b64_html = base64.b64encode(rawbt_html_source.encode('utf-8')).decode('utf-8')
+        intent_url = f"intent:base64,{b64_html}#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;S.jobName=Order_{seq};S.editor=false;end;"
 
-            <script>
-                let device = null;
-
-                async function autoConnectUSB() {{
-                    const statusDiv = document.getElementById('usbStatus');
-                    try {{
-                        // 1. 檢查是否已有授權裝置
-                        const devices = await navigator.usb.getDevices();
-                        if (devices.length > 0) {{
-                            device = devices[0];
-                            await device.open();
-                            await device.selectConfiguration(1);
-                            await device.claimInterface(device.configuration.interfaces[0].interfaceNumber);
-                            statusDiv.innerText = "✅ 已自動連線: " + device.productName;
-                            statusDiv.style.color = "green";
-                            
-                            // 2. 如果是自動連線成功，則自動觸發一次列印
-                            handlePrint();
-                        }} else {{
-                            statusDiv.innerText = "⚠️ 尚未配對 USB 印表機，請點擊列印進行配對";
-                        }}
-                    }} catch (err) {{
-                        console.error(err);
-                        statusDiv.innerText = "❌ 連線異常: " + err.message;
-                    }}
-                }}
-
-                async function handlePrint() {{
-                    const statusDiv = document.getElementById('usbStatus');
-                    try {{
-                        // 若無連線，請求配對
-                        if (!device) {{
-                            device = await navigator.usb.requestDevice({{ filters: [] }});
-                            await device.open();
-                            await device.selectConfiguration(1);
-                            await device.claimInterface(device.configuration.interfaces[0].interfaceNumber);
-                            statusDiv.innerText = "✅ 連線成功: " + device.productName;
-                        }}
-
-                        // 向後端請求二進制 Base64 資料
-                        const urlParams = new URLSearchParams(window.location.search);
-                        const printType = urlParams.get('type') || 'all';
-                        const res = await fetch(`/kitchen/print_order/{oid}?format=base64&type=${{printType}}`);
-                        const data = await res.json();
-
-                        if (data.status === 'success') {{
-                            const binaryString = window.atob(data.blob);
-                            const bytes = new Uint8Array(binaryString.length);
-                            for (let i = 0; i < binaryString.length; i++) {{
-                                bytes[i] = binaryString.charCodeAt(i);
-                            }}
-
-                            // 尋找 OUT 端點
-                            const interface = device.configuration.interfaces[0];
-                            const endpoint = interface.alternate.endpoints.find(e => e.direction === 'out').endpointNumber;
-                            
-                            await device.transferOut(endpoint, bytes);
-                            statusDiv.innerText = "✨ 列印指令發送成功";
-                            
-                            // 列印後 1.5 秒自動關閉視窗 (如不需要可註解)
-                            setTimeout(() => {{ if(window.opener) window.close(); }}, 1500);
-                        }}
-                    }} catch (err) {{
-                        alert("列印錯誤: " + err.message);
-                        statusDiv.innerText = "❌ 列印失敗";
-                    }}
-                }}
-            </script>
-        </body>
-        </html>
-        """
+        return f"<!DOCTYPE html><html><head><meta charset='utf-8'><title>Print Order</title>{style}</head><body>{html_content}<script>if(/android/i.test(navigator.userAgent)){{window.location.href='{intent_url}';setTimeout(function(){{if(window.opener)window.close();}},1500);}}</script></body></html>"
 
     except Exception as e:
         traceback.print_exc()
@@ -857,4 +777,3 @@ def daily_report():
     </body>
     </html>
     """
-
