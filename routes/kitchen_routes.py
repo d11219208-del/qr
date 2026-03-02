@@ -568,8 +568,13 @@ def daily_report():
     # --- 1. 時間處理 (台灣時區 UTC+8) ---
     now_tw = datetime.utcnow() + timedelta(hours=8)
     target_date_str = request.args.get('date') or now_tw.strftime('%Y-%m-%d')
-    # 假設 get_tw_time_range 已在外部定義
-    utc_start, utc_end = get_tw_time_range(target_date_str)
+    
+    # 取得資料庫查詢範圍
+    try:
+        utc_start, utc_end = get_tw_time_range(target_date_str)
+    except:
+        utc_start, utc_end = now_tw.replace(hour=0, minute=0), now_tw.replace(hour=23, minute=59)
+
     output_format = request.args.get('format', 'html')
     
     conn = get_db_connection()
@@ -615,28 +620,23 @@ def daily_report():
         ESC, GS = b'\x1b', b'\x1d'
         ENCODE = 'cp950'
         
-        res = ESC + b'@' # 初始化
+        res = ESC + b'@' 
         res += ESC + b'a\x01' # 置中
-        
-        # 標題與日期
         res += GS + b'!\x11' + "日結營收報表\n".encode(ENCODE)
         res += GS + b'!\x00' + f"{target_date_str}\n".encode(ENCODE)
         res += f"列印時間: {now_tw.strftime('%H:%M:%S')}\n".encode(ENCODE)
         res += b"="*32 + b"\n"
         
-        # 有效營收區塊
         res += b"\n" + ESC + b'a\x00' # 靠左
         res += ESC + b'E\x01' + "有效營收\n".encode(ENCODE) + ESC + b'E\x00'
         res += f"訂單: {v_count} 單  總計: ${v_total:,}\n".encode(ENCODE)
         res += b"\n" + ESC + b'a\x01' + b"-"*32 + b"\n"
         
-        # 作廢統計區塊
         res += ESC + b'a\x00'
         res += ESC + b'E\x01' + "作廢統計\n".encode(ENCODE) + ESC + b'E\x00'
         res += f"作廢: {x_count} 單  作廢額: ${x_total:,}\n".encode(ENCODE)
         res += ESC + b'a\x01' + b"="*32 + b"\n"
         
-        # 商品銷售明細
         res += b"\n" + ESC + b'a\x00'
         res += ESC + b'E\x01' + "商品銷售明細\n".encode(ENCODE) + ESC + b'E\x00'
         if not v_stats:
@@ -646,7 +646,6 @@ def daily_report():
                 res += f"{k[:14]:<16} x{v['qty']:>3} ${v['amt']:,}\n".encode(ENCODE, 'replace')
         res += b"\n" + ESC + b'a\x01' + b"-"*32 + b"\n"
         
-        # 作廢商品明細
         res += ESC + b'a\x00'
         res += ESC + b'E\x01' + "作廢商品明細\n".encode(ENCODE) + ESC + b'E\x00'
         if not x_stats:
@@ -656,7 +655,6 @@ def daily_report():
                 res += f"{k[:14]:<16} x{v['qty']:>3} ${v['amt']:,}\n".encode(ENCODE, 'replace')
         res += b"\n" + ESC + b'a\x01' + b"="*32 + b"\n"
         
-        # 結尾
         res += b"\n\n" + "經手人簽名\n\n\n".encode(ENCODE)
         res += "____________________\n".encode(ENCODE)
         res += "- End of Report -\n\n".encode(ENCODE)
@@ -665,7 +663,6 @@ def daily_report():
         return jsonify({"status": "success", "blob": base64.b64encode(res).decode('utf-8')})
 
     # --- 4. HTML 頁面渲染 ---
-    # 注意：這裡所有的 JavaScript 括號都必須是雙括號 {{ }} 以免與 Python f-string 衝突
     return f"""
     <!DOCTYPE html>
     <html>
@@ -676,10 +673,11 @@ def daily_report():
             body {{ font-family: sans-serif; background: #eee; display: flex; flex-direction: column; align-items: center; padding: 20px; }}
             .ticket {{ background: white; width: 80mm; padding: 20px; text-align: center; border: 1px solid #ccc; box-sizing: border-box; }}
             .no-print {{ margin-bottom: 20px; display: flex; align-items: center; justify-content: center; gap: 10px; }}
-            button {{ padding: 10px 25px; font-weight: bold; cursor: pointer; border-radius: 5px; border: none; }}
+            button {{ padding: 10px 20px; font-weight: bold; cursor: pointer; border-radius: 5px; border: none; }}
             .btn-print {{ background: #27ae60; color: white; }}
-            .btn-back {{ background: #fff; color: #000; border: 2px solid #000; text-decoration: none; display: inline-block; font-size: 16px; }}
-            .detail-list {{ font-size: 13px; text-align: left; min-height: 30px; line-height: 1.6; }}
+            /* 返回看板按鈕樣式 */
+            .btn-close {{ background: #fff; color: #000; border: 2px solid #000; font-size: 16px; }}
+            .detail-list {{ font-size: 13px; text-align: left; line-height: 1.6; }}
             .section-title {{ text-align: left; border-bottom: 1px solid #000; margin-top: 15px; font-weight: bold; }}
             .line-divider {{ margin: 10px 0; overflow: hidden; white-space: nowrap; }}
         </style>
@@ -688,43 +686,39 @@ def daily_report():
         <div class="no-print">
             <input type="date" id="dateInput" value="{target_date_str}" onchange="location.href='?date='+this.value">
             <button id="btnPrint" class="btn-print" onclick="handlePrintClick()">🖨️ 列印報表</button>
-            <button class="btn-back" onclick="location.href='/kitchen'">🔙 返回看板</button>
+            
+            <button class="btn-close" onclick="window.close()">🔙 返回看板</button>
         </div>
+        
         <div id="usbStatus" style="font-size:12px; margin-bottom:15px; color:#666;">偵測印表機中...</div>
 
         <div class="ticket">
-            <h2 style="margin-bottom:5px;">日結營收報表</h2>
-            <div>{target_date_str}</div>
+            <h2 style="margin:0;">日結營收報表</h2>
+            <div style="font-size:14px;">{target_date_str}</div>
             <div style="font-size:12px;">列印時間: {now_tw.strftime('%H:%M:%S')}</div>
-            <div class="line-divider">=================================</div>
+            <div class="line-divider">==========================</div>
             
             <div style="text-align:left;"><b>有效營收</b></div>
             <div style="text-align:left;">訂單: {v_count} 單  總計: ${v_total:,}</div>
-            
-            <div class="line-divider">---------------------------------</div>
+            <div class="line-divider">--------------------------</div>
             
             <div style="text-align:left;"><b>作廢統計</b></div>
             <div style="text-align:left;">作廢: {x_count} 單  作廢額: ${x_total:,}</div>
-            
-            <div class="line-divider">=================================</div>
+            <div class="line-divider">==========================</div>
             
             <div class="section-title">商品銷售明細</div>
             <div class="detail-list">
                 {"".join([f"<div>{k} x{v['qty']} ${v['amt']:,}</div>" for k, v in v_stats.items()]) if v_stats else "無"}
             </div>
             
-            <div class="line-divider">---------------------------------</div>
-            
+            <div class="line-divider">--------------------------</div>
             <div class="section-title">作廢商品明細</div>
             <div class="detail-list">
                 {"".join([f"<div>{k} x{v['qty']} ${v['amt']:,}</div>" for k, v in x_stats.items()]) if x_stats else "無"}
             </div>
+            <div class="line-divider">==========================</div>
             
-            <div class="line-divider">=================================</div>
-            
-            <br><br>
-            <div>經手人簽名</div>
-            <br><br>
+            <br><br><div>經手人簽名</div><br><br>
             <div>____________________</div>
             <div style="font-size:12px; margin-top:10px;">- End of Report -</div>
         </div>
@@ -743,8 +737,6 @@ def daily_report():
                         await device.claimInterface(device.configuration.interfaces[0].interfaceNumber);
                         statusDiv.innerText = "✅ 已自動連接: " + device.productName;
                         statusDiv.style.color = "green";
-                    }} else {{
-                        statusDiv.innerText = "❌ 未授權印表機";
                     }}
                 }} catch (err) {{
                     statusDiv.innerText = "⚠️ 連線異常: " + err.message;
@@ -752,20 +744,18 @@ def daily_report():
             }}
 
             async function handlePrintClick() {{
-                const statusDiv = document.getElementById('usbStatus');
                 if (!device) {{
                     try {{
                         device = await navigator.usb.requestDevice({{ filters: [] }});
                         await device.open();
                         await device.selectConfiguration(1);
                         await device.claimInterface(device.configuration.interfaces[0].interfaceNumber);
-                    }} catch (e) {{ 
-                        return alert("未選擇裝置"); 
-                    }}
+                    }} catch (e) {{ return alert("未選擇裝置"); }}
                 }}
 
                 try {{
                     const date = document.getElementById('dateInput').value;
+                    // 請確認 API 路徑是否包含 /kitchen
                     const res = await fetch(`/kitchen/report?date=${{date}}&format=blob`);
                     const data = await res.json();
                     
@@ -777,8 +767,7 @@ def daily_report():
 
                     const endpoint = device.configuration.interfaces[0].alternate.endpoints.find(e => e.direction === 'out').endpointNumber;
                     await device.transferOut(endpoint, bytes);
-                    statusDiv.innerText = "✨ 列印發送成功";
-                    statusDiv.style.color = "blue";
+                    document.getElementById('usbStatus').innerText = "✨ 列印發送成功";
                 }} catch (err) {{
                     alert("列印失敗: " + err.message);
                 }}
@@ -787,4 +776,3 @@ def daily_report():
     </body>
     </html>
     """
-
