@@ -1,6 +1,6 @@
 from flask import Blueprint, render_template, request, jsonify
 import json
-import base64  # 用於 RawBT 編碼
+import base64  # 用於 RawBT 編6ㄡ碼
 import traceback 
 from datetime import datetime, timedelta
 from database import get_db_connection
@@ -591,69 +591,78 @@ def daily_report():
 
     # 聚合商品統計函式
     def agg(rows):
-        res = {}
+        result = {}
         for r in rows:
             if not r[1]: continue
             try:
                 items = json.loads(r[1]) if isinstance(r[1], str) else r[1]
+                if not isinstance(items, list): items = []
                 for i in items:
                     name = i.get('name_zh', i.get('name', '商品'))
                     qty = int(float(i.get('qty', 1)))
                     p_val = i.get('price')
                     price = int(float(p_val)) if p_val is not None else price_map.get(name, 0)
-                    if name not in res: res[name] = {'qty':0, 'amt':0}
-                    res[name]['qty'] += qty
-                    res[name]['amt'] += (qty * price)
+                    if name not in result: result[name] = {'qty':0, 'amt':0}
+                    result[name]['qty'] += qty
+                    result[name]['amt'] += (qty * price)
             except: continue
-        return res
+        return result
 
     v_stats = agg(v_raw)
     x_stats = agg(x_raw)
 
-    # --- 3. 生成 ESC/POS 二進制 (精確符合您的排版需求) ---
+    # --- 3. 生成 ESC/POS 二進制 (變數統一使用 res) ---
     if output_format == 'blob':
         ESC, GS = b'\x1b', b'\x1d'
         ENCODE = 'cp950' # Big5
         
-        raw = ESC + b'@' # 初始化
-        raw += ESC + b'a\x01' # 全域置中
+        res = ESC + b'@' # 初始化
+        res += ESC + b'a\x01' # 全域置中
         
         # 標題與日期
-        raw += GS + b'!\x11' + "日結營收報表\n".encode(ENCODE) # 倍高倍寬
-        raw += GS + b'!\x00' + f"{target_date_str}\n".encode(ENCODE)
-        raw += f"列印時間: {now_tw.strftime('%H:%M:%S')}\n".encode(ENCODE)
+        res += GS + b'!\x11' + "日結營收報表\n".encode(ENCODE) # 倍高倍寬
+        res += GS + b'!\x00' + f"{target_date_str}\n".encode(ENCODE)
+        res += f"列印時間: {now_tw.strftime('%H:%M:%S')}\n".encode(ENCODE)
         res += b"="*32 + b"\n"
         
         # 有效營收區塊
-        raw += b"\n" + ESC + b'E\x01' + "有效營收\n".encode(ENCODE) + ESC + b'E\x00'
-        raw += f"訂單: {v_count} 單  總計: ${v_total:,}\n".encode(ENCODE)
+        res += b"\n" + ESC + b'E\x01' + "有效營收\n".encode(ENCODE) + ESC + b'E\x00'
+        res += f"訂單: {v_count} 單  總計: ${v_total:,}\n".encode(ENCODE)
         res += b"-"*32 + b"\n"
         
         # 作廢統計區塊
-        raw += b"\n" + ESC + b'E\x01' + "作廢統計\n".encode(ENCODE) + ESC + b'E\x00'
-        raw += f"作廢: {x_count} 單  作廢額: ${x_total:,}\n".encode(ENCODE)
+        res += b"\n" + ESC + b'E\x01' + "作廢統計\n".encode(ENCODE) + ESC + b'E\x00'
+        res += f"作廢: {x_count} 單  作廢額: ${x_total:,}\n".encode(ENCODE)
         res += b"-"*32 + b"\n"
         
-        # 商品明細 (靠左對齊較好閱讀)
-        raw += b"\n" + ESC + b'a\x00' 
-        raw += ESC + b'E\x01' + "商品銷售明細\n".encode(ENCODE) + ESC + b'E\x00'
-        if not v_stats: raw += " (無數據)\n".encode(ENCODE)
-        for k, v in sorted(v_stats.items(), key=lambda x:x[1]['qty'], reverse=True):
-            raw += f"{k[:14]:<16} x{v['qty']:>3}  ${v['amt']:,}\n".encode(ENCODE, 'replace')
+        # 商品明細 (靠左對齊)
+        res += b"\n" + ESC + b'a\x00' 
+        res += ESC + b'E\x01' + "商品銷售明細\n".encode(ENCODE) + ESC + b'E\x00'
+        if not v_stats: 
+            res += " (無數據)\n".encode(ENCODE)
+        else:
+            for k, v in sorted(v_stats.items(), key=lambda x:x[1]['qty'], reverse=True):
+                # 限制品項名稱長度並填充空白
+                res += f"{k[:14]:<16} x{v['qty']:>3}  ${v['amt']:,}\n".encode(ENCODE, 'replace')
         res += b"="*32 + b"\n"    
-        raw += b"\n" + ESC + b'E\x01' + "作廢商品明細\n".encode(ENCODE) + ESC + b'E\x00'
-        if not x_stats: raw += " (無數據)\n".encode(ENCODE)
-        for k, v in sorted(x_stats.items(), key=lambda x:x[1]['qty'], reverse=True):
-            raw += f"{k[:14]:<16} x{v['qty']:>3}  ${v['amt']:,}\n".encode(ENCODE, 'replace')
-        res += b"="*32 + b"\n"
-        # 結尾區塊
-        raw += b"\n" + ESC + b'a\x01' # 恢復置中
-        raw += b"\n" + "經手人簽名\n\n\n".encode(ENCODE)
-        raw += "____________________\n".encode(ENCODE)
-        raw += "- End of Report -\n\n".encode(ENCODE)
-        raw += b"\n\n\n" + GS + b'V\x42\x00' # 切刀
         
-        return jsonify({"status": "success", "blob": base64.b64encode(raw).decode('utf-8')})
+        # 作廢商品明細
+        res += b"\n" + ESC + b'E\x01' + "作廢商品明細\n".encode(ENCODE) + ESC + b'E\x00'
+        if not x_stats: 
+            res += " (無數據)\n".encode(ENCODE)
+        else:
+            for k, v in sorted(x_stats.items(), key=lambda x:x[1]['qty'], reverse=True):
+                res += f"{k[:14]:<16} x{v['qty']:>3}  ${v['amt']:,}\n".encode(ENCODE, 'replace')
+        res += b"="*32 + b"\n"
+        
+        # 結尾區塊
+        res += b"\n" + ESC + b'a\x01' # 恢復置中
+        res += b"\n" + "經手人簽名\n\n\n".encode(ENCODE)
+        res += "____________________\n".encode(ENCODE)
+        res += "- End of Report -\n\n".encode(ENCODE)
+        res += b"\n\n\n" + GS + b'V\x42\x00' # 切刀指令
+        
+        return jsonify({"status": "success", "blob": base64.b64encode(res).decode('utf-8')})
 
     # --- 4. HTML 頁面 (保持原邏輯供預覽與自動連線) ---
     return f"""
@@ -666,9 +675,9 @@ def daily_report():
             body {{ font-family: sans-serif; background: #eee; display: flex; flex-direction: column; align-items: center; padding: 20px; }}
             .ticket {{ background: white; width: 80mm; padding: 20px; text-align: center; border: 1px solid #ccc; }}
             .no-print {{ margin-bottom: 20px; }}
-            .summary-box {{ border: 1px solid #000; padding: 10px; margin: 10px 0; text-align: left; }}
-            hr {{ border: 0; border-top: 1px dashed #000; }}
             button {{ padding: 10px 25px; font-weight: bold; cursor: pointer; background: #27ae60; color: white; border: none; border-radius: 5px; }}
+            .detail-list {{ font-size: 13px; text-align: left; min-height: 30px; line-height: 1.6; }}
+            .section-title {{ text-align: left; border-bottom: 1px solid #000; margin-top: 15px; font-weight: bold; }}
         </style>
     </head>
     <body onload="autoConnectUSB()">
@@ -688,16 +697,17 @@ def daily_report():
             <br>
             <div style="text-align:left;"><b>作廢統計</b></div>
             <div style="text-align:left;">作廢: {x_count} 單  作廢額: ${x_total:,}</div>
-            <br>
-            <div style="text-align:left; border-bottom:1px solid #000;"><b>商品銷售明細</b></div>
-            <div style="font-size:13px; text-align:left; min-height:50px;">
+            
+            <div class="section-title">商品銷售明細</div>
+            <div class="detail-list">
                 {"".join([f"<div>{k} x{v['qty']} ${v['amt']:,}</div>" for k, v in v_stats.items()]) if v_stats else "無"}
             </div>
-            <br>
-            <div style="text-align:left; border-bottom:1px solid #000;"><b>作廢商品明細</b></div>
-            <div style="font-size:13px; text-align:left; min-height:50px;">
+            
+            <div class="section-title">作廢商品明細</div>
+            <div class="detail-list">
                 {"".join([f"<div>{k} x{v['qty']} ${v['amt']:,}</div>" for k, v in x_stats.items()]) if x_stats else "無"}
             </div>
+            
             <br><br>
             <div>經手人簽名</div>
             <br><br>
@@ -753,4 +763,3 @@ def daily_report():
     </body>
     </html>
     """
-
