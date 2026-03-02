@@ -622,14 +622,17 @@ def daily_report():
         raw += GS + b'!\x11' + "日結營收報表\n".encode(ENCODE) # 倍高倍寬
         raw += GS + b'!\x00' + f"{target_date_str}\n".encode(ENCODE)
         raw += f"列印時間: {now_tw.strftime('%H:%M:%S')}\n".encode(ENCODE)
+        res += b"="*32 + b"\n"
         
         # 有效營收區塊
         raw += b"\n" + ESC + b'E\x01' + "有效營收\n".encode(ENCODE) + ESC + b'E\x00'
         raw += f"訂單: {v_count} 單  總計: ${v_total:,}\n".encode(ENCODE)
+        res += b"-"*32 + b"\n"
         
         # 作廢統計區塊
         raw += b"\n" + ESC + b'E\x01' + "作廢統計\n".encode(ENCODE) + ESC + b'E\x00'
         raw += f"作廢: {x_count} 單  作廢額: ${x_total:,}\n".encode(ENCODE)
+        res += b"-"*32 + b"\n"
         
         # 商品明細 (靠左對齊較好閱讀)
         raw += b"\n" + ESC + b'a\x00' 
@@ -637,12 +640,12 @@ def daily_report():
         if not v_stats: raw += " (無數據)\n".encode(ENCODE)
         for k, v in sorted(v_stats.items(), key=lambda x:x[1]['qty'], reverse=True):
             raw += f"{k[:14]:<16} x{v['qty']:>3}  ${v['amt']:,}\n".encode(ENCODE, 'replace')
-            
+        res += b"="*32 + b"\n"    
         raw += b"\n" + ESC + b'E\x01' + "作廢商品明細\n".encode(ENCODE) + ESC + b'E\x00'
         if not x_stats: raw += " (無數據)\n".encode(ENCODE)
         for k, v in sorted(x_stats.items(), key=lambda x:x[1]['qty'], reverse=True):
             raw += f"{k[:14]:<16} x{v['qty']:>3}  ${v['amt']:,}\n".encode(ENCODE, 'replace')
-
+        res += b"="*32 + b"\n"
         # 結尾區塊
         raw += b"\n" + ESC + b'a\x01' # 恢復置中
         raw += b"\n" + "經手人簽名\n\n\n".encode(ENCODE)
@@ -750,3 +753,4 @@ def daily_report():
     </body>
     </html>
     """
+
