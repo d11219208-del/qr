@@ -565,125 +565,117 @@ def sales_ranking():
 # --- 6. 日結報表 (HTML) - 補完部分 ---
 @kitchen_bp.route('/report')
 def daily_report():
-    # 1. 時間處理
+    # --- 1. 時間處理 (維持原邏輯) ---
     target_date_str = request.args.get('date') or (datetime.utcnow() + timedelta(hours=8)).strftime('%Y-%m-%d')
     utc_start, utc_end = get_tw_time_range(target_date_str)
-    
-    # 取得輸出格式 (html 或 blob)
     output_format = request.args.get('format', 'html')
     
     conn = get_db_connection()
     cur = conn.cursor()
     
-    # 2. 取得產品價格表
+    # --- 2. 取得產品價格表 ---
     cur.execute("SELECT name, price FROM products")
     price_map = {row[0]: row[1] for row in cur.fetchall()}
     
-    # 3. 統計：有效訂單 (Pending + Completed)
+    # --- 3. 統計：有效訂單 (修正 GROUP BY 邏輯避免重複計算) ---
     cur.execute("""
-        SELECT COUNT(*), SUM(total_price), content_json 
+        SELECT total_price, content_json 
         FROM orders 
         WHERE created_at >= %s AND created_at <= %s 
         AND status IN ('Pending', 'Completed')
-        GROUP BY id, total_price, content_json
     """, (utc_start, utc_end))
-    v_rows = cur.fetchall()
-    v_count = len(v_rows)
-    v_total = sum([r[1] for r in v_rows if r[1]])
+    v_raw = cur.fetchall()
+    v_count = len(v_raw)
+    v_total = sum([r[0] for r in v_raw if r[0]])
 
-    # 4. 統計：作廢訂單 (Cancelled)
+    # --- 4. 統計：作廢訂單 ---
     cur.execute("""
-        SELECT COUNT(*), SUM(total_price), content_json 
+        SELECT total_price, content_json 
         FROM orders 
         WHERE created_at >= %s AND created_at <= %s 
         AND status = 'Cancelled'
-        GROUP BY id, total_price, content_json
     """, (utc_start, utc_end))
-    x_rows = cur.fetchall()
-    x_count = len(x_rows)
-    x_total = sum([r[1] for r in x_rows if r[1]])
+    x_raw = cur.fetchall()
+    x_count = len(x_raw)
+    x_total = sum([r[0] for r in x_raw if r[0]])
     conn.close()
 
-    # 5. 聚合商品統計函式
+    # --- 5. 聚合商品統計函式 ---
     def agg(rows):
         res = {}
         for r in rows:
-            if not r[2]: continue
+            content = r[1]
+            if not content: continue
             try:
-                items = json.loads(r[2]) if isinstance(r[2], str) else r[2]
-                if not isinstance(items, list): items = []
+                items = json.loads(content) if isinstance(content, str) else content
                 for i in items:
                     name = i.get('name_zh', i.get('name', '商品'))
                     qty = int(float(i.get('qty', 1)))
-                    price_val = i.get('price')
-                    price = int(float(price_val)) if price_val is not None else price_map.get(name, 0)
+                    p_val = i.get('price')
+                    price = int(float(p_val)) if p_val is not None else price_map.get(name, 0)
                     if name not in res: res[name] = {'qty':0, 'amt':0}
                     res[name]['qty'] += qty
                     res[name]['amt'] += (qty * price)
             except: continue
         return res
 
-    v_stats = agg(v_rows)
-    x_stats = agg(x_rows)
+    v_stats = agg(v_raw)
+    x_stats = agg(x_raw)
 
-    # --- 關鍵部分：產生 ESC/POS 二進制指令 ---
+    # --- 6. 核心：ESC/POS 二進制生成 (針對 WebUSB/Big5) ---
     if output_format == 'blob':
         ESC = b'\x1b'
         GS = b'\x1d'
-        # 使用繁體中文編碼，若印表機不支援可改用 'utf-8' 或 'cp950'
-        ENCODE = 'big5-hkscs' 
+        ENCODE = 'cp950' # Big5 在 Python 中通常使用 cp950
         
-        # 初始化印表機
+        # 初始化
         raw = ESC + b'@' 
         # 置中 + 倍高倍寬標題
         raw += ESC + b'a\x01' + GS + b'!\x11' + "日結營收報表\n\n".encode(ENCODE)
-        # 恢復標準大小
-        raw += GS + b'!\x00' + f"日期: {target_date_str}\n".encode(ENCODE)
+        # 恢復標準大小 + 左對齊
+        raw += GS + b'!\x00' + ESC + b'a\x00'
+        raw += f"日期: {target_date_str}\n".encode(ENCODE)
         raw += f"列印時間: {datetime.now().strftime('%H:%M:%S')}\n".encode(ENCODE)
         raw += b"-"*32 + b"\n"
         
-        # 營收統計 (左對齊)
-        raw += ESC + b'a\x00'
         raw += f"有效營收: {v_count} 筆\n".encode(ENCODE)
         raw += f"營收總計: ${v_total:,}\n".encode(ENCODE)
-        raw += b"*"*32 + b"\n"
+        raw += b"-"*32 + b"\n"
         raw += f"作廢訂單: {x_count} 筆\n".encode(ENCODE)
         raw += f"作廢總額: ${x_total:,}\n".encode(ENCODE)
         
-        # 商品明細表格
+        # 商品明細 (加上粗體)
         raw += b"\n" + ESC + b'E\x01' + "商品銷售明細\n".encode(ENCODE) + ESC + b'E\x00'
         raw += "品項            數量      金額\n".encode(ENCODE)
         raw += b"-"*32 + b"\n"
         for k, v in sorted(v_stats.items(), key=lambda x:x[1]['qty'], reverse=True):
-            # 簡單的排版：品項名稱截斷至 14 字元，後跟數量與金額
-            name_part = k[:14].ljust(16)
-            qty_part = str(v['qty']).rjust(4)
-            amt_part = f"${v['amt']:,}".rjust(10)
-            raw += f"{name_part}{qty_part}{amt_part}\n".encode(ENCODE, 'replace')
+            # 處理中文對齊：Big5 中文字佔 2 byte，半形佔 1 byte
+            # 簡單處理：強制截斷並填充空格
+            name = k[:10]
+            line = f"{name:<16}{str(v['qty']):>4} {f'${v['amt']:,}':>10}\n"
+            raw += line.encode(ENCODE, 'replace')
             
-        raw += b"\n" + ESC + b'E\x01' + "作廢商品明細\n".encode(ENCODE) + ESC + b'E\x00'
-        if not x_stats:
-            raw += "無作廢數據\n".encode(ENCODE)
-        for k, v in sorted(x_stats.items(), key=lambda x:x[1]['qty'], reverse=True):
-            raw += f"{k[:14].ljust(16)}{str(v['qty']).rjust(4)}{f'${v['amt']:,}'.rjust(10)}\n".encode(ENCODE, 'replace')
+        if x_stats:
+            raw += b"\n" + ESC + b'E\x01' + "作廢商品明細\n".encode(ENCODE) + ESC + b'E\x00'
+            for k, v in sorted(x_stats.items(), key=lambda x:x[1]['qty'], reverse=True):
+                line = f"{k[:10]:<16}{str(v['qty']):>4} {f'${v['amt']:,}':>10}\n"
+                raw += line.encode(ENCODE, 'replace')
 
-        # 結尾簽名
         raw += b"\n" + b"-"*32 + b"\n"
-        raw += b"\n\n\n" + ESC + b'a\x01' + "經手人簽名: ________________\n".encode(ENCODE)
-        raw += b"\n\n" + GS + b'V\x42\x00' # 切刀指令
+        raw += b"\n\n" + ESC + b'a\x01' + "經手人簽名: ________________\n\n".encode(ENCODE)
+        raw += b"\n\n\n" + GS + b'V\x42\x00' # 切刀
         
         return jsonify({
             "status": "success",
-            "date": target_date_str,
             "blob": base64.b64encode(raw).decode('utf-8')
         })
 
-    # --- 以下為原本的 HTML 預覽部分，不做變動 ---
+    # --- 7. HTML 預覽介面 (含 WebUSB 觸發腳本) ---
     def tbl(stats_dict):
-        if not stats_dict: return "<p style='text-align:center; color:#000; font-weight:bold;'>無數據</p>"
-        h = "<table class='report-table'><thead><tr><th style='text-align:left;'>品項</th><th style='text-align:right;'>數量</th><th style='text-align:right;'>金額</th></tr></thead><tbody>"
+        if not stats_dict: return "<p style='text-align:center;'>無數據</p>"
+        h = "<table class='report-table'><thead><tr><th>品項</th><th>數量</th><th>金額</th></tr></thead><tbody>"
         for k, v in sorted(stats_dict.items(), key=lambda x:x[1]['qty'], reverse=True):
-            h += f"<tr><td>{k}</td><td style='text-align:right;'>{v['qty']}</td><td style='text-align:right;'>${v['amt']:,}</td></tr>"
+            h += f"<tr><td>{k}</td><td align='right'>{v['qty']}</td><td align='right'>${v['amt']:,}</td></tr>"
         return h + "</tbody></table>"
 
     return f"""
@@ -691,83 +683,67 @@ def daily_report():
     <html>
     <head>
         <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>日結報表_{target_date_str}</title>
         <style>
-            body {{ font-family: 'Microsoft JhengHei', sans-serif; background: #f4f4f4; display:flex; flex-direction:column; align-items:center; padding:20px; color: #000; }}
-            .ticket {{ background: white; width: 78mm; padding: 20px; color: #000; box-shadow: 0 0 10px rgba(0,0,0,0.1); }}
-            .summary {{ padding: 10px; margin: 10px 0; border: 2px solid #000; font-weight: bold; }}
-            .void-sum {{ padding: 10px; margin: 10px 0; border: 2px dashed #000; font-weight: bold; }}
-            .header {{ text-align:center; border-bottom: 2px dashed #000; padding-bottom:10px; margin-bottom:10px; }}
-            .section-title {{ font-size:18px; font-weight:bold; margin-top:15px; border-bottom: 2px solid #000; padding-bottom:5px; margin-bottom: 5px; color: #000; }}
-            h1 {{ margin:0; font-size:24px; font-weight: 900; }}
-            .big-num {{ font-size:20px; font-weight:900; }}
-            .report-table {{ width:100%; border-collapse:collapse; margin-top:10px; color: #000; }}
-            .report-table th {{ border-bottom: 2px solid #000; padding-bottom: 5px; font-weight: bold; }}
-            .report-table td {{ border-bottom: 1px dashed #000; padding: 5px 0; }}
-            @media print {{ .no-print {{ display: none !important; }} body {{ background: transparent; padding: 0; }} .ticket {{ width: 80mm; box-shadow: none; }} }}
+            body {{ font-family: sans-serif; background: #f4f4f4; padding: 20px; display: flex; flex-direction: column; align-items: center; }}
+            .ticket {{ background: white; width: 80mm; padding: 15px; border: 1px solid #ccc; }}
+            .summary, .void-sum {{ border: 2px solid #000; padding: 10px; margin: 10px 0; font-weight: bold; }}
+            .void-sum {{ border-style: dashed; }}
+            .report-table {{ width: 100%; border-collapse: collapse; }}
+            .report-table th {{ border-bottom: 2px solid #000; }}
+            .report-table td {{ border-bottom: 1px dashed #ccc; padding: 5px 0; }}
+            .no-print {{ margin-bottom: 20px; }}
+            button {{ padding: 10px 20px; font-weight: bold; cursor: pointer; }}
         </style>
     </head>
     <body>
-        <div class="no-print" style="margin-bottom:20px; text-align:center;">
-            <div style="margin-bottom:10px;">
-                <label style="font-weight:bold;">選擇日期：</label>
-                <input type="date" id="dateInput" value="{target_date_str}" onchange="location.href='/kitchen/report?date='+this.value">
-            </div>
-            <button onclick="printReportBlob()" style="padding:10px 20px; font-size:16px; background:#e67e22; color:#fff; border:none; font-weight:bold; cursor:pointer; border-radius:5px;">🔥 立即列印 (二進制)</button>
-            <button onclick="window.print()" style="padding:10px 20px; font-size:16px; background:#000; color:#fff; border:none; font-weight:bold; cursor:pointer; border-radius:5px; margin-left:5px;">🖨️ 瀏覽器列印</button>
-            <button onclick="location.href='/kitchen'" style="padding:10px 20px; font-size:16px; background:#fff; color:#000; border:2px solid #000; font-weight:bold; cursor:pointer; margin-left:5px; border-radius:5px;">🔙 返回看板</button>
+        <div class="no-print">
+            <input type="date" id="dateInput" value="{target_date_str}" onchange="location.href='?date='+this.value">
+            <button onclick="printByWebUSB()" style="background: #27ae60; color: white; border: none;">🖨️ WebUSB 列印</button>
+            <button onclick="location.href='/kitchen'">🔙 返回</button>
         </div>
 
         <div class="ticket">
-            <div class="header">
-                <h1>日結營收報表</h1>
-                <p style="font-size: 18px; font-weight: bold;">{target_date_str}</p>
-                <p style="font-size:12px;">列印時間: {datetime.now().strftime('%H:%M:%S')}</p>
-            </div>
+            <h2 style="text-align:center;">日結營收報表</h2>
+            <p style="text-align:center;">{target_date_str}</p>
             <div class="summary">
-                <div>有效營收</div>
-                <div style="display:flex; justify-content:space-between; margin-top:5px;">
-                    <span>訂單: <span class="big-num">{v_count}</span> 單</span>
-                    <span>總計: <span class="big-num">${v_total:,}</span></span>
-                </div>
+                有效營收：{v_count} 單 / ${v_total:,}
             </div>
             <div class="void-sum">
-                <div>作廢統計</div>
-                <div style="display:flex; justify-content:space-between; margin-top:5px;">
-                    <span>作廢: {x_count} 單</span>
-                    <span>作廢額: ${x_total:,}</span>
-                </div>
+                作廢統計：{x_count} 單 / ${x_total:,}
             </div>
-            <div class="section-title">商品銷售明細</div>
+            <h3>商品銷售明細</h3>
             {tbl(v_stats)}
-            <div class="section-title" style="margin-top:30px;">作廢商品明細</div>
-            {tbl(x_stats)}
-            <div style="margin-top:40px; text-align:center; border-top:2px solid #000; padding-top:10px;">
-                <p style="font-weight: bold;">經手人簽名</p><br><br><p>____________________</p>
-                <p style="font-size: 12px; margin-top: 20px;">- End of Report -</p>
-            </div>
         </div>
 
         <script>
-            function printReportBlob() {{
-                const targetDate = document.getElementById('dateInput').value;
-                fetch(`/kitchen/report?date=${{targetDate}}&format=blob`)
-                .then(res => res.json())
-                .then(data => {{
-                    if(data.status === 'success' && window.RawBT) {{
-                        // 這裡呼叫你原本 print_order 使用的列印 function
-                        // 假設你原本的列印 function 名稱是 printBlob
-                        if(typeof window.printBlob === 'function') {{
-                            window.printBlob(data.blob);
-                        }} else {{
-                            // 如果沒有封裝，直接跳轉 RawBT Intent
-                            window.location.href = "intent:base64," + data.blob + "#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;S.editor=false;end;";
-                        }}
-                    }} else {{
-                        alert("列印指令發送失敗，請確認 RawBT 是否運行");
+            async function printByWebUSB() {{
+                try {{
+                    // 1. 從後端取得 ESC/POS 數據
+                    const res = await fetch(`/kitchen/report?date=${{document.getElementById('dateInput').value}}&format=blob`);
+                    const data = await res.json();
+                    
+                    if (data.status !== 'success') return alert('取得資料失敗');
+
+                    // 2. 將 Base64 轉回 Uint8Array
+                    const binaryString = window.atob(data.blob);
+                    const bytes = new Uint8Array(binaryString.length);
+                    for (let i = 0; i < binaryString.length; i++) {{
+                        bytes[i] = binaryString.charCodeAt(i);
                     }}
-                }});
+
+                    // 3. 呼叫您現有的 WebUSB 列印邏輯
+                    // 這裡假設您的 WebUSB 實體是 printerDevice 或有類似寫法
+                    if (window.currentDevice) {{
+                        await window.currentDevice.transferOut(1, bytes);
+                    }} else {{
+                        // 如果尚未連線，則執行連線流程 (這部分請對應您 print_order 的寫法)
+                        alert('印表機未連線，請先執行 WebUSB 連線步驟');
+                    }}
+                }} catch (e) {{
+                    console.error(e);
+                    alert('列印錯誤: ' + e.message);
+                }}
             }}
         </script>
     </body>
