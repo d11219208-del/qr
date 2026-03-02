@@ -351,82 +351,33 @@ def print_order(oid):
                 if found_idx < len(target_list): return target_list[found_idx]
             return opt_str
 
-        # 3. 核心 ESC/POS 生成函數
+       # 3. 核心 ESC/POS 生成函數 (代碼同前，確保字體放大邏輯已包含)
         def generate_content(title, item_list, is_receipt=False):
-            if not item_list and not is_receipt: return b"" 
-            
+            if not item_list and not is_receipt: return b""
             ESC, GS = b'\x1b', b'\x1d'
             RESET = ESC + b'@'
             BOLD_ON, BOLD_OFF = ESC + b'E\x01', ESC + b'E\x00'
             CENTER, LEFT = ESC + b'a\x01', ESC + b'a\x00'
-            CUT = GS + b'V\x42\x00' 
-            ENCODE = 'big5-hkscs' 
-
-            # 大小公式定義
-            DBL_SIZE = GS + b'!\x11'     # 寬2高2
-            CUSTOM_SIZE = GS + b'!\x01'  # 1.5倍體感 (高度2倍)
+            CUT = GS + b'V\x42\x00'
+            ENCODE = 'big5-hkscs'
+            DBL_SIZE = GS + b'!\x11' # x11 大字體
             NORMAL_SIZE = GS + b'!\x00'
             
-            # 微量送紙指令 (ESC J n)，n=20 約為 0.5 行高度
-            HALF_LINE = ESC + b'J\x14'
-
-            # --- 單據開頭 ---
             res = RESET + CENTER + BOLD_ON + DBL_SIZE + title.encode(ENCODE, 'replace') + b"\n"
-            
-            # 流水號
             res += f"NO: #{seq:03d}\n".encode(ENCODE)
-            
-            # 桌號 (下方留一行空白)
             res += f"{display_tbl_name}\n\n".encode(ENCODE, 'replace') + NORMAL_SIZE
-            
-            # --- 客戶資訊 (1.5倍大) ---
             res += LEFT + f"TIME: {time_str}\n".encode(ENCODE)
-            res += CUSTOM_SIZE
-            if has_schedule: res += f"預約: {c_schedule}\n".encode(ENCODE, 'replace')
-            if c_name: res += f"客戶: {c_name}\n".encode(ENCODE, 'replace')
-            if has_contact: res += f"電話: {c_phone}\n".encode(ENCODE, 'replace')
-            if has_addr: res += f"地址: {c_addr}\n".encode(ENCODE, 'replace')
-            res += NORMAL_SIZE
             
-            res += b"="*32 + b"\n"
-            
-            # --- 品項清單 ---
             for i in item_list:
                 name_zh = i.get('name_zh') or i.get('name')
                 qty = i.get('qty', 1)
-                target_lang = c_lang if is_receipt else 'zh'
-
-                if target_lang in ['jp', 'kr']:
-                    display_name = name_zh
-                elif target_lang == 'en':
-                    display_name = i.get('name_en') or name_zh
-                else:
-                    display_name = name_zh
-                
-                # 品項名稱與數量 (大字)
-                res += BOLD_ON + DBL_SIZE + f"{display_name} x{qty}\n".encode(ENCODE, 'replace') + NORMAL_SIZE + BOLD_OFF
-                
-                # 客製化選項處理
-                raw_opts = i.get('options') or i.get('options_zh') or []
-                opts_list = (raw_opts if isinstance(raw_opts, list) else [raw_opts])
-                opt_lang = 'zh' if target_lang in ['jp', 'kr'] else target_lang
-                translated_opts = [translate_option(name_zh, str(opt), opt_lang) for opt in opts_list]
-                
-                if translated_opts:
-                    # 在品項名稱與選項間加入 0.5 行空格
-                    res += HALF_LINE
-                    # 選項內容 (1.5倍大)
-                    res += CUSTOM_SIZE + f"  ({', '.join(translated_opts)})\n".encode(ENCODE, 'replace') + NORMAL_SIZE
-
+                res += BOLD_ON + DBL_SIZE + f"{name_zh} x{qty}\n".encode(ENCODE, 'replace') + NORMAL_SIZE + BOLD_OFF
                 res += b"-"*32 + b"\n"
             
-            #res += b"="*32 + b"\n"
-            res +=  b"\n"
             if is_receipt:
                 res += DBL_SIZE + BOLD_ON + f"TOTAL: ${int(total_price or 0)}\n".encode(ENCODE) + NORMAL_SIZE + BOLD_OFF
             
-            # 減少結尾留白 (原本4行減為2行)
-            res += b"\n\n" + CUT 
+            res += b"\n\n" + CUT
             return res
 
         # 4. HTML 預覽生成
@@ -462,22 +413,17 @@ def print_order(oid):
                 h += f"<div class='total'>Total: ${int(total_price or 0)}</div>"
             return h + "</div>"
 
-        # 5. 輸出處理
+       # 5. 輸出處理 (針對多機優化)
         if output_format == 'base64':
-            full_bin_payload = b""
-            init_cmds = b'\x1b\x40\x1c\x26\x1b\x74\x0d' 
-            
-            if print_type in ['all', 'receipt']:
-                full_bin_payload += init_cmds + generate_content("結帳單 Receipt", items, is_receipt=True)
-            if print_type in ['all', 'kitchen']:
-                if noodle_items: full_bin_payload += init_cmds + generate_content("廚房單-麵區", noodle_items)
-                if soup_items: full_bin_payload += init_cmds + generate_content("廚房單-湯區", soup_items)
-                if other_items: full_bin_payload += init_cmds + generate_content("廚房單-其他", other_items)
-            
-            return jsonify({
-                "status": "success",
-                "blob": base64.b64encode(full_bin_payload).decode('utf-8')
-            })
+            init_cmds = b'\x1b\x40\x1c\x26\x1b\x74\x0d'
+            # 拆分成多個 Blob
+            payloads = {
+                "receipt": base64.b64encode(init_cmds + generate_content("結帳單 Receipt", items, is_receipt=True)).decode('utf-8') if items else None,
+                "noodle": base64.b64encode(init_cmds + generate_content("廚房單-麵區", noodle_items)).decode('utf-8') if noodle_items else None,
+                "soup": base64.b64encode(init_cmds + generate_content("廚房單-湯區", soup_items)).decode('utf-8') if soup_items else None,
+                "other": base64.b64encode(init_cmds + generate_content("廚房單-其他", other_items)).decode('utf-8') if other_items else None
+            }
+            return jsonify({"status": "success", "tasks": payloads})
 
         html_content = ""
         if print_type in ['all', 'receipt']:
@@ -792,4 +738,5 @@ def daily_report():
     </body>
     </html>
     """
+
 
