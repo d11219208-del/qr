@@ -691,26 +691,26 @@ def daily_report():
             <h2 style="margin-bottom:5px;">日結營收報表</h2>
             <div>{target_date_str}</div>
             <div style="font-size:12px;">列印時間: {now_tw.strftime('%H:%M:%S')}</div>
-            <div>====================================</div>
+            <div>=================================</div>
             <br>
             <div style="text-align:left;"><b>有效營收</b></div>
             <div style="text-align:left;">訂單: {v_count} 單  總計: ${v_total:,}</div>
             <br>
-            <div>------------------------------------</div>
+            <div>-----------------------------------------------</div>
             <div style="text-align:left;"><b>作廢統計</b></div>
             <div style="text-align:left;">作廢: {x_count} 單  作廢額: ${x_total:,}</div>
-            <div>====================================</div>
+            <div>=================================</div>
             
             <div class="section-title">商品銷售明細</div>
             <div class="detail-list">
                 {"".join([f"<div>{k} x{v['qty']} ${v['amt']:,}</div>" for k, v in v_stats.items()]) if v_stats else "無"}
             </div>
-            <div>------------------------------------</div>
+            <div>-----------------------------------------------</div>
             <div class="section-title">作廢商品明細</div>
             <div class="detail-list">
                 {"".join([f"<div>{k} x{v['qty']} ${v['amt']:,}</div>" for k, v in x_stats.items()]) if x_stats else "無"}
             </div>
-            <div>====================================</div>
+            <div>=================================</div>
             <br><br>
             <div>經手人簽名</div>
             <br><br>
@@ -766,4 +766,5 @@ def daily_report():
     </body>
     </html>
     """
+
 
