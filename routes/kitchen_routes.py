@@ -625,7 +625,7 @@ def daily_report():
         res += b"\n" + ESC + b'a\x00' # 靠左
         res += ESC + b'E\x01' + "有效營收\n".encode(ENCODE) + ESC + b'E\x00'
         res += f"訂單: {v_count} 單  總計: ${v_total:,}\n".encode(ENCODE)
-        res += b"\n" + ESC + b'a\x01' + b"-"*32 + b"\n" # 對應 HTML 的 ---
+        res += b"\n" + ESC + b'a\x01' + b"-"*42 + b"\n" # 對應 HTML 的 ---
         
         # 作廢統計
         res += ESC + b'a\x00'
@@ -641,7 +641,7 @@ def daily_report():
         else:
             for k, v in sorted(v_stats.items(), key=lambda x:x[1]['qty'], reverse=True):
                 res += f"{k[:14]:<16} x{v['qty']:>3} ${v['amt']:,}\n".encode(ENCODE, 'replace')
-        res += b"\n" + ESC + b'a\x01' + b"-"*32 + b"\n"
+        res += b"\n" + ESC + b'a\x01' + b"-"*42 + b"\n"
         
         # 作廢商品明細
         res += ESC + b'a\x00'
@@ -694,7 +694,7 @@ def daily_report():
             <div style="text-align:left;"><b>有效營收</b></div>
             <div style="text-align:left;">訂單: {v_count} 單  總計: ${v_total:,}</div>
             
-            <div class="line-divider">---------------------------------</div>
+            <div class="line-divider">------------------------------------------</div>
             
             <div style="text-align:left;"><b>作廢統計</b></div>
             <div style="text-align:left;">作廢: {x_count} 單  作廢額: ${x_total:,}</div>
@@ -706,7 +706,7 @@ def daily_report():
                 {"".join([f"<div>{k} x{v['qty']} ${v['amt']:,}</div>" for k, v in v_stats.items()]) if v_stats else "無"}
             </div>
             
-            <div class="line-divider">---------------------------------</div>
+            <div class="line-divider">------------------------------------------</div>
             
             <div class="section-title">作廢商品明細</div>
             <div class="detail-list">
@@ -770,3 +770,4 @@ def daily_report():
     </body>
     </html>
     """
+
