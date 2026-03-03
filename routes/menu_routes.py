@@ -104,22 +104,52 @@ def process_order_submission(request, order_type_override=None):
         if order_type == 'delivery' and not delivery_enabled:
              return "Delivery Service is currently disabled / 外送服務目前關閉中", 403
 
-        # --- C. 處理外送資訊 ---
+        # --- C. 處理編輯模式：抓取舊訂單資料作為後備 (Backfill) ---
+        db_old_data = {}
+        if old_order_id:
+            cur.execute("""
+                SELECT lang, order_type, delivery_info, delivery_fee, 
+                       customer_name, customer_phone, customer_address, scheduled_for, table_number
+                FROM orders WHERE id=%s
+            """, (old_order_id,))
+            row = cur.fetchone()
+            if row:
+                # 將舊資料轉為字典方便後續呼叫
+                db_old_data = {
+                    'lang': row[0],
+                    'order_type': row[1],
+                    'delivery_info': row[2],
+                    'delivery_fee': row[3],
+                    'customer_name': row[4],
+                    'customer_phone': row[5],
+                    'customer_address': row[6],
+                    'scheduled_for': row[7],
+                    'table_number': row[8]
+                }
+                final_lang = db_old_data['lang'] # 保持語系一致
+
+        # --- D. 處理外送與客戶資訊 (優先級：Form > Session > DB Old Order) ---
         sess_data = session.get('delivery_data', {})
         sess_info = session.get('delivery_info', {})
 
-        # 這裡會讀取 session，導致即使是內用，如果 session 有舊資料，customer_address 也會有值
-        customer_name = request.form.get('customer_name') or request.form.get('name') or sess_data.get('name') or ''
-        customer_phone = request.form.get('customer_phone') or request.form.get('phone') or sess_data.get('phone') or ''
-        customer_address = request.form.get('delivery_address') or request.form.get('address') or sess_data.get('address') or ''
+        customer_name = (request.form.get('customer_name') or request.form.get('name') or 
+                         sess_data.get('name') or db_old_data.get('customer_name') or '')
+        
+        customer_phone = (request.form.get('customer_phone') or request.form.get('phone') or 
+                          sess_data.get('phone') or db_old_data.get('customer_phone') or '')
+        
+        customer_address = (request.form.get('delivery_address') or request.form.get('address') or 
+                            sess_data.get('address') or db_old_data.get('customer_address') or '')
+        
         note = request.form.get('delivery_note') or request.form.get('note') or sess_data.get('note') or ''
-        scheduled_for = request.form.get('scheduled_for') or sess_data.get('scheduled_for') or ''
+        
+        scheduled_for = (request.form.get('scheduled_for') or sess_data.get('scheduled_for') or 
+                         db_old_data.get('scheduled_for') or '')
         
         delivery_info_json_str = None
         delivery_fee = 0
         
-        # 【關鍵修正】：邏輯判斷
-        # 只有在非強制內用的情況下，才允許因地址存在而自動判定為外送
+        # 決定是否執行外送邏輯
         should_process_as_delivery = False
         if order_type == 'delivery':
             should_process_as_delivery = True
@@ -129,7 +159,7 @@ def process_order_submission(request, order_type_override=None):
         if should_process_as_delivery:
             order_type = 'delivery'
             
-            # 運費計算
+            # 運費計算 (Form > Session > DB Old Order)
             sess_fee = sess_info.get('shipping_fee')
             form_fee = request.form.get('delivery_fee')
             
@@ -137,29 +167,40 @@ def process_order_submission(request, order_type_override=None):
                 delivery_fee = int(float(sess_fee))
             elif form_fee:
                 delivery_fee = int(float(form_fee))
+            elif db_old_data.get('delivery_fee'):
+                delivery_fee = db_old_data['delivery_fee']
             else:
                 delivery_fee = 0
 
             # 建立外送資訊 JSON
+            # 如果是編輯且沒有新 Session 資料，則嘗試解析舊的 delivery_info JSON
+            old_delivery_info = {}
+            if db_old_data.get('delivery_info'):
+                try:
+                    old_delivery_info = json.loads(db_old_data['delivery_info'])
+                except:
+                    old_delivery_info = {}
+
             delivery_info_dict = {
                 'name': customer_name,
                 'phone': customer_phone,
                 'address': customer_address, 
                 'scheduled_for': scheduled_for,
-                'distance_km': sess_info.get('distance_km') or request.form.get('distance_km'),
-                'note': note,
+                'distance_km': sess_info.get('distance_km') or request.form.get('distance_km') or old_delivery_info.get('distance_km'),
+                'note': note or old_delivery_info.get('note'),
                 'shipping_fee': delivery_fee
             }
             delivery_info_json_str = json.dumps(delivery_info_dict, ensure_ascii=False)
-            
             table_number = "外送"
         else:
             # 內用 / 外帶
-            # 確保不會誤帶入外送費
             delivery_fee = 0
-            
             if raw_table_number and raw_table_number.strip():
                 table_number = raw_table_number
+                order_type = 'dine_in'
+            elif db_old_data.get('table_number') and db_old_data['table_number'] not in ["外送", "外帶"]:
+                # 如果是編輯中且沒填桌號，沿用舊桌號
+                table_number = db_old_data['table_number']
                 order_type = 'dine_in'
             else:
                 table_number = "外帶"
@@ -168,16 +209,10 @@ def process_order_submission(request, order_type_override=None):
         if not cart_json or cart_json == '[]': 
             return "Empty Cart", 400
 
-        # --- D. 計算總金額與產生訂單內容 ---
+        # --- E. 計算總金額與產生訂單內容 ---
         cart_items = json.loads(cart_json)
         total_price = 0
         display_list = []
-
-        # 如果是修改訂單，保持原本語系
-        if old_order_id:
-            cur.execute("SELECT lang FROM orders WHERE id=%s", (old_order_id,))
-            orig_res = cur.fetchone()
-            if orig_res: final_lang = orig_res[0] 
 
         for item in cart_items:
             price = int(float(item['unit_price']))
@@ -192,11 +227,9 @@ def process_order_submission(request, order_type_override=None):
             display_list.append(f"{n_display} {opt_str} x{qty}")
 
         items_str = " + ".join(display_list)
-        
-        # 加上運費
         total_price += delivery_fee
 
-        # --- E. 寫入資料庫 (使用 LOCK 防止流水號衝突) ---
+        # --- F. 寫入資料庫 (使用 LOCK 防止流水號衝突) ---
         cur.execute("LOCK TABLE orders IN SHARE ROW EXCLUSIVE MODE")
 
         cur.execute("""
