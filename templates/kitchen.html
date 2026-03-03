@@ -79,7 +79,6 @@
         .btn-print { background: var(--accent-blue); color: white; }
         .btn-void { background: var(--accent-red); color: white; }
         
-        /* 多機連線按鈕樣式 */
         .printer-status-group { display: flex; gap: 5px; }
         .btn-conn { background: #eee; color: #666; border: 1px solid #ccc; font-size: 12px; padding: 5px 8px; }
         .btn-conn.online { background: #4caf50; color: white; border-color: #4caf50; }
@@ -87,7 +86,6 @@
 
         @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.6; } 100% { opacity: 1; } }
 
-        /* Modal 樣式 */
         .modal { display: none; position: fixed; z-index: 2000; left: 0; top: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.6); backdrop-filter: blur(3px); }
         .modal-content { background-color: #fff; margin: 10% auto; padding: 25px; border-radius: 12px; width: 90%; max-width: 350px; text-align: center; box-shadow: 0 5px 20px rgba(0,0,0,0.3); position: relative; }
         .modal-content.wide { max-width: 600px; }
@@ -173,7 +171,7 @@
     const synth = window.speechSynthesis;
 
     // ==========================================
-    // 🖨️ 多機 Web USB 列印邏輯 (含自動重新連線與備援)
+    // 🖨️ 多機 Web USB 列印邏輯 (含修復切換頁面衝突)
     // ==========================================
     let printers = {
         receipt: null,
@@ -181,7 +179,20 @@
         soup: null
     };
 
-    // 初始化：嘗試喚回已授權的裝置
+    // --- 新增：優雅釋放 USB 裝置 (解決跳轉頁面衝突) ---
+    window.addEventListener('beforeunload', async () => {
+        for (let key in printers) {
+            if (printers[key] && printers[key].opened) {
+                try {
+                    await printers[key].releaseInterface(0);
+                    await printers[key].close();
+                } catch (err) {
+                    console.error("釋放裝置失敗:", err);
+                }
+            }
+        }
+    });
+
     async function initUSB() {
         try {
             const devices = await navigator.usb.getDevices();
@@ -193,14 +204,12 @@
         }
     }
 
-    // 自動分配已連線的裝置
     async function autoAssignDevice(device) {
         try {
-            await device.open();
+            if (!device.opened) await device.open();
             await device.selectConfiguration(1);
             await device.claimInterface(0);
             
-            // 使用 localStorage 記錄哪台序號對應哪個區域
             const sn = device.serialNumber || device.productName;
             if (localStorage.getItem('usb_receipt') === sn) {
                 printers.receipt = device;
@@ -217,13 +226,22 @@
         }
     }
 
-    // 手動設定印表機
     async function setupPrinter(type) {
         try {
             const device = await navigator.usb.requestDevice({ filters: [] });
+            
+            // 修復：如果裝置已開啟，先嘗試關閉它
+            if (device.opened) await device.close();
+
             await device.open();
             await device.selectConfiguration(1);
-            await device.claimInterface(0);
+            
+            try {
+                await device.claimInterface(0);
+            } catch (claimErr) {
+                alert("⚠️ 無法佔用裝置：裝置可能正被其他頁面使用。請關閉所有報表分頁後重試。");
+                return;
+            }
             
             printers[type] = device;
             const sn = device.serialNumber || device.productName;
@@ -250,33 +268,26 @@
         }
     }
 
-    // 執行列印 (核心備援機制：如果 noodle/soup 沒設定，改用 receipt 印)
     async function fetchAndPrint(oid, type) {
         const url = `/kitchen/print_order/${oid}?type=${type}&format=base64`;
-        
         try {
             const response = await fetch(url);
             const data = await response.json();
 
             if (data.status === "success" && data.tasks) {
-                // data.tasks 會回傳 { receipt: "...", noodle: "...", soup: "...", other: "..." }
                 for (let [role, b64] of Object.entries(data.tasks)) {
                     if (!b64) continue;
-                    
                     const bytes = new Uint8Array(atob(b64).split("").map(c => c.charCodeAt(0)));
                     
-                    // 備援選擇邏輯
                     let targetDevice = null;
                     if (role === 'receipt') targetDevice = printers.receipt;
                     else if (role === 'noodle') targetDevice = printers.noodle || printers.receipt;
                     else if (role === 'soup') targetDevice = printers.soup || printers.receipt;
-                    else targetDevice = printers.receipt; // other 預設結帳機
+                    else targetDevice = printers.receipt;
 
-                    if (targetDevice) {
+                    if (targetDevice && targetDevice.opened) {
                         const endpoint = targetDevice.configuration.interfaces[0].alternates[0].endpoints.find(e => e.direction === 'out').endpointNumber;
                         await targetDevice.transferOut(endpoint, bytes);
-                    } else {
-                        console.warn(`任務 ${role} 無可用印表機 (連結帳機都沒連)`);
                     }
                 }
             }
@@ -287,7 +298,7 @@
     }
 
     // ==========================================
-    // 🔊 音效與播報
+    // 🔊 音效、播報與刷新 (功能完整保留)
     // ==========================================
     function speakNewOrder() {
         if (synth.speaking) return;
@@ -301,23 +312,16 @@
         refreshOrders();
     }
 
-    // ==========================================
-    // 🔄 訂單刷新邏輯
-    // ==========================================
     function refreshOrders() {
         fetch('/kitchen/check_new_orders?last_seq=' + lastMaxSeq)
             .then(res => res.json())
             .then(data => {
                 if (data.html) grid.innerHTML = data.html;
                 updateTimeText.innerText = '最後更新: ' + new Date().toLocaleTimeString();
-
                 if (data.new_ids && data.new_ids.length > 0) {
                     audio.play().then(() => setTimeout(speakNewOrder, 800)).catch(() => speakNewOrder());
                 }
-
-                if (data.max_seq && data.max_seq > lastMaxSeq) {
-                    lastMaxSeq = data.max_seq;
-                }
+                if (data.max_seq && data.max_seq > lastMaxSeq) lastMaxSeq = data.max_seq;
             })
             .catch(err => { updateTimeText.innerText = '連線失敗'; });
     }
@@ -342,7 +346,6 @@
         closePrintModal();
     }
 
-    // 銷售統計邏輯 (原封不動保留)
     function openSalesModal() { document.getElementById('salesModal').style.display = "block"; setTodayRange(); }
     function closeSalesModal() { document.getElementById('salesModal').style.display = "none"; }
     function setTodayRange() {
@@ -374,7 +377,6 @@
             });
     }
 
-    // 頁面啟動
     window.onload = () => {
         initUSB();
         refreshOrders();
