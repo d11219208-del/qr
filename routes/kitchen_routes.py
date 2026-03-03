@@ -1,6 +1,6 @@
 
 from flask import Blueprint, render_template, request, jsonify
-import jsonz
+import json
 import base64  # 用於 RawBT 編6ㄡ碼
 import traceback 
 from datetime import datetime, timedelta
@@ -834,3 +834,4 @@ def daily_report():
     </body>
     </html>
     """
+
