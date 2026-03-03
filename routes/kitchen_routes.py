@@ -624,7 +624,7 @@ def daily_report():
         
         return jsonify({"status": "success", "blob": base64.b64encode(res).decode('utf-8')})
 
-    # --- 4. HTML 頁面渲染 ---
+   # --- 4. HTML 頁面渲染 ---
     return f"""
     <!DOCTYPE html>
     <html>
@@ -632,56 +632,92 @@ def daily_report():
         <meta charset="UTF-8">
         <title>日結報表_{target_date_str}</title>
         <style>
-    body { font-family: sans-serif; background: #eee; display: flex; flex-direction: column; align-items: center; padding: 20px; }
-    .ticket { background: white; width: 80mm; padding: 20px; text-align: center; border: 1px solid #ccc; box-sizing: border-box; }
-    
-    /* 按鈕容器 */
-    .no-print { margin-bottom: 20px; display: flex; align-items: center; justify-content: center; gap: 15px; }
-    
-    /* 基礎按鈕樣式 - 確保所有按鈕結構一致 */
-    button, .btn-link { 
-        padding: 10px 25px; 
-        font-weight: bold; 
-        font-size: 16px;
-        cursor: pointer; 
-        border-radius: 8px; 
-        border: none; 
-        transition: opacity 0.2s, transform 0.1s;
-        text-decoration: none;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-    }
+            body {{ 
+                font-family: "Microsoft JhengHei", sans-serif; 
+                background: #eee; 
+                display: flex; 
+                flex-direction: column; 
+                align-items: center; 
+                padding: 20px; 
+            }}
+            .ticket {{ 
+                background: white; 
+                width: 80mm; 
+                padding: 20px; 
+                text-align: center; 
+                border: 1px solid #ccc; 
+                box-sizing: border-box; 
+                box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+            }}
+            
+            /* 按鈕容器 */
+            .no-print {{ 
+                margin-bottom: 20px; 
+                display: flex; 
+                align-items: center; 
+                justify-content: center; 
+                gap: 15px; 
+                flex-wrap: wrap;
+            }}
+            
+            /* 日期選擇器樣式優化 */
+            #dateInput {{
+                padding: 8px;
+                border-radius: 6px;
+                border: 1px solid #ccc;
+                font-size: 16px;
+                height: 40px;
+                box-sizing: border-box;
+            }}
+            
+            /* 基礎按鈕樣式 - 確保所有按鈕結構完全一致 */
+            .btn-base {{ 
+                height: 40px;
+                padding: 0 25px; 
+                font-weight: bold; 
+                font-size: 16px;
+                cursor: pointer; 
+                border-radius: 8px; 
+                border: none; 
+                transition: all 0.2s ease;
+                text-decoration: none;
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+                outline: none;
+                white-space: nowrap;
+            }}
 
-    button:active { transform: translateY(1px); }
-    button:hover { opacity: 0.9; }
+            .btn-base:active {{ transform: translateY(1px); box-shadow: none; }}
+            .btn-base:hover {{ opacity: 0.9; box-shadow: 0 4px 8px rgba(0,0,0,0.15); }}
 
-    /* 列印報表按鈕 - 綠色 */
-    .btn-print { background: #27ae60; color: white; }
+            /* 列印報表按鈕 - 綠色 */
+            .btn-print {{ background: #27ae60; color: white; }}
 
-    /* 返回看板按鈕 - 深灰色 (與列印按鈕樣式完全對齊) */
-    .btn-close { background: #555; color: white; }
+            /* 返回看板按鈕 - 深灰色 (樣式已與列印按鈕完全對齊) */
+            .btn-close {{ background: #555; color: white; }}
 
-    .detail-list { font-size: 13px; text-align: left; line-height: 1.6; }
-    .section-title { text-align: left; border-bottom: 1px solid #000; margin-top: 15px; font-weight: bold; }
-    .line-divider { margin: 10px 0; overflow: hidden; white-space: nowrap; }
+            .detail-list {{ font-size: 13px; text-align: left; line-height: 1.6; }}
+            .section-title {{ text-align: left; border-bottom: 1px solid #000; margin-top: 15px; font-weight: bold; }}
+            .line-divider {{ margin: 10px 0; overflow: hidden; white-space: nowrap; }}
 
-    /* 列印時隱藏按鈕 */
-    @media print {
-        .no-print { display: none; }
-    }
-</style>
+            /* 列印時隱藏不需要的元件 */
+            @media print {{
+                .no-print, #usbStatus {{ display: none; }}
+                body {{ background: white; padding: 0; }}
+                .ticket {{ border: none; box-shadow: none; width: 100%; }}
+            }}
+        </style>
     </head>
     <body onload="autoConnectUSB()">
         <div class="no-print">
             <input type="date" id="dateInput" value="{target_date_str}" onchange="location.href='?date='+this.value">
-            <button id="btnPrint" class="btn-print" onclick="handlePrintClick()">🖨️ 列印報表</button>
-            
-            <button class="btn-close" onclick="window.close()">🔙 返回看板</button>
+            <button id="btnPrint" class="btn-base btn-print" onclick="handlePrintClick()">🖨️ 列印報表</button>
+            <button class="btn-base btn-close" onclick="window.close()">🔙 返回看板</button>
         </div>
         
-        <div id="usbStatus" style="font-size:12px; margin-bottom:15px; color:#666;">偵測印表機中...</div>
+        <div id="usbStatus" style="font-size:12px; margin-bottom:15px; color:#666; font-weight: bold;">偵測印表機中...</div>
 
         <div class="ticket">
             <h2 style="margin:0;">日結營收報表</h2>
@@ -699,13 +735,13 @@ def daily_report():
             
             <div class="section-title">商品銷售明細</div>
             <div class="detail-list">
-                {"".join([f"<div>{k} x{v['qty']} ${v['amt']:,}</div>" for k, v in v_stats.items()]) if v_stats else "無"}
+                {"".join([f"<div>{k} x{v['qty']} ${v['amt']:,}</div>" for k, v in v_stats.items()]) if v_stats else "<div>無</div>"}
             </div>
             
             <div class="line-divider">--------------------------</div>
             <div class="section-title">作廢商品明細</div>
             <div class="detail-list">
-                {"".join([f"<div>{k} x{v['qty']} ${v['amt']:,}</div>" for k, v in x_stats.items()]) if x_stats else "無"}
+                {"".join([f"<div>{k} x{v['qty']} ${v['amt']:,}</div>" for k, v in x_stats.items()]) if x_stats else "<div>無</div>"}
             </div>
             <div class="line-divider">==========================</div>
             
@@ -717,38 +753,61 @@ def daily_report():
         <script>
             let device = null;
 
+            // --- 重要修復：關閉或離開頁面時釋放 USB 資源 ---
+            window.addEventListener('beforeunload', async () => {{
+                if (device && device.opened) {{
+                    try {{
+                        await device.releaseInterface(device.configuration.interfaces[0].interfaceNumber);
+                        await device.close();
+                        console.log("USB 資源已釋放");
+                    }} catch (err) {{
+                        console.error("釋放失敗", err);
+                    }}
+                }}
+            }});
+
             async function autoConnectUSB() {{
                 const statusDiv = document.getElementById('usbStatus');
                 try {{
                     const devices = await navigator.usb.getDevices();
                     if (devices.length > 0) {{
                         device = devices[0];
-                        await device.open();
+                        if (!device.opened) await device.open();
                         await device.selectConfiguration(1);
                         await device.claimInterface(device.configuration.interfaces[0].interfaceNumber);
-                        statusDiv.innerText = "✅ 已自動連接: " + device.productName;
+                        statusDiv.innerText = "✅ 已自動連接: " + (device.productName || "USB 印表機");
                         statusDiv.style.color = "green";
+                    }} else {{
+                        statusDiv.innerText = "ℹ️ 尚未授權印表機，請點擊列印按鈕進行選取";
                     }}
                 }} catch (err) {{
                     statusDiv.innerText = "⚠️ 連線異常: " + err.message;
+                    statusDiv.style.color = "red";
                 }}
             }}
 
             async function handlePrintClick() {{
+                const statusDiv = document.getElementById('usbStatus');
                 if (!device) {{
                     try {{
                         device = await navigator.usb.requestDevice({{ filters: [] }});
                         await device.open();
                         await device.selectConfiguration(1);
                         await device.claimInterface(device.configuration.interfaces[0].interfaceNumber);
-                    }} catch (e) {{ return alert("未選擇裝置"); }}
+                        statusDiv.innerText = "✅ 已連線: " + device.productName;
+                        statusDiv.style.color = "green";
+                    }} catch (e) {{ 
+                        return alert("未選擇或無法使用裝置: " + e.message); 
+                    }}
                 }}
 
                 try {{
                     const date = document.getElementById('dateInput').value;
-                    // 請確認 API 路徑是否包含 /kitchen
                     const res = await fetch(`/kitchen/report?date=${{date}}&format=blob`);
+                    if (!res.ok) throw new Error("後端產生報表失敗");
+                    
                     const data = await res.json();
+                    if (!data.blob) throw new Error("未收到列印數據");
                     
                     const binaryString = window.atob(data.blob);
                     const bytes = new Uint8Array(binaryString.length);
@@ -756,17 +815,22 @@ def daily_report():
                         bytes[i] = binaryString.charCodeAt(i);
                     }}
 
-                    const endpoint = device.configuration.interfaces[0].alternate.endpoints.find(e => e.direction === 'out').endpointNumber;
+                    // 自動尋找 OUT 節點
+                    const interface = device.configuration.interfaces[0];
+                    const endpoint = interface.alternate.endpoints.find(e => e.direction === 'out').endpointNumber;
+                    
                     await device.transferOut(endpoint, bytes);
-                    document.getElementById('usbStatus').innerText = "✨ 列印發送成功";
+                    statusDiv.innerText = "✨ 報表列印中...";
+                    setTimeout(() => {{ 
+                        statusDiv.innerText = "✅ 已連線: " + (device.productName || "USB 印表機"); 
+                    }}, 3000);
+
                 }} catch (err) {{
                     alert("列印失敗: " + err.message);
+                    console.error(err);
                 }}
             }}
         </script>
     </body>
     </html>
     """
-
-
-
