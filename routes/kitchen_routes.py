@@ -1,6 +1,6 @@
 
 from flask import Blueprint, render_template, request, jsonify
-import json
+import jsonz
 import base64  # 用於 RawBT 編6ㄡ碼
 import traceback 
 from datetime import datetime, timedelta
@@ -632,17 +632,46 @@ def daily_report():
         <meta charset="UTF-8">
         <title>日結報表_{target_date_str}</title>
         <style>
-            body {{ font-family: sans-serif; background: #eee; display: flex; flex-direction: column; align-items: center; padding: 20px; }}
-            .ticket {{ background: white; width: 80mm; padding: 20px; text-align: center; border: 1px solid #ccc; box-sizing: border-box; }}
-            .no-print {{ margin-bottom: 20px; display: flex; align-items: center; justify-content: center; gap: 10px; }}
-            button {{ padding: 10px 20px; font-weight: bold; cursor: pointer; border-radius: 5px; border: none; }}
-            .btn-print {{ background: #27ae60; color: white; }}
-            /* 返回看板按鈕樣式 */
-            .btn-close {{ background: #fff; color: #000; border: 2px solid #000; font-size: 16px; }}
-            .detail-list {{ font-size: 13px; text-align: left; line-height: 1.6; }}
-            .section-title {{ text-align: left; border-bottom: 1px solid #000; margin-top: 15px; font-weight: bold; }}
-            .line-divider {{ margin: 10px 0; overflow: hidden; white-space: nowrap; }}
-        </style>
+    body { font-family: sans-serif; background: #eee; display: flex; flex-direction: column; align-items: center; padding: 20px; }
+    .ticket { background: white; width: 80mm; padding: 20px; text-align: center; border: 1px solid #ccc; box-sizing: border-box; }
+    
+    /* 按鈕容器 */
+    .no-print { margin-bottom: 20px; display: flex; align-items: center; justify-content: center; gap: 15px; }
+    
+    /* 基礎按鈕樣式 - 確保所有按鈕結構一致 */
+    button, .btn-link { 
+        padding: 10px 25px; 
+        font-weight: bold; 
+        font-size: 16px;
+        cursor: pointer; 
+        border-radius: 8px; 
+        border: none; 
+        transition: opacity 0.2s, transform 0.1s;
+        text-decoration: none;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+
+    button:active { transform: translateY(1px); }
+    button:hover { opacity: 0.9; }
+
+    /* 列印報表按鈕 - 綠色 */
+    .btn-print { background: #27ae60; color: white; }
+
+    /* 返回看板按鈕 - 深灰色 (與列印按鈕樣式完全對齊) */
+    .btn-close { background: #555; color: white; }
+
+    .detail-list { font-size: 13px; text-align: left; line-height: 1.6; }
+    .section-title { text-align: left; border-bottom: 1px solid #000; margin-top: 15px; font-weight: bold; }
+    .line-divider { margin: 10px 0; overflow: hidden; white-space: nowrap; }
+
+    /* 列印時隱藏按鈕 */
+    @media print {
+        .no-print { display: none; }
+    }
+</style>
     </head>
     <body onload="autoConnectUSB()">
         <div class="no-print">
@@ -738,5 +767,6 @@ def daily_report():
     </body>
     </html>
     """
+
 
 
