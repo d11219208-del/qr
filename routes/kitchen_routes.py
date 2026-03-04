@@ -338,6 +338,7 @@ def print_order(oid):
             elif p_cat == 'Soup': soup_items.append(item)
             else: other_items.append(item)
 
+        # 選項翻譯邏輯
         def translate_option(p_name, opt_str, target_lang):
             if p_name not in product_map: return opt_str
             p_data = product_map[p_name]
@@ -351,7 +352,7 @@ def print_order(oid):
                 if found_idx < len(target_list): return target_list[found_idx]
             return opt_str
 
-       # 3. 核心 ESC/POS 生成函數 (代碼同前，確保字體放大邏輯已包含)
+       # 3. 核心 ESC/POS 生成函數 (已修復選項列印問題)
         def generate_content(title, item_list, is_receipt=False):
             if not item_list and not is_receipt: return b""
             ESC, GS = b'\x1b', b'\x1d'
@@ -368,16 +369,39 @@ def print_order(oid):
             res += f"{display_tbl_name}\n\n".encode(ENCODE, 'replace') + NORMAL_SIZE
             res += LEFT + f"TIME: {time_str}\n".encode(ENCODE)
             
+            if has_schedule:
+                res += BOLD_ON + f"PREORDER: {c_schedule}\n".encode(ENCODE) + BOLD_OFF
+            
+            res += b"-"*32 + b"\n"
+
             for i in item_list:
                 name_zh = i.get('name_zh') or i.get('name')
                 qty = i.get('qty', 1)
+                
+                # 品項名稱 (大字)
                 res += BOLD_ON + DBL_SIZE + f"{name_zh} x{qty}\n".encode(ENCODE, 'replace') + NORMAL_SIZE + BOLD_OFF
+                
+                # --- 新增：處理客製化選項列印 ---
+                target_lang = c_lang if is_receipt else 'zh'
+                raw_opts = i.get('options') or i.get('options_zh') or []
+                if not isinstance(raw_opts, list): raw_opts = [raw_opts]
+                
+                opts_display = [translate_option(name_zh, str(opt), target_lang) for opt in raw_opts if opt]
+                
+                if opts_display:
+                    opt_str = "  + " + ", ".join(opts_display)
+                    res += f"{opt_str}\n".encode(ENCODE, 'replace')
+                
                 res += b"-"*32 + b"\n"
             
             if is_receipt:
+                if c_fee > 0:
+                    res += f"Fee: ${c_fee}\n".encode(ENCODE)
                 res += DBL_SIZE + BOLD_ON + f"TOTAL: ${int(total_price or 0)}\n".encode(ENCODE) + NORMAL_SIZE + BOLD_OFF
+                if c_name: res += f"Cust: {c_name}\n".encode(ENCODE, 'replace')
+                if has_contact: res += f"Tel: {c_phone}\n".encode(ENCODE)
             
-            res += b"\n\n" + CUT
+            res += b"\n\n\n" + CUT
             return res
 
         # 4. HTML 預覽生成
@@ -400,7 +424,8 @@ def print_order(oid):
                 main_name = i.get(f"name_{target_lang}") or i.get('name_en') or name_zh if target_lang != 'zh' else name_zh
                 sub_name = name_zh if target_lang != 'zh' else ""
                 raw_opts = i.get('options') or i.get('options_zh') or []
-                opts_display = [translate_option(name_zh, str(opt), target_lang) for opt in (raw_opts if isinstance(raw_opts, list) else [raw_opts])]
+                if not isinstance(raw_opts, list): raw_opts = [raw_opts]
+                opts_display = [translate_option(name_zh, str(opt), target_lang) for opt in raw_opts if opt]
                 
                 h += f"<div class='item-row'><div class='name-col'><span class='item-name-main'>{main_name}</span>"
                 if sub_name: h += f"<span class='item-name-sub'>{sub_name}</span>"
@@ -413,10 +438,9 @@ def print_order(oid):
                 h += f"<div class='total'>Total: ${int(total_price or 0)}</div>"
             return h + "</div>"
 
-       # 5. 輸出處理 (針對多機優化)
+       # 5. 輸出處理
         if output_format == 'base64':
-            init_cmds = b'\x1b\x40\x1c\x26\x1b\x74\x0d'
-            # 拆分成多個 Blob
+            init_cmds = b'\x1b\x40\x1c\x26\x1b\x74\x0d' # 初始化 + 繁體中文模式
             payloads = {
                 "receipt": base64.b64encode(init_cmds + generate_content("結帳單 Receipt", items, is_receipt=True)).decode('utf-8') if items else None,
                 "noodle": base64.b64encode(init_cmds + generate_content("廚房單-麵區", noodle_items)).decode('utf-8') if noodle_items else None,
@@ -425,6 +449,7 @@ def print_order(oid):
             }
             return jsonify({"status": "success", "tasks": payloads})
 
+        # 預覽 HTML 模式
         html_content = ""
         if print_type in ['all', 'receipt']:
             html_content += generate_html_content("結帳單 Receipt", items, is_receipt=True)
@@ -438,6 +463,7 @@ def print_order(oid):
         if output_format == 'raw':
             return html_content
 
+        # Android RawBT 備援方案
         rawbt_html_source = f"<html><head><meta charset='utf-8'>{style}</head><body>{html_content}</body></html>"
         b64_html = base64.b64encode(rawbt_html_source.encode('utf-8')).decode('utf-8')
         intent_url = f"intent:base64,{b64_html}#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;S.jobName=Order_{seq};S.editor=false;end;"
@@ -834,4 +860,5 @@ def daily_report():
     </body>
     </html>
     """
+
 
