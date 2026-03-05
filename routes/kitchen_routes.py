@@ -304,9 +304,8 @@ def print_order(oid):
         table_num, total_price, seq, content_json, created_at, status, \
         c_name, c_phone, c_addr, c_fee, c_schedule, c_type, c_lang = order
         
-        # --- 語言邏輯修正：非英文則一律為中文 ---
-        current_lang = str(c_lang).lower()
-        target_lang = 'en' if current_lang == 'en' else 'zh'
+        # 判斷原始訂單語言
+        order_lang = str(c_lang).lower()
         
         c_fee = int(c_fee or 0)
         table_str = str(table_num).strip() if table_num else ""
@@ -316,15 +315,13 @@ def print_order(oid):
         has_addr = (c_addr and str(c_addr).strip() != '' and str(c_addr).lower() != 'none')
         has_schedule = (c_schedule and str(c_schedule).strip() != '' and str(c_schedule).lower() != 'none')
         
-        if c_type == 'delivery':
-            display_tbl_name = "🛵 外送"
-        elif c_type == 'takeout':
-            display_tbl_name = "🥡 自取"
-        elif c_type == 'dine_in':
-            display_tbl_name = f"桌號 {table_str}"
-        else:
+        # 決定桌號顯示名稱 (結帳單可能需要英文，但廚房單固定中文)
+        def get_display_table(is_en=False):
+            if c_type == 'delivery': return "🛵 Delivery" if is_en else "🛵 外送"
+            if c_type == 'takeout': return "🥡 Takeout" if is_en else "🥡 自取"
+            if c_type == 'dine_in': return f"Table {table_str}" if is_en else f"桌號 {table_str}"
             is_delivery = (table_str == '外送') or has_addr
-            display_tbl_name = "外送" if is_delivery else (table_str if table_str else "外帶")
+            return "Delivery" if is_delivery else (table_str if table_str else "Takeout")
 
         if isinstance(content_json, str):
             try: items = json.loads(content_json)
@@ -355,23 +352,29 @@ def print_order(oid):
                 if found_idx < len(target_list): return target_list[found_idx]
             return opt_str
 
-        # 3. 核心 ESC/POS 生成函數
-        def generate_content(title, item_list, is_receipt=False):
+        # 3. 核心 ESC/POS 生成函數 (新增 lang_override 參數)
+        def generate_content(title, item_list, is_receipt=False, lang_override='zh'):
             if not item_list and not is_receipt: return b""
+            
             ESC, GS = b'\x1b', b'\x1d'
             RESET = ESC + b'@'
             BOLD_ON, BOLD_OFF = ESC + b'E\x01', ESC + b'E\x00'
             CENTER, LEFT = ESC + b'a\x01', ESC + b'a\x00'
             CUT = GS + b'V\x42\x00'
             ENCODE = 'big5-hkscs'
-            DBL_SIZE = GS + b'!\x11' # x11 大字體
-            NORMAL_SIZE = GS + b'!\x00'
+            DBL_SIZE = GS + b'!\x11' # 大字體 (商品名)
+            NORMAL_SIZE = GS + b'!\x00' # 小一號字體 (客製化選項)
             
+            # 抬頭與編號
             res = RESET + CENTER + BOLD_ON + DBL_SIZE + title.encode(ENCODE, 'replace') + b"\n"
             res += f"NO: #{seq:03d}\n".encode(ENCODE)
-            res += f"{display_tbl_name}\n\n".encode(ENCODE, 'replace') + NORMAL_SIZE
-            res += LEFT + f"TIME: {time_str}\n".encode(ENCODE)
             
+            # 桌號/類別 (根據語言 override)
+            tbl_name = get_display_table(is_en=(lang_override == 'en'))
+            res += f"{tbl_name}\n\n".encode(ENCODE, 'replace') + NORMAL_SIZE
+            
+            # 時間
+            res += LEFT + f"TIME: {time_str}\n".encode(ENCODE)
             if has_schedule:
                 res += BOLD_ON + f"PREORDER: {c_schedule}\n".encode(ENCODE) + BOLD_OFF
             
@@ -379,54 +382,74 @@ def print_order(oid):
             
             for i in item_list:
                 name_zh = i.get('name_zh') or i.get('name')
-                # 根據語言邏輯選擇顯示名稱
-                name_to_print = (i.get('name_en') if target_lang == 'en' else name_zh) or name_zh
+                # 根據 override 決定商品名稱語言
+                name_to_print = (i.get('name_en') if lang_override == 'en' else name_zh) or name_zh
                 qty = i.get('qty', 1)
                 
                 # 品項大字
                 res += BOLD_ON + DBL_SIZE + f"{name_to_print} x{qty}\n".encode(ENCODE, 'replace') + NORMAL_SIZE + BOLD_OFF
                 
-                # 客製化選項 (設定為 x11 大字)
+                # 客製化選項處理
                 raw_opts = i.get('options') or i.get('options_zh') or []
                 if not isinstance(raw_opts, list): raw_opts = [raw_opts]
-                opts_translated = [translate_option(name_zh, str(opt), target_lang) for opt in raw_opts if opt]
+                opts_translated = [translate_option(name_zh, str(opt), lang_override) for opt in raw_opts if opt]
                 
                 if opts_translated:
+                    # 商品名稱與選項之間插入一個空行
+                    res += b"\n" 
                     opt_str = " + " + ", ".join(opts_translated)
-                    # 客製化選項使用 BOLD + DBL_SIZE (x11)
-                    res += BOLD_ON + DBL_SIZE + f"{opt_str}\n".encode(ENCODE, 'replace') + NORMAL_SIZE + BOLD_OFF
+                    # 客製化選項使用 NORMAL_SIZE (比商品名稱小一號)
+                    res += BOLD_ON + NORMAL_SIZE + f"{opt_str}\n".encode(ENCODE, 'replace') + BOLD_OFF
                 
                 res += b"-"*32 + b"\n"
             
             if is_receipt:
-                if c_fee > 0: res += f"Fee: ${c_fee}\n".encode(ENCODE)
-                res += DBL_SIZE + BOLD_ON + f"TOTAL: ${int(total_price or 0)}\n".encode(ENCODE) + NORMAL_SIZE + BOLD_OFF
-                if c_name: res += f"Cust: {c_name}\n".encode(ENCODE, 'replace')
+                label_fee = "Fee: " if lang_override == 'en' else "運費: "
+                label_total = "TOTAL: " if lang_override == 'en' else "總計: "
+                label_cust = "Cust: " if lang_override == 'en' else "顧客: "
+                
+                if c_fee > 0: res += f"{label_fee}${c_fee}\n".encode(ENCODE)
+                res += DBL_SIZE + BOLD_ON + f"{label_total}${int(total_price or 0)}\n".encode(ENCODE) + NORMAL_SIZE + BOLD_OFF
+                if c_name: res += f"{label_cust}{c_name}\n".encode(ENCODE, 'replace')
             
             res += b"\n\n\n" + CUT
             return res
 
-        # 4. 輸出處理 (根據 print_type 篩選任務)
+        # 4. 輸出處理 (核心篩選任務)
         if output_format == 'base64':
-            init_cmds = b'\x1b\x40\x1c\x26\x1b\x74\x0d' # 初始化+繁體指令
+            init_cmds = b'\x1b\x40\x1c\x26\x1b\x74\x0d' # 初始化指令
             tasks = {}
             
-            # 判斷是否需要列印結帳單 (類型為 all 或 receipt)
-            if print_type in ['all', 'receipt']:
-                tasks["receipt"] = base64.b64encode(init_cmds + generate_content("結帳單 Receipt", items, is_receipt=True)).decode('utf-8')
+            # 結帳單語言：若 c_lang 為 en 則出英文，否則中文
+            receipt_lang = 'en' if order_lang == 'en' else 'zh'
+            receipt_title = "Receipt" if receipt_lang == 'en' else "結帳單 Receipt"
             
-            # 判斷是否需要列印廚房單 (類型為 all 或 kitchen)
+            # 廚房單語言：固定為 zh (中文)
+            kitchen_lang = 'zh'
+            
+            # A. 處理結帳單任務
+            if print_type in ['all', 'receipt']:
+                tasks["receipt"] = base64.b64encode(
+                    init_cmds + generate_content(receipt_title, items, is_receipt=True, lang_override=receipt_lang)
+                ).decode('utf-8')
+            
+            # B. 處理廚房單任務
             if print_type in ['all', 'kitchen']:
                 if noodle_items:
-                    tasks["noodle"] = base64.b64encode(init_cmds + generate_content("廚房單-麵區", noodle_items)).decode('utf-8')
+                    tasks["noodle"] = base64.b64encode(
+                        init_cmds + generate_content("廚房單-麵區", noodle_items, lang_override=kitchen_lang)
+                    ).decode('utf-8')
                 if soup_items:
-                    tasks["soup"] = base64.b64encode(init_cmds + generate_content("廚房單-湯區", soup_items)).decode('utf-8')
+                    tasks["soup"] = base64.b64encode(
+                        init_cmds + generate_content("廚房單-湯區", soup_items, lang_override=kitchen_lang)
+                    ).decode('utf-8')
                 if other_items:
-                    tasks["other"] = base64.b64encode(init_cmds + generate_content("廚房單-其他", other_items)).decode('utf-8')
+                    tasks["other"] = base64.b64encode(
+                        init_cmds + generate_content("廚房單-其他", other_items, lang_override=kitchen_lang)
+                    ).decode('utf-8')
             
             return jsonify({"status": "success", "tasks": tasks})
 
-        # 以下為預覽 HTML 邏輯 (略，保持原始結構即可)
         return "HTML Preview Mode (Not Base64)", 200
 
     except Exception as e:
@@ -819,6 +842,7 @@ def daily_report():
     </body>
     </html>
     """
+
 
 
 
