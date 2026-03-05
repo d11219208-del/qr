@@ -250,7 +250,7 @@ def check_new_orders():
 @kitchen_bp.route('/print_order/<int:oid>')
 def print_order(oid):
     try:
-        # 接收前端傳來的參數
+        # 接收前端傳來的列印類型與格式
         print_type = request.args.get('type', 'all')
         output_format = request.args.get('format', 'html')
         
@@ -277,7 +277,7 @@ def print_order(oid):
             """, (oid,))
             order = cur.fetchone()
 
-        # 2. 取得產品分類與客製化選項對照表
+        # 2. 取得產品分類與選項對照表
         cur.execute("""
             SELECT name, print_category, 
                    custom_options, custom_options_en, custom_options_jp, custom_options_kr 
@@ -312,15 +312,15 @@ def print_order(oid):
         has_addr = (c_addr and str(c_addr).strip() != '' and str(c_addr).lower() != 'none')
         has_schedule = (c_schedule and str(c_schedule).strip() != '' and str(c_schedule).lower() != 'none')
         
-        # 決定桌號顯示名稱
+        # 決定桌號顯示名稱函式
         def get_display_table(is_en=False):
-            if c_type == 'delivery': return "🛵 Delivery" if is_en else "🛵 外送"
-            if c_type == 'takeout': return "🥡 Takeout" if is_en else "🥡 自取"
+            if c_type == 'delivery': return "Delivery" if is_en else "外送"
+            if c_type == 'takeout': return "Takeout" if is_en else "自取"
             if c_type == 'dine_in': return f"Table {table_str}" if is_en else f"桌號 {table_str}"
             is_delivery = (table_str == '外送') or has_addr
             return "Delivery" if is_delivery else (table_str if table_str else "Takeout")
 
-        # 解析訂單內容
+        # 解析訂單項目
         if isinstance(content_json, str):
             try: items = json.loads(content_json)
             except: items = []
@@ -352,7 +352,7 @@ def print_order(oid):
                 if found_idx < len(target_list): return target_list[found_idx]
             return opt_str
 
-        # 3. 核心 ESC/POS 生成函數 (用於 Base64 輸出)
+        # 3. 核心 ESC/POS 生成函數 (用於 Base64)
         def generate_content(title, item_list, is_receipt=False, lang_override='zh'):
             if not item_list and not is_receipt: return b""
             ESC, GS = b'\x1b', b'\x1d'
@@ -398,7 +398,7 @@ def print_order(oid):
             res += b"\n" + CUT
             return res
 
-        # 4. 輸出處理
+        # 4. 輸出邏輯
         if output_format == 'base64':
             init_cmds = b'\x1b\x40\x1c\x26\x1b\x74\x0d' 
             tasks = {}
@@ -406,9 +406,7 @@ def print_order(oid):
             receipt_title = "Receipt" if receipt_lang == 'en' else "結帳單 Receipt"
             
             if print_type in ['all', 'receipt']:
-                tasks["receipt"] = base64.b64encode(
-                    init_cmds + generate_content(receipt_title, items, is_receipt=True, lang_override=receipt_lang)
-                ).decode('utf-8')
+                tasks["receipt"] = base64.b64encode(init_cmds + generate_content(receipt_title, items, is_receipt=True, lang_override=receipt_lang)).decode('utf-8')
             
             if print_type in ['all', 'kitchen']:
                 if noodle_items:
@@ -420,33 +418,31 @@ def print_order(oid):
             
             return jsonify({"status": "success", "tasks": tasks})
 
-        # --- HTML 預覽模式 ---
         else:
-            preview_data = {
-                "seq": f"{seq:03d}",
-                "time": time_str,
-                "table_func": get_display_table, # 傳入函式以便區分語言
-                "total": int(total_price or 0),
-                "fee": c_fee,
-                "customer": c_name if c_name else "",
-                "schedule": c_schedule if has_schedule else None,
-                "sections": []
-            }
-
+            # HTML 預覽分支 - 這裡修復了傳遞函式的問題
+            sections = []
             if print_type in ['all', 'receipt']:
-                preview_data["sections"].append({
-                    "title": "結帳單 Receipt", "items": items, "is_receipt": True, "lang": order_lang
+                sections.append({
+                    "title": "結帳單 Receipt", "items": items, "is_receipt": True, "lang": order_lang,
+                    "display_table": get_display_table(is_en=(order_lang == 'en'))
                 })
             
             if print_type in ['all', 'kitchen']:
+                kitchen_table = get_display_table(is_en=False) # 廚房固定中文
                 if noodle_items:
-                    preview_data["sections"].append({"title": "廚房單-麵區", "items": noodle_items, "is_receipt": False, "lang": 'zh'})
+                    sections.append({"title": "廚房單-麵區", "items": noodle_items, "is_receipt": False, "lang": 'zh', "display_table": kitchen_table})
                 if soup_items:
-                    preview_data["sections"].append({"title": "廚房單-湯區", "items": soup_items, "is_receipt": False, "lang": 'zh'})
+                    sections.append({"title": "廚房單-湯區", "items": soup_items, "is_receipt": False, "lang": 'zh', "display_table": kitchen_table})
                 if other_items:
-                    preview_data["sections"].append({"title": "廚房單-其他", "items": other_items, "is_receipt": False, "lang": 'zh'})
+                    sections.append({"title": "廚房單-其他", "items": other_items, "is_receipt": False, "lang": 'zh', "display_table": kitchen_table})
 
-            return render_template('print_preview.html', data=preview_data, translate_option=translate_option)
+            return render_template('print_preview.html', 
+                                 sections=sections, 
+                                 data={
+                                     "seq": f"{seq:03d}", "time": time_str, "fee": c_fee, 
+                                     "total": int(total_price or 0), "customer": c_name, "schedule": c_schedule
+                                 }, 
+                                 translate_option=translate_option)
 
     except Exception as e:
         traceback.print_exc()
@@ -838,6 +834,7 @@ def daily_report():
     </body>
     </html>
     """
+
 
 
 
