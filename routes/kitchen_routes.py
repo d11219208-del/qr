@@ -1,8 +1,7 @@
-
-from flask import Blueprint, render_template, request, jsonify
+from flask import Blueprint, render_template, request, jsonify, render_template_string
 import json
-import base64  # 用於 RawBT 編6ㄡ碼
-import traceback 
+import base64  
+import traceback  
 from datetime import datetime, timedelta
 from database import get_db_connection
 
@@ -882,6 +881,7 @@ def daily_report():
     </body>
     </html>
     """
+
 
 
 
