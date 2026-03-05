@@ -1,115 +1,115 @@
 <!DOCTYPE html>
-<html>
+<html lang="zh-TW">
 <head>
     <meta charset="UTF-8">
-    <title>列印預覽 - #{{ data.seq }}</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>列印預覽 #{{ data.seq }}</title>
     <style>
-        body { background: #eee; font-family: "Microsoft JhengHei", sans-serif; padding: 20px; }
-        .receipt-container { display: flex; flex-wrap: wrap; gap: 20px; justify-content: center; }
-        
-        /* 模擬感熱紙寬度 */
-        .paper { 
-            background: white; 
-            width: 300px; 
-            padding: 15px; 
-            box-shadow: 0 0 10px rgba(0,0,0,0.1); 
-            border: 1px solid #ddd;
-            min-height: 400px;
+        :root { --paper-width: 380px; } /* 80mm 在螢幕上的模擬寬度 */
+
+        body { background-color: #525659; display: flex; flex-direction: column; align-items: center; padding: 20px; font-family: "Courier New", "微軟正黑體", sans-serif; }
+
+        .paper {
+            background: white;
+            width: var(--paper-width);
+            padding: 20px;
+            margin-bottom: 30px;
+            box-shadow: 0 0 15px rgba(0,0,0,0.5);
+            box-sizing: border-box;
             position: relative;
+        }
+
+        /* 模擬裁切線 */
+        .paper::after {
+            content: ""; position: absolute; bottom: 0; left: 0; width: 100%; height: 10px;
+            background: linear-gradient(-45deg, transparent 5px, white 5px), linear-gradient(45deg, transparent 5px, white 5px);
+            background-size: 10px 10px;
         }
 
         .center { text-align: center; }
         .bold { font-weight: bold; }
-        .divider { border-top: 1px dashed #000; margin: 10px 0; }
-        
-        .title { font-size: 1.4em; margin-bottom: 5px; }
-        .seq { font-size: 1.2em; }
-        .table-num { font-size: 1.3em; margin: 10px 0; }
-        
-        .item-row { margin-bottom: 10px; }
-        .item-header { display: flex; justify-content: space-between; font-size: 1.2em; font-weight: bold; }
-        .options { font-size: 0.95em; color: #333; padding-left: 10px; margin-top: 4px; }
-        
-        .footer { margin-top: 20px; line-height: 1.6; }
-        .total { font-size: 1.4em; border-top: 2px solid #000; padding-top: 5px; }
+        .divider { border-top: 1px dashed #444; margin: 12px 0; }
+
+        .header-title { font-size: 24px; margin-bottom: 5px; }
+        .header-seq { font-size: 20px; }
+        .header-table { font-size: 28px; margin: 10px 0; border: 2px solid #000; display: inline-block; padding: 0 10px; }
+
+        .info-row { font-size: 14px; margin-bottom: 3px; display: flex; justify-content: space-between; }
+
+        .item-container { margin-top: 15px; }
+        .item-main { display: flex; justify-content: space-between; font-size: 20px; font-weight: bold; }
+        .item-options { font-size: 16px; padding-left: 15px; margin: 5px 0 10px 0; line-height: 1.4; }
+
+        .footer { margin-top: 15px; font-size: 18px; }
+        .total-row { font-size: 24px; border-top: 2px solid #000; padding-top: 10px; margin-top: 10px; }
 
         @media print {
-            body { background: white; padding: 0; }
-            .receipt-container { gap: 0; }
-            .paper { box-shadow: none; border: none; page-break-after: always; }
+            body { background: none; padding: 0; }
+            .paper { box-shadow: none; margin: 0; width: 80mm; page-break-after: always; }
+            .paper::after { display: none; }
         }
     </style>
 </head>
 <body>
 
-<div class="receipt-container">
-    {% for section in data.sections %}
-    <div class="paper">
-        <div class="center">
-            <div class="title bold">{{ section.title }}</div>
-            <div class="seq">NO: #{{ data.seq }}</div>
-            <div class="table-num bold">{{ data.table }}</div>
-        </div>
+{% for section in sections %}
+<div class="paper">
+    <div class="center">
+        <div class="header-title bold">{{ section.title }}</div>
+        <div class="header-seq">NO: #{{ data.seq }}</div>
+        <div class="header-table bold">{{ data.table(section.lang == 'en') }}</div>
+    </div>
 
-        <div class="info">
-            TIME: {{ data.time }}<br>
-            {% if data.schedule %}
-            <div class="bold">PREORDER: {{ data.schedule }}</div>
-            {% endif %}
-        </div>
+    <div class="info-row"><span>TIME:</span> <span>{{ data.time }}</span></div>
+    {% if data.schedule %}
+    <div class="info-row bold"><span>PREORDER:</span> <span>{{ data.schedule }}</span></div>
+    {% endif %}
 
-        <div class="divider"></div>
+    <div class="divider"></div>
 
+    <div class="item-container">
         {% for item in section.items %}
-            <div class="item-row">
-                <div class="item-header">
-                    <span>
-                        {% if section.lang == 'en' %}
-                            {{ item.name_en or item.name_zh or item.name }}
-                        {% else %}
-                            {{ item.name_zh or item.name }}
-                        {% endif %}
-                    </span>
-                    <span>x{{ item.qty }}</span>
-                </div>
-                
-                {% set raw_opts = item.get('options') or item.get('options_zh') or [] %}
-                {% if raw_opts %}
-                <div class="options">
+            {% set p_name = item.name_zh or item.name %}
+            <div class="item-main">
+                <span>{{ item.name_en if section.lang == 'en' and item.name_en else p_name }}</span>
+                <span>x{{ item.qty }}</span>
+            </div>
+            
+            {% set raw_opts = item.get('options') or item.get('options_zh') or [] %}
+            {% if raw_opts %}
+                <div class="item-options">
                     + 
                     {% if raw_opts is string %}
-                        {{ translate_option(item.name_zh or item.name, raw_opts, section.lang) }}
+                        {{ translate_option(p_name, raw_opts, section.lang) }}
                     {% else %}
-                        {% for opt in raw_opts %}
-                            {{ translate_option(item.name_zh or item.name, opt, section.lang) }}{% if not loop.last %}, {% endif %}
-                        {% endfor %}
+                        {{ raw_opts | map('string') | list | join(', ') }}
                     {% endif %}
                 </div>
-                {% endif %}
-            </div>
+            {% endif %}
             <div class="divider"></div>
         {% endfor %}
-
-        {% if section.is_receipt %}
-        <div class="footer">
-            {% if data.fee > 0 %}
-            <div>{{ 'Fee' if section.lang == 'en' else '運費' }}: ${{ data.fee }}</div>
-            {% endif %}
-            <div class="total bold">
-                {{ 'TOTAL' if section.lang == 'en' else '總計' }}: ${{ data.total }}
-            </div>
-            {% if data.customer %}
-            <div>{{ 'Cust' if section.lang == 'en' else '顧客' }}: {{ data.customer }}</div>
-            {% endif %}
-        </div>
-        {% endif %}
-        
-        <div class="center" style="margin-top: 20px; color: #999; font-size: 0.8em;">
-            --- End of Print ---
-        </div>
     </div>
-    {% endfor %}
+
+    {% if section.is_receipt %}
+    <div class="footer">
+        {% if data.fee > 0 %}
+        <div class="info-row"><span>{{ 'Fee' if section.lang == 'en' else '運費' }}:</span> <span>${{ data.fee }}</span></div>
+        {% endif %}
+        <div class="total-row bold">
+            <span>{{ 'TOTAL' if section.lang == 'en' else '總計' }}:</span>
+            <span>${{ data.total }}</span>
+        </div>
+        {% if data.customer %}
+        <div class="info-row" style="margin-top:10px;"><span>{{ 'Cust' if section.lang == 'en' else '顧客' }}:</span> <span>{{ data.customer }}</span></div>
+        {% endif %}
+    </div>
+    {% endif %}
+
+    <div class="center" style="margin-top: 30px; font-size: 12px; color: #888;">
+        *** 預覽結束 ***
+    </div>
 </div>
+{% endfor %}
 
 </body>
 </html>
