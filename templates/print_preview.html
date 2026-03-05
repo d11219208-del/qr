@@ -2,28 +2,17 @@
 <html lang="zh-TW">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>列印預覽 #{{ data.seq }}</title>
+    <title>列印預覽 - #{{ data.seq }}</title>
     <style>
-        :root { --paper-width: 380px; } /* 80mm 在螢幕上的模擬寬度 */
-
+        :root { --paper-width: 380px; }
         body { background-color: #525659; display: flex; flex-direction: column; align-items: center; padding: 20px; font-family: "Courier New", "微軟正黑體", sans-serif; }
+        
+        .no-print-zone { margin-bottom: 20px; }
+        .btn-print { padding: 10px 25px; font-size: 18px; cursor: pointer; background: #28a745; color: white; border: none; border-radius: 5px; }
 
         .paper {
-            background: white;
-            width: var(--paper-width);
-            padding: 20px;
-            margin-bottom: 30px;
-            box-shadow: 0 0 15px rgba(0,0,0,0.5);
-            box-sizing: border-box;
-            position: relative;
-        }
-
-        /* 模擬裁切線 */
-        .paper::after {
-            content: ""; position: absolute; bottom: 0; left: 0; width: 100%; height: 10px;
-            background: linear-gradient(-45deg, transparent 5px, white 5px), linear-gradient(45deg, transparent 5px, white 5px);
-            background-size: 10px 10px;
+            background: white; width: var(--paper-width); padding: 20px; margin-bottom: 30px;
+            box-shadow: 0 0 15px rgba(0,0,0,0.5); box-sizing: border-box; position: relative;
         }
 
         .center { text-align: center; }
@@ -35,29 +24,30 @@
         .header-table { font-size: 28px; margin: 10px 0; border: 2px solid #000; display: inline-block; padding: 0 10px; }
 
         .info-row { font-size: 14px; margin-bottom: 3px; display: flex; justify-content: space-between; }
+        .item-main { display: flex; justify-content: space-between; font-size: 20px; font-weight: bold; margin-top: 10px; }
+        .item-options { font-size: 16px; padding-left: 15px; margin: 5px 0; color: #333; line-height: 1.4; }
 
-        .item-container { margin-top: 15px; }
-        .item-main { display: flex; justify-content: space-between; font-size: 20px; font-weight: bold; }
-        .item-options { font-size: 16px; padding-left: 15px; margin: 5px 0 10px 0; line-height: 1.4; }
-
-        .footer { margin-top: 15px; font-size: 18px; }
         .total-row { font-size: 24px; border-top: 2px solid #000; padding-top: 10px; margin-top: 10px; }
 
         @media print {
+            .no-print-zone { display: none; }
             body { background: none; padding: 0; }
             .paper { box-shadow: none; margin: 0; width: 80mm; page-break-after: always; }
-            .paper::after { display: none; }
         }
     </style>
 </head>
 <body>
 
-{% for section in sections %}
+<div class="no-print-zone">
+    <button class="btn-print" onclick="window.print()">直接列印預覽內容 (Ctrl+P)</button>
+</div>
+
+{% for section in data.sections %}
 <div class="paper">
     <div class="center">
         <div class="header-title bold">{{ section.title }}</div>
         <div class="header-seq">NO: #{{ data.seq }}</div>
-        <div class="header-table bold">{{ data.table(section.lang == 'en') }}</div>
+        <div class="header-table bold">{{ data.table_func(section.lang == 'en') }}</div>
     </div>
 
     <div class="info-row"><span>TIME:</span> <span>{{ data.time }}</span></div>
@@ -67,47 +57,34 @@
 
     <div class="divider"></div>
 
-    <div class="item-container">
-        {% for item in section.items %}
-            {% set p_name = item.name_zh or item.name %}
-            <div class="item-main">
-                <span>{{ item.name_en if section.lang == 'en' and item.name_en else p_name }}</span>
-                <span>x{{ item.qty }}</span>
-            </div>
-            
-            {% set raw_opts = item.get('options') or item.get('options_zh') or [] %}
-            {% if raw_opts %}
-                <div class="item-options">
-                    + 
-                    {% if raw_opts is string %}
-                        {{ translate_option(p_name, raw_opts, section.lang) }}
-                    {% else %}
-                        {{ raw_opts | map('string') | list | join(', ') }}
-                    {% endif %}
-                </div>
-            {% endif %}
-            <div class="divider"></div>
-        {% endfor %}
-    </div>
+    {% for item in section.items %}
+        {% set name_zh = item.get('name_zh') or item.get('name') %}
+        <div class="item-main">
+            <span>{{ item.get('name_en') if section.lang == 'en' else name_zh }}</span>
+            <span>x{{ item.get('qty', 1) }}</span>
+        </div>
+        
+        {% set raw_opts = item.get('options') or item.get('options_zh') or [] %}
+        {% if raw_opts is string %}{% set raw_opts = [raw_opts] %}{% endif %}
+        
+        {% if raw_opts %}
+        <div class="item-options">
+            + {% for opt in raw_opts %}{{ translate_option(name_zh, opt|string, section.lang) }}{% if not loop.last %}, {% endif %}{% endfor %}
+        </div>
+        {% endif %}
+        <div class="divider"></div>
+    {% endfor %}
 
     {% if section.is_receipt %}
     <div class="footer">
-        {% if data.fee > 0 %}
-        <div class="info-row"><span>{{ 'Fee' if section.lang == 'en' else '運費' }}:</span> <span>${{ data.fee }}</span></div>
-        {% endif %}
+        {% if data.fee > 0 %}<div class="info-row"><span>運費:</span> <span>${{ data.fee }}</span></div>{% endif %}
         <div class="total-row bold">
             <span>{{ 'TOTAL' if section.lang == 'en' else '總計' }}:</span>
             <span>${{ data.total }}</span>
         </div>
-        {% if data.customer %}
-        <div class="info-row" style="margin-top:10px;"><span>{{ 'Cust' if section.lang == 'en' else '顧客' }}:</span> <span>{{ data.customer }}</span></div>
-        {% endif %}
+        {% if data.customer %}<div class="info-row" style="margin-top:10px;"><span>顧客:</span> <span>{{ data.customer }}</span></div>{% endif %}
     </div>
     {% endif %}
-
-    <div class="center" style="margin-top: 30px; font-size: 12px; color: #888;">
-        *** 預覽結束 ***
-    </div>
 </div>
 {% endfor %}
 
