@@ -397,114 +397,10 @@ def print_order(oid):
             preview_content += '</div>'
             return render_template_string(preview_content)
 
-        # --- 3. 核心列印路由 ---
-@kitchen_bp.route('/print_order/<int:oid>')
-def print_order(oid):
-    try:
-        print_type = request.args.get('type', 'all')
-        output_format = request.args.get('format', 'html')
-        
-        conn = get_db_connection()
-        cur = conn.cursor()
-        
-        # 1. 取得訂單資料
-        query = """
-            SELECT table_number, total_price, daily_seq, content_json, created_at, status,
-                   customer_name, customer_phone, customer_address, delivery_fee, scheduled_for, 
-                   order_type, lang
-            FROM orders WHERE id=%s
-        """
-        try:
-            cur.execute(query, (oid,))
-            order = cur.fetchone()
-        except Exception as e:
-            conn.rollback() 
-            cur.execute("""
-                SELECT table_number, total_price, daily_seq, content_json, created_at, status,
-                       customer_name, customer_phone, customer_address, delivery_fee, scheduled_for, 
-                       'unknown', 'zh'
-                FROM orders WHERE id=%s
-            """, (oid,))
-            order = cur.fetchone()
-
-        # 2. 取得產品分類與選項對照表
-        cur.execute("""
-            SELECT name, print_category, 
-                   custom_options, custom_options_en, custom_options_jp, custom_options_kr 
-            FROM products
-        """)
-        product_map = {}
-        for row in cur.fetchall():
-            p_name = row[0]
-            def split_opts(opt_str):
-                if not opt_str: return []
-                return [o.strip() for o in opt_str.split(',') if o.strip()]
-            product_map[p_name] = {
-                'cat': row[1] or 'Other',
-                'zh': split_opts(row[2]),
-                'en': split_opts(row[3]),
-                'jp': split_opts(row[4]),
-                'kr': split_opts(row[5])
-            }
-        conn.close()
-        
-        if not order:
-            return "訂單不存在", 404
-        
-        table_num, total_price, seq, content_json, created_at, status, \
-        c_name, c_phone, c_addr, c_fee, c_schedule, c_type, c_lang = order
-        
-        c_fee = int(c_fee or 0)
-        table_str = str(table_num).strip() if table_num else ""
-        c_type = str(c_type).lower() if c_type else 'unknown'
-        c_lang = str(c_lang).lower() if c_lang else 'zh'
-        
-        has_contact = (c_phone and str(c_phone).strip() != '' and str(c_phone).lower() != 'none')
-        has_addr = (c_addr and str(c_addr).strip() != '' and str(c_addr).lower() != 'none')
-        has_schedule = (c_schedule and str(c_schedule).strip() != '' and str(c_schedule).lower() != 'none')
-        
-        if c_type == 'delivery':
-            display_tbl_name = "🛵 外送"
-        elif c_type == 'takeout':
-            display_tbl_name = "🥡 自取"
-        elif c_type == 'dine_in':
-            display_tbl_name = f"桌號 {table_str}"
-        else:
-            is_delivery = (table_str == '外送') or has_addr
-            display_tbl_name = "外送" if is_delivery else (table_str if table_str else "外帶")
-
-        if isinstance(content_json, str):
-            try: items = json.loads(content_json)
-            except: items = []
-        else:
-            items = content_json if isinstance(content_json, list) else [content_json]
-        
-        time_str = (created_at + timedelta(hours=8)).strftime('%Y-%m-%d %H:%M:%S')
-
-        noodle_items, soup_items, other_items = [], [], []
-        for item in items:
-            p_name = item.get('name_zh') or item.get('name')
-            p_cat = product_map.get(p_name, {}).get('cat', 'Other') 
-            if p_cat == 'Noodle': noodle_items.append(item)
-            elif p_cat == 'Soup': soup_items.append(item)
-            else: other_items.append(item)
-
-        def translate_option(p_name, opt_str, target_lang):
-            if p_name not in product_map: return opt_str
-            p_data = product_map[p_name]
-            found_idx = -1
-            for lang in ['zh', 'en', 'jp', 'kr']:
-                if opt_str in p_data[lang]:
-                    found_idx = p_data[lang].index(opt_str)
-                    break
-            if found_idx != -1:
-                target_list = p_data.get(target_lang, [])
-                if found_idx < len(target_list): return target_list[found_idx]
-            return opt_str
-
-        # --- 3. 核心 ESC/POS 生成函數 (優化 80mm 字體控制) ---
-        def generate_content(title, item_list, is_receipt=False):
+        # --- 3. 核心 ESC/POS 生成函數 (80mm & 獨立字體控制) ---
+        def generate_content(title, item_list, is_receipt=False, lang_override='zh'):
             if not item_list and not is_receipt: return b""
+            
             ESC, GS = b'\x1b', b'\x1d'
             RESET = ESC + b'@'
             BOLD_ON, BOLD_OFF = ESC + b'E\x01', ESC + b'E\x00'
@@ -513,118 +409,100 @@ def print_order(oid):
             ENCODE = 'big5-hkscs'
             
             # 定義不同行的大小
-            SIZE_X22 = GS + b'!\x22'     # 標題/總計用 (3x3)
-            SIZE_X11 = GS + b'!\x11'     # 桌號/流水號/商品用 (2x2)
-            SIZE_X01 = GS + b'!\x01'     # 時間/備註/客製化用 (1x2)
-            SIZE_NORM = GS + b'!\x00'    # 分隔線用 (1x1)
+            SIZE_X22 = GS + b'!\x22'     # 標題用 (3x3)
+            SIZE_X11 = GS + b'!\x11'     # 桌號、流水號、商品用 (2x2)
+            SIZE_X01 = GS + b'!\x01'     # 時間、備註、客製化用 (1x2)
+            SIZE_NORM = GS + b'!\x00'    # 標準大小
             
-            # --- 頁首區塊 (置中) ---
-            res = RESET + CENTER + BOLD_ON + SIZE_X22 + title.encode(ENCODE, 'replace') + b"\n"
+            # --- 頁首區塊 ---
+            res = RESET + CENTER
+            # 標題 (x22)
+            res += SIZE_X22 + BOLD_ON + title.encode(ENCODE, 'replace') + b"\n"
+            # 流水號 (x11)
             res += SIZE_X11 + f"NO: #{seq:03d}\n".encode(ENCODE)
-            res += f"{display_tbl_name}\n\n".encode(ENCODE, 'replace')
+            # 桌號 (x11)
+            tbl_name = get_display_table(is_en=(lang_override == 'en'))
+            res += tbl_name.encode(ENCODE, 'replace') + b"\n\n"
             
             # --- 資訊區塊 (靠左) ---
-            res += LEFT + SIZE_X01 + f"TIME: {time_str}\n".encode(ENCODE)
+            res += LEFT
+            # 訂單時間 (x01)
+            res += SIZE_X01 + f"TIME: {time_str}\n".encode(ENCODE)
+            # 外送資訊 (x01)
             if has_schedule:
                 res += BOLD_ON + f"PREORDER: {c_schedule}\n".encode(ENCODE) + BOLD_OFF
             if has_addr and is_receipt:
                 res += f"ADDR: {c_addr}\n".encode(ENCODE, 'replace')
             
+            # 分隔線 (80mm 寬度約 48 字元)
             res += SIZE_NORM + b"-"*48 + b"\n"
             
             # --- 商品清單 ---
             for i in item_list:
                 name_zh = i.get('name_zh') or i.get('name')
+                name_to_print = (i.get('name_en') if lang_override == 'en' else name_zh) or name_zh
                 qty = i.get('qty', 1)
                 
-                # 商品名稱 (x11) + 換行
-                res += BOLD_ON + SIZE_X11 + f"{name_zh} x{qty}\n".encode(ENCODE, 'replace') + BOLD_OFF
+                # 商品名稱 (x11)
+                res += SIZE_X11 + BOLD_ON + f"{name_to_print} x{qty}\n".encode(ENCODE, 'replace') + BOLD_OFF
                 
                 # 客製化選項 (x01)
                 raw_opts = i.get('options') or i.get('options_zh') or []
                 if not isinstance(raw_opts, list): raw_opts = [raw_opts]
-                # 這裡強制使用中文翻譯作為廚房單依據
-                opts_trans = [translate_option(name_zh, str(opt), 'zh') for opt in raw_opts if opt]
+                opts_translated = [translate_option(name_zh, str(opt), lang_override) for opt in raw_opts if opt]
                 
-                if opts_trans:
-                    opt_str = " + " + ", ".join(opts_trans)
+                if opts_translated:
+                    opt_str = " + " + ", ".join(opts_translated)
                     res += SIZE_X01 + f"{opt_str}\n".encode(ENCODE, 'replace')
                 
-                # 商品間分隔線
+                # 分隔線
                 res += SIZE_NORM + b"-"*48 + b"\n"
             
-            # --- 結帳資訊 (僅收據顯示) ---
+            # --- 結帳資訊 ---
             if is_receipt:
-                if c_fee > 0:
-                    res += SIZE_X01 + f"Fee: ${c_fee}\n".encode(ENCODE)
-                res += BOLD_ON + SIZE_X22 + f"TOTAL: ${int(total_price or 0)}\n".encode(ENCODE) + BOLD_OFF
+                label_fee = "Fee: " if lang_override == 'en' else "運費: "
+                label_total = "TOTAL: " if lang_override == 'en' else "總計: "
+                label_cust = "Cust: " if lang_override == 'en' else "顧客: "
+                
+                if c_fee > 0: res += SIZE_X01 + f"{label_fee}${c_fee}\n".encode(ENCODE)
+                # 總計 (x22 讓它最明顯)
+                res += SIZE_X22 + BOLD_ON + f"{label_total}${int(total_price or 0)}\n".encode(ENCODE) + BOLD_OFF
+                if c_name: res += SIZE_X01 + f"{label_cust}{c_name}\n".encode(ENCODE, 'replace')
             
-            res += b"\n\n" + CUT
+            res += b"\n\n\n" + CUT
             return res
 
-        # 4. HTML 預覽生成 (手機端展示用)
-        def generate_html_content(title, item_list, is_receipt=False):
-            if not item_list and not is_receipt: return ""
-            void_mark = "<div class='void-watermark'>作廢單</div>" if status == 'Cancelled' else ""
-            h = f"<div class='ticket'>{void_mark}<div class='head'><h2>{title}</h2><h1>#{seq:03d}</h1></div>"
-            h += f"<div class='info-box'><div class='table-row'><span class='table-val'>{display_tbl_name}</span></div>"
-            h += f"<div class='time-row'>下單: {time_str}</div></div>"
-            if has_schedule: h += f"<div class='schedule-row'>🕒 預約: {c_schedule}</div>"
-            if is_delivery or has_contact or (c_name and str(c_name).strip()):
-                h += f"<div class='customer-info'>"
-                if c_name: h += f"<div class='cust-row'>👤 {c_name}</div>"
-                if has_contact: h += f"<div class='cust-row'>📞 {c_phone}</div>"
-                if has_addr: h += f"<div class='addr-row'>📍 {c_addr}</div>"
-                h += f"</div>"
-            for i in item_list:
-                name_zh = i.get('name_zh') or i.get('name')
-                target_lang = c_lang if is_receipt else 'zh'
-                main_name = i.get(f"name_{target_lang}") or i.get('name_en') or name_zh if target_lang != 'zh' else name_zh
-                sub_name = name_zh if target_lang != 'zh' else ""
-                raw_opts = i.get('options') or i.get('options_zh') or []
-                opts_display = [translate_option(name_zh, str(opt), target_lang) for opt in (raw_opts if isinstance(raw_opts, list) else [raw_opts])]
-                
-                h += f"<div class='item-row'><div class='name-col'><span class='item-name-main'>{main_name}</span>"
-                if sub_name: h += f"<span class='item-name-sub'>{sub_name}</span>"
-                h += f"</div><span class='item-qty'>x{i.get('qty', 1)}</span></div>"
-                if opts_display: 
-                    h += f"<div class='opt' style='margin-top: 4px;'>└ {', '.join(opts_display)}</div>"
-            
-            if is_receipt:
-                if c_fee > 0: h += f"<div class='fee-row'>小計: ${int(total_price - c_fee)}</div><div class='fee-row'>運費: ${c_fee}</div>"
-                h += f"<div class='total'>Total: ${int(total_price or 0)}</div>"
-            return h + "</div>"
-
-        # 5. 輸出處理 (針對 WebUSB/Base64 優化)
+        # 4. 輸出處理 (Base64)
         if output_format == 'base64':
+            # 初始化指令：重置 + 進入中文模式 + 設定字體代碼頁
             init_cmds = b'\x1b\x40\x1c\x26\x1b\x74\x0d'
-            payloads = {
-                "receipt": base64.b64encode(init_cmds + generate_content("結帳單 Receipt", items, is_receipt=True)).decode('utf-8') if items else None,
-                "noodle": base64.b64encode(init_cmds + generate_content("廚房單-麵區", noodle_items)).decode('utf-8') if noodle_items else None,
-                "soup": base64.b64encode(init_cmds + generate_content("廚房單-湯區", soup_items)).decode('utf-8') if soup_items else None,
-                "other": base64.b64encode(init_cmds + generate_content("廚房單-其他", other_items)).decode('utf-8') if other_items else None
-            }
-            return jsonify({"status": "success", "tasks": payloads})
+            tasks = {}
+            receipt_lang = 'en' if order_lang == 'en' else 'zh'
+            receipt_title = "Receipt" if receipt_lang == 'en' else "結帳單"
+            kitchen_lang = 'zh'
+            
+            if print_type in ['all', 'receipt']:
+                tasks["receipt"] = base64.b64encode(
+                    init_cmds + generate_content(receipt_title, items, is_receipt=True, lang_override=receipt_lang)
+                ).decode('utf-8')
+            
+            if print_type in ['all', 'kitchen']:
+                if noodle_items:
+                    tasks["noodle"] = base64.b64encode(
+                        init_cmds + generate_content("廚房單-麵區", noodle_items, lang_override=kitchen_lang)
+                    ).decode('utf-8')
+                if soup_items:
+                    tasks["soup"] = base64.b64encode(
+                        init_cmds + generate_content("廚房單-湯區", soup_items, lang_override=kitchen_lang)
+                    ).decode('utf-8')
+                if other_items:
+                    tasks["other"] = base64.b64encode(
+                        init_cmds + generate_content("廚房單-其他", other_items, lang_override=kitchen_lang)
+                    ).decode('utf-8')
+            
+            return jsonify({"status": "success", "tasks": tasks})
 
-        # --- 預覽與 Intent 處理 ---
-        html_content = ""
-        if print_type in ['all', 'receipt']:
-            html_content += generate_html_content("結帳單 Receipt", items, is_receipt=True)
-        if print_type in ['all', 'kitchen']:
-            if noodle_items: html_content += generate_html_content("廚房單 - 麵區", noodle_items)
-            if soup_items: html_content += generate_html_content("廚房單 - 湯區", soup_items)
-            if other_items: html_content += generate_html_content("廚房單 - 其他", other_items)
-
-        style = "<style>@page { size: 80mm auto; margin: 0mm; } body { font-family: 'Microsoft JhengHei', sans-serif; width: 78mm; margin: 0 auto; padding: 2px; } .ticket { border-bottom: 3px dashed #000; padding: 10px 0 30px 0; margin-bottom: 10px; page-break-after: always; position: relative; } .head h2 { font-size: 24px; margin: 0; border: 2px solid #000; padding: 4px 10px; display: inline-block; font-weight: 900; } .head h1 { font-size: 42px; margin: 5px 0; font-weight: 900; } .info-box { border-bottom: 2px solid #000; padding-bottom: 5px; } .table-row { text-align: center; } .table-val { font-size: 36px; font-weight: 900; } .time-row { font-size: 14px; text-align: center; } .customer-info { border: 2px solid #000; padding: 6px; font-size: 18px; font-weight: bold; } .addr-row { font-size: 24px; font-weight: 900; border-top: 1px dashed #000; } .schedule-row { font-size: 22px; font-weight: 900; background: #000; color: #fff; text-align: center; } .item-row { display: flex; justify-content: space-between; font-size: 24px; font-weight: 900; margin-top: 5px;} .item-name-sub { font-size: 16px; display: block; color: #555; } .opt { font-size: 18px; font-weight: bold; padding-left: 10px; } .total { text-align: right; font-size: 28px; font-weight: 900; border-top: 2px solid #000; margin-top: 10px; }</style>"
-        
-        if output_format == 'raw':
-            return html_content
-
-        rawbt_html_source = f"<html><head><meta charset='utf-8'>{style}</head><body>{html_content}</body></html>"
-        b64_html = base64.b64encode(rawbt_html_source.encode('utf-8')).decode('utf-8')
-        intent_url = f"intent:base64,{b64_html}#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;S.jobName=Order_{seq};S.editor=false;end;"
-
-        return f"<!DOCTYPE html><html><head><meta charset='utf-8'><title>Print Order</title>{style}</head><body>{html_content}<script>if(/android/i.test(navigator.userAgent)){{window.location.href='{intent_url}';setTimeout(function(){{if(window.opener)window.close();}},1500);}}</script></body></html>"
+        return "HTML Preview Mode (Not Base64)", 200
 
     except Exception as e:
         traceback.print_exc()
@@ -1016,4 +894,3 @@ def daily_report():
     </body>
     </html>
     """
-
