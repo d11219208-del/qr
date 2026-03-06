@@ -398,12 +398,12 @@ def print_order(oid):
             return render_template_string(preview_content)
 
        # --- 3. 核心 ESC/POS 生成函數 (80mm & 獨立字體控制) ---
-def generate_content(title, item_list, order_data, is_receipt=False, lang_override='zh'):
-    """
-    order_data 應包含: 
-    seq, time_str, scheduled_for, customer_name, customer_phone, 
-    customer_address, delivery_fee, total_price
-    """
+    def generate_content(title, item_list, order_data, is_receipt=False, lang_override='zh'):
+         """
+        order_data 應包含: 
+        seq, time_str, scheduled_for, customer_name, customer_phone, 
+        customer_address, delivery_fee, total_price
+        """    
     if not item_list and not is_receipt: 
         return b""
     
@@ -972,5 +972,6 @@ def daily_report():
     </body>
     </html>
     """
+
 
 
