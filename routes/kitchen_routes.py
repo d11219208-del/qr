@@ -51,7 +51,6 @@ def kitchen_panel():
 
 
 # --- 2. 檢查新訂單 API ---
-# --- 2. 檢查新訂單 API (已優化：優先顯示舊訂單) ---
 @kitchen_bp.route('/check_new_orders')
 def check_new_orders():
     try:
@@ -63,7 +62,7 @@ def check_new_orders():
         conn = get_db_connection()
         cur = conn.cursor()
         
-        # SQL 查詢：排序邏輯修改為 daily_seq ASC (升序)，讓舊訂單排在前面
+        # SQL 查詢：確保包含 customer_address
         query = """
             SELECT id, table_number, items, total_price, status, created_at, lang, daily_seq, content_json,
                    customer_name, customer_phone, customer_address, scheduled_for, delivery_fee, order_type
@@ -80,21 +79,19 @@ def check_new_orders():
         except Exception as e:
             conn.rollback() 
             print(f"SQL Fallback triggered (check_new_orders): {e}")
-            # Fallback (排序同樣改為 ASC)
+            # Fallback (防止舊資料庫結構缺少 order_type 報錯)
             query_fallback = """
                 SELECT id, table_number, items, total_price, status, created_at, lang, daily_seq, content_json,
                        customer_name, customer_phone, customer_address, scheduled_for, delivery_fee, 'unknown'
                 FROM orders 
                 WHERE created_at >= %s AND created_at <= %s
-                ORDER BY 
-                    CASE WHEN status = 'Pending' THEN 0 ELSE 1 END,
-                    daily_seq ASC
+                ORDER BY status, daily_seq ASC
             """
             cur.execute(query_fallback, (utc_start, utc_end))
 
         orders = cur.fetchall()
         
-        # 取得目前最大序號 (用於前端判斷是否有新進訂單)
+        # 取得目前最大序號
         cur.execute("SELECT MAX(daily_seq) FROM orders WHERE created_at >= %s AND created_at <= %s", (utc_start, utc_end))
         res_max = cur.fetchone()
         max_seq_val = res_max[0] if res_max and res_max[0] else 0
@@ -108,14 +105,14 @@ def check_new_orders():
             html_content = "<div id='loading-msg' style='grid-column:1/-1;text-align:center;padding:100px;font-size:1.5em;color:#888;'>🍽️ 目前沒有訂單</div>"
         
         for o in orders:
-            # 解包變數 (15個欄位)
+            # 解包變數 (確保變數數量 = 15)
             oid, table, raw_items, total, status, created, order_lang, seq_num, c_json, \
             c_name, c_phone, c_addr, c_schedule, c_fee, c_type = o
             
             status_cls = status.lower()
             tw_time = created + timedelta(hours=8)
             
-            # 【關鍵修改 2】：只有當狀態是 Pending，且單號「大於」前端已知的 last_seq 時，才視為真正的新訂單通知
+            # 【關鍵修改 2】：只有當狀態是 Pending，且單號「大於」前端已知的 last_seq 時，才視為真正的新訂單
             if status == 'Pending' and seq_num > last_seq:
                 pending_ids.append(oid)
 
@@ -124,11 +121,12 @@ def check_new_orders():
             c_fee = int(c_fee or 0)
             c_type = str(c_type).lower() if c_type else 'unknown'
             
+            # 判斷是否為外送/外帶/預約
             has_contact = (c_phone and str(c_phone).strip() != '' and str(c_phone).strip().lower() != 'none')
             has_addr = (c_addr and str(c_addr).strip() != '' and str(c_addr).strip().lower() != 'none')
             has_schedule = (c_schedule and str(c_schedule).strip() != '' and str(c_schedule).lower() != 'none')
 
-            # 邏輯判斷訂單類型顯示
+            # 邏輯判斷
             if c_type == 'delivery':
                 is_delivery = True
                 display_table = "🛵 外送"
@@ -139,6 +137,7 @@ def check_new_orders():
                 is_delivery = False
                 display_table = f"桌號 {table_str}"
             else:
+                # 舊邏輯 Fallback
                 is_delivery = (table_str == '外送') or has_addr
                 if is_delivery:
                     display_table = "🛵 外送"
@@ -895,11 +894,3 @@ def daily_report():
     </body>
     </html>
     """
-
-
-
-
-
-
-
-
