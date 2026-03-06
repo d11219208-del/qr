@@ -424,15 +424,39 @@ def print_order(oid):
             tbl_name = get_display_table(is_en=(lang_override == 'en'))
             res += tbl_name.encode(ENCODE, 'replace') + b"\n\n"
             
-            # --- 資訊區塊 (靠左) ---
+           # --- 資訊區塊 (靠左) ---
             res += LEFT
-            # 訂單時間 (x01)
-            res += SIZE_X01 + f"TIME: {time_str}\n".encode(ENCODE)
-            # 外送資訊 (x01)
-            if has_schedule:
-                res += BOLD_ON + f"PREORDER: {c_schedule}\n".encode(ENCODE) + BOLD_OFF
-            if has_addr and is_receipt:
-                res += f"ADDR: {c_addr}\n".encode(ENCODE, 'replace')
+            
+            # 1. 訂單時間 (x01)
+            label_time = "TIME: " if lang_override == 'en' else "下單時間: "
+            res += SIZE_X01 + f"{label_time}{time_str}\n".encode(ENCODE)
+            
+            # 2. 預約送達時間 (scheduled_for)
+            if scheduled_for:
+                label_sched = "SCHEDULED: " if lang_override == 'en' else "預約時間: "
+                # 預約時間通常很重要，加粗處理
+                res += BOLD_ON + f"{label_sched}{scheduled_for}\n".encode(ENCODE) + BOLD_OFF
+                
+            # 3. 客戶姓名 (customer_name)
+            if customer_name:
+                label_name = "CUST: " if lang_override == 'en' else "客戶姓名: "
+                res += f"{label_name}{customer_name}\n".encode(ENCODE, 'replace')
+                
+            # 4. 客戶電話 (customer_phone)
+            if customer_phone:
+                label_phone = "TEL: " if lang_override == 'en' else "客戶電話: "
+                res += f"{label_phone}{customer_phone}\n".encode(ENCODE)
+                
+            # 5. 客戶地址 (customer_address) - 僅在收據模式或有地址時顯示
+            if customer_address:
+                label_addr = "ADDR: " if lang_override == 'en' else "送貨地址: "
+                # 地址可能很長，x01 高度可以幫助辨識
+                res += f"{label_addr}{customer_address}\n".encode(ENCODE, 'replace')
+
+            # 6. 外送費 (delivery_fee) - 顯示在資訊區或下方的結帳區
+            if delivery_fee and delivery_fee > 0:
+                label_fee = "DELIVERY FEE: " if lang_override == 'en' else "外送費用: "
+                res += f"{label_fee}${delivery_fee}\n".encode(ENCODE)
             
             # 分隔線 (80mm 寬度約 48 字元)
             res += SIZE_NORM + b"-"*48 + b"\n"
@@ -894,3 +918,4 @@ def daily_report():
     </body>
     </html>
     """
+
