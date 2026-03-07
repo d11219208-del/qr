@@ -397,22 +397,9 @@ def print_order(oid):
             preview_content += '</div>'
             return render_template_string(preview_content)
 
-
-
-        # --- 3. 核心 ESC/POS 生成函數 (建議放在路由函式外面，作為獨立工具函數) ---
-        def generate_content(title, item_list, order_data, is_receipt=False, lang_override='zh'):
-            if not item_list and not is_receipt: 
-                return b""
-            
-            # 變數提取
-            seq = order_data.get('seq', 0)
-            time_str = order_data.get('time_str', 'N/A')
-            scheduled_for = order_data.get('scheduled_for')
-            customer_name = order_data.get('customer_name')
-            customer_phone = order_data.get('customer_phone')
-            customer_address = order_data.get('customer_address')
-            delivery_fee = order_data.get('delivery_fee', 0)
-            total_price = order_data.get('total_price', 0)
+        # --- 3. 核心 ESC/POS 生成函數 (80mm & 獨立字體控制) ---
+        def generate_content(title, item_list, is_receipt=False, lang_override='zh'):
+            if not item_list and not is_receipt: return b""
             
             ESC, GS = b'\x1b', b'\x1d'
             RESET = ESC + b'@'
@@ -421,110 +408,105 @@ def print_order(oid):
             CUT = GS + b'V\x42\x00'
             ENCODE = 'big5-hkscs'
             
-            SIZE_X22 = GS + b'!\x22'
-            SIZE_X11 = GS + b'!\x11'
-            SIZE_X01 = GS + b'!\x01'
-            SIZE_NORM = GS + b'!\x00'
+            # 定義不同行的大小
+            SIZE_X22 = GS + b'!\x22'     # 標題用 (3x3)
+            SIZE_X11 = GS + b'!\x11'     # 桌號、流水號、商品用 (2x2)
+            SIZE_X01 = GS + b'!\x01'     # 時間、備註、客製化用 (1x2)
+            SIZE_NORM = GS + b'!\x00'    # 標準大小
             
+            # --- 頁首區塊 ---
             res = RESET + CENTER
+            # 標題 (x22)
             res += SIZE_X22 + BOLD_ON + title.encode(ENCODE, 'replace') + b"\n"
+            # 流水號 (x11)
             res += SIZE_X11 + f"NO: #{seq:03d}\n".encode(ENCODE)
+            # 桌號 (x11)
+            tbl_name = get_display_table(is_en=(lang_override == 'en'))
+            res += tbl_name.encode(ENCODE, 'replace') + b"\n\n"
             
-            # 注意：這裡的 get_display_table 必須存在於你的環境中
-            try:
-                tbl_name = get_display_table(is_en=(lang_override == 'en'))
-                res += tbl_name.encode(ENCODE, 'replace') + b"\n\n"
-            except:
-                res += b"\n"
-            
+            # --- 資訊區塊 (靠左) ---
             res += LEFT
-            label_time = "TIME: " if lang_override == 'en' else "下單時間: "
-            res += SIZE_X01 + f"{label_time}{time_str}\n".encode(ENCODE)
+            # 訂單時間 (x01)
+            res += SIZE_X01 + f"TIME: {time_str}\n".encode(ENCODE)
+            # 外送資訊 (x01)
+            if has_schedule:
+                res += BOLD_ON + f"PREORDER: {c_schedule}\n".encode(ENCODE) + BOLD_OFF
+            if has_addr and is_receipt:
+                res += f"ADDR: {c_addr}\n".encode(ENCODE, 'replace')
             
-            if scheduled_for:
-                label_sched = "SCHEDULED: " if lang_override == 'en' else "預約時間: "
-                res += BOLD_ON + f"{label_sched}{scheduled_for}\n".encode(ENCODE) + BOLD_OFF
-                
-            if customer_name:
-                label_name = "CUST: " if lang_override == 'en' else "客戶姓名: "
-                res += f"{label_name}{customer_name}\n".encode(ENCODE, 'replace')
-                
-            if customer_phone:
-                label_phone = "TEL: " if lang_override == 'en' else "客戶電話: "
-                res += f"{label_phone}{customer_phone}\n".encode(ENCODE)
-                
-            if customer_address:
-                label_addr = "ADDR: " if lang_override == 'en' else "送貨地址: "
-                res += f"{label_addr}{customer_address}\n".encode(ENCODE, 'replace')
-        
-            if delivery_fee and delivery_fee > 0:
-                label_fee_info = "DELIVERY FEE: " if lang_override == 'en' else "外送費用: "
-                res += f"{label_fee_info}${delivery_fee}\n".encode(ENCODE)
-            
+            # 分隔線 (80mm 寬度約 48 字元)
             res += SIZE_NORM + b"-"*48 + b"\n"
             
+            # --- 商品清單 ---
             for i in item_list:
                 name_zh = i.get('name_zh') or i.get('name')
                 name_to_print = (i.get('name_en') if lang_override == 'en' else name_zh) or name_zh
                 qty = i.get('qty', 1)
+                
+                # 商品名稱 (x11)
                 res += SIZE_X11 + BOLD_ON + f"{name_to_print} x{qty}\n".encode(ENCODE, 'replace') + BOLD_OFF
                 
+                # 客製化選項 (x01)
                 raw_opts = i.get('options') or i.get('options_zh') or []
                 if not isinstance(raw_opts, list): raw_opts = [raw_opts]
+                opts_translated = [translate_option(name_zh, str(opt), lang_override) for opt in raw_opts if opt]
                 
-                # 注意：這裡的 translate_option 必須存在
-                try:
-                    opts_translated = [translate_option(name_zh, str(opt), lang_override) for opt in raw_opts if opt]
-                    if opts_translated:
-                        opt_str = " + " + ", ".join(opts_translated)
-                        res += SIZE_X01 + f"{opt_str}\n".encode(ENCODE, 'replace')
-                except:
-                    pass
+                if opts_translated:
+                    opt_str = " + " + ", ".join(opts_translated)
+                    res += SIZE_X01 + f"{opt_str}\n".encode(ENCODE, 'replace')
                 
+                # 分隔線
                 res += SIZE_NORM + b"-"*48 + b"\n"
             
+            # --- 結帳資訊 ---
             if is_receipt:
                 label_fee = "Fee: " if lang_override == 'en' else "運費: "
                 label_total = "TOTAL: " if lang_override == 'en' else "總計: "
                 label_cust = "Cust: " if lang_override == 'en' else "顧客: "
-                if delivery_fee > 0: 
-                    res += SIZE_X01 + f"{label_fee}${delivery_fee}\n".encode(ENCODE)
+                
+                if c_fee > 0: res += SIZE_X01 + f"{label_fee}${c_fee}\n".encode(ENCODE)
+                # 總計 (x22 讓它最明顯)
                 res += SIZE_X22 + BOLD_ON + f"{label_total}${int(total_price or 0)}\n".encode(ENCODE) + BOLD_OFF
-                if customer_name: 
-                    res += SIZE_X01 + f"{label_cust}{customer_name}\n".encode(ENCODE, 'replace')
+                if c_name: res += SIZE_X01 + f"{label_cust}{c_name}\n".encode(ENCODE, 'replace')
             
             res += b"\n\n\n" + CUT
             return res
-        
-        # --- 4. 路由處理 ---
-        @kitchen_bp.route('/print_order', methods=['POST'])
-        def print_order():
-            try:
-                # 這裡是原本你的邏輯區塊
-                # 確保在 generate_content 之前，所有的資料都已從 request 提取
-                request_data = request.get_json()
-                
-                # ... 你的資料處理邏輯 ...
-                
-                order_params = {
-                    'seq': request_data.get('sequence_number', 0),
-                    'time_str': request_data.get('time_str', ''),
-                    'scheduled_for': request_data.get('scheduled_for'),
-                    'customer_name': request_data.get('customer_name'),
-                    'customer_phone': request_data.get('customer_phone'),
-                    'customer_address': request_data.get('customer_address'),
-                    'delivery_fee': request_data.get('delivery_fee', 0),
-                    'total_price': request_data.get('total_price', 0)
-                }
-        
-                # 呼叫 generate_content 時傳入 order_params
-                # ... 你的 Base64 生成邏輯 ...
-                
-                return jsonify({"status": "success", "tasks": tasks})
-        
-            except Exception as e:
-                traceback.print_exc()
-                return f"Print Error: {str(e)}", 500  # 這行就是結束 try 的 except 區塊
+
+        # 4. 輸出處理 (Base64)
+        if output_format == 'base64':
+            # 初始化指令：重置 + 進入中文模式 + 設定字體代碼頁
+            init_cmds = b'\x1b\x40\x1c\x26\x1b\x74\x0d'
+            tasks = {}
+            receipt_lang = 'en' if order_lang == 'en' else 'zh'
+            receipt_title = "Receipt" if receipt_lang == 'en' else "結帳單"
+            kitchen_lang = 'zh'
+            
+            if print_type in ['all', 'receipt']:
+                tasks["receipt"] = base64.b64encode(
+                    init_cmds + generate_content(receipt_title, items, is_receipt=True, lang_override=receipt_lang)
+                ).decode('utf-8')
+            
+            if print_type in ['all', 'kitchen']:
+                if noodle_items:
+                    tasks["noodle"] = base64.b64encode(
+                        init_cmds + generate_content("廚房單-麵區", noodle_items, lang_override=kitchen_lang)
+                    ).decode('utf-8')
+                if soup_items:
+                    tasks["soup"] = base64.b64encode(
+                        init_cmds + generate_content("廚房單-湯區", soup_items, lang_override=kitchen_lang)
+                    ).decode('utf-8')
+                if other_items:
+                    tasks["other"] = base64.b64encode(
+                        init_cmds + generate_content("廚房單-其他", other_items, lang_override=kitchen_lang)
+                    ).decode('utf-8')
+            
+            return jsonify({"status": "success", "tasks": tasks})
+
+        return "HTML Preview Mode (Not Base64)", 200
+
+    except Exception as e:
+        traceback.print_exc()
+        return f"Print Error: {str(e)}", 500
         
 
         
@@ -912,7 +894,3 @@ def daily_report():
     </body>
     </html>
     """
-
-
-
-
