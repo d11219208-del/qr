@@ -406,47 +406,54 @@ def print_order(oid):
             BOLD_ON, BOLD_OFF = ESC + b'E\x01', ESC + b'E\x00'
             CENTER, LEFT = ESC + b'a\x01', ESC + b'a\x00'
             CUT = GS + b'V\x42\x00'
-            ENCODE = 'big5-hkscs'
+            ENCODE = 'big5-hkscs' # 確保印表機支援此編碼，或使用 'gb18030'
             
-            # 定義不同行的大小
-            SIZE_X22 = GS + b'!\x22'     # 標題用 (3x3)
-            SIZE_X11 = GS + b'!\x11'     # 桌號、流水號、商品用 (2x2)
-            SIZE_X01 = GS + b'!\x01'     # 時間、備註、客製化用 (1x2)
-            SIZE_NORM = GS + b'!\x00'    # 標準大小
+            # 字體大小設定
+            SIZE_X22 = GS + b'!\x22'     # 3x3 標題
+            SIZE_X11 = GS + b'!\x11'     # 2x2 重要資訊
+            SIZE_X01 = GS + b'!\x01'     # 1x2 拉高字體 (適合閱讀)
+            SIZE_NORM = GS + b'!\x00'    # 標準
             
-            # --- 頁首區塊 ---
             res = RESET + CENTER
-            # 標題 (x22)
+            
+            # 1. 標題與序號
             res += SIZE_X22 + BOLD_ON + title.encode(ENCODE, 'replace') + b"\n"
-            # 流水號 (x11)
             res += SIZE_X11 + f"NO: #{seq:03d}\n".encode(ENCODE)
-            # 桌號 (x11)
+            
+            # 2. 桌號 / 訂單類型
             tbl_name = get_display_table(is_en=(lang_override == 'en'))
-            res += tbl_name.encode(ENCODE, 'replace') + b"\n\n"
+            res += BOLD_ON + tbl_name.encode(ENCODE, 'replace') + b"\n" + BOLD_OFF
             
-            # --- 資訊區塊 (靠左) ---
-            res += LEFT
-            # 訂單時間 (x01)
-            res += SIZE_X01 + f"TIME: {time_str}\n".encode(ENCODE)
-            # 外送資訊 (x01)
+            # 3. 基礎資訊區 (靠左)
+            res += LEFT + SIZE_X01
+            res += f"TIME: {time_str}\n".encode(ENCODE)
+            
+            # --- 這裡加入所有資料庫欄位的判斷 ---
             if has_schedule:
-                res += BOLD_ON + f"PREORDER: {c_schedule}\n".encode(ENCODE) + BOLD_OFF
-            if has_addr and is_receipt:
-                res += f"ADDR: {c_addr}\n".encode(ENCODE, 'replace')
+                res += BOLD_ON + f"PREORDER: {c_schedule}\n".encode(ENCODE) + BOLD_OFF + SIZE_X01
             
-            # 分隔線 (80mm 寬度約 48 字元)
+            if is_receipt:
+                if c_name:
+                    res += f"CUSTOMER: {c_name}\n".encode(ENCODE, 'replace') + SIZE_X01
+                if has_contact:
+                    res += f"PHONE: {c_phone}\n".encode(ENCODE) + SIZE_X01
+                if has_addr:
+                    # 地址通常較長，使用標準大小避免跑版
+                    res += SIZE_NORM + f"ADDR: {c_addr}\n".encode(ENCODE, 'replace') + SIZE_X01
+        
+            # 分隔線
             res += SIZE_NORM + b"-"*48 + b"\n"
             
-            # --- 商品清單 ---
+            # 4. 商品清單
             for i in item_list:
                 name_zh = i.get('name_zh') or i.get('name')
                 name_to_print = (i.get('name_en') if lang_override == 'en' else name_zh) or name_zh
                 qty = i.get('qty', 1)
                 
-                # 商品名稱 (x11)
+                # 商品名稱 (放大)
                 res += SIZE_X11 + BOLD_ON + f"{name_to_print} x{qty}\n".encode(ENCODE, 'replace') + BOLD_OFF
                 
-                # 客製化選項 (x01)
+                # 客製化選項 (拉高)
                 raw_opts = i.get('options') or i.get('options_zh') or []
                 if not isinstance(raw_opts, list): raw_opts = [raw_opts]
                 opts_translated = [translate_option(name_zh, str(opt), lang_override) for opt in raw_opts if opt]
@@ -455,23 +462,28 @@ def print_order(oid):
                     opt_str = " + " + ", ".join(opts_translated)
                     res += SIZE_X01 + f"{opt_str}\n".encode(ENCODE, 'replace')
                 
-                # 分隔線
+                # 商品間分隔線
                 res += SIZE_NORM + b"-"*48 + b"\n"
             
-            # --- 結帳資訊 ---
+            # 5. 結帳區 (僅收據)
             if is_receipt:
-                label_fee = "Fee: " if lang_override == 'en' else "運費: "
-                label_total = "TOTAL: " if lang_override == 'en' else "總計: "
-                label_cust = "Cust: " if lang_override == 'en' else "顧客: "
+                res += LEFT + SIZE_X01
+                if c_fee > 0:
+                    res += f"Delivery Fee: ${c_fee}\n".encode(ENCODE)
                 
-                if c_fee > 0: res += SIZE_X01 + f"{label_fee}${c_fee}\n".encode(ENCODE)
-                # 總計 (x22 讓它最明顯)
+                # 總價放大
+                label_total = "TOTAL: " if lang_override == 'en' else "總計: "
                 res += SIZE_X22 + BOLD_ON + f"{label_total}${int(total_price or 0)}\n".encode(ENCODE) + BOLD_OFF
-                if c_name: res += SIZE_X01 + f"{label_cust}{c_name}\n".encode(ENCODE, 'replace')
-            
-            res += b"\n\n\n" + CUT
+                
+                # 底部備註 (如果是外送單，再次強調地址)
+                if has_addr:
+                    res += SIZE_NORM + b"*"*48 + b"\n"
+                    res += f"Deliver to: {c_addr}\n".encode(ENCODE, 'replace')
+        
+            res += b"\n" + CUT # 少給一點空白
             return res
 
+            
         # 4. 輸出處理 (Base64)
         if output_format == 'base64':
             # 初始化指令：重置 + 進入中文模式 + 設定字體代碼頁
@@ -894,3 +906,4 @@ def daily_report():
     </body>
     </html>
     """
+
