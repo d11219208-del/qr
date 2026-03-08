@@ -161,7 +161,7 @@
         .btn-checkout { background: var(--success-color); color: white; border: none; flex: 1.5; padding: 10px; border-radius: 10px; font-weight: bold; font-size: 1em; }
 
         /* =========================================
-           6. 彈出視窗 (修正透明度卡住的動畫 Bug)
+           6. 彈出視窗
            ========================================= */
         .modal { 
             position: fixed; top: 0; left: 0; width: 100%; height: 100%; 
@@ -223,7 +223,7 @@
         <div id="sec-takeout" style="display: none;">
             <div class="takeout-time-box">
                 <span class="input-label" style="color:#b45309;">🕒 預計取餐時間 (Pickup Time)</span>
-                <input type="datetime-local" id="takeout_time" class="modern-input" style="background:white; border-color:#fcd34d; padding:6px 10px;" step="60">
+                <input type="datetime-local" id="takeout_time" class="modern-input" style="background:white; border-color:#fcd34d; padding:6px 10px; margin-bottom: 8px;" step="60">
                 
                 <span class="input-label" style="color:#b45309;">📱 手機號碼 (Phone)</span>
                 <input type="tel" id="phone" class="modern-input" placeholder="09xx-xxx-xxx" style="background:white; border-color:#fcd34d; padding:6px 10px;" required>
@@ -281,10 +281,13 @@
         <input type="hidden" name="table_number" id="tbl_input">
         <input type="hidden" name="order_type" value="{{ 'delivery' if is_delivery_mode else 'dine_in' }}">
         <input type="hidden" name="customer_name" value="{{ session_delivery.get('name', '') }}">
-        <input type="hidden" name="customer_phone" value="{{ session_delivery.get('phone', '') }}">
+        
+        <input type="hidden" name="customer_phone" id="phone_input" value="{{ session_delivery.get('phone', '') }}">
         <input type="hidden" name="delivery_address" value="{{ session_delivery.get('address', '') }}">
         <input type="hidden" name="delivery_note" value="{{ session_delivery.get('note', '') }}">
+        
         <input type="hidden" name="scheduled_for" id="scheduled_for_input" value="{{ session_delivery.get('scheduled_for', '') }}">
+        
         <input type="hidden" name="delivery_fee" value="{{ session.get('delivery_info', {}).get('shipping_fee', 0) }}">
         
         <div class="cart-bar-wrapper" id="bar">
@@ -348,8 +351,9 @@
     const DELIVERY_MIN = {{ session.get('delivery_info', {}).get('min_price', 500) }};
 
     let C = [], cur = null, selectedOptIndices = [], addP = 0, editIndex = -1;
-    let currentMode = 'dinein';
+    let currentMode = 'dinein'; // 預設為內用模式
 
+    // 切換 內用 / 外帶 模式
     function setMode(mode) {
         if(IS_DELIVERY) return;
 
@@ -367,10 +371,11 @@
             tableInput.value = '外帶';
             tableInput.placeholder = "外帶模式";
             document.getElementById('sec-takeout').style.display = 'block';
-            initTimePicker();
+            initTimePicker(); // 初始化取餐時間為當下時間往後推 15 分鐘
         }
     }
 
+    // 初始化外帶時間的預設值
     function initTimePicker() {
         const now = new Date();
         now.setMinutes(now.getMinutes() + 15);
@@ -402,6 +407,7 @@
         }
     });
 
+    // 渲染商品列表
     let h = "", lastCatKey = "", cats = [];
     P.forEach(p => {
         let currentCatName = p['category_' + CUR_LANG] || p.category_zh;
@@ -428,6 +434,7 @@
     });
     document.getElementById('list').innerHTML = h;
 
+    // 渲染導覽列
     let navH = ""; 
     cats.forEach(c => { 
         navH += `<div class="cat-btn" onclick="scrollToCat('${c.id}', this)">${c.name}</div>`; 
@@ -455,6 +462,7 @@
         }
     }
 
+    // 打開商品選項彈窗
     function openOpt(productId, cartIndex = -1) {
         cur = P.find(x => x.id == productId); 
         if(!cur) return;
@@ -516,6 +524,7 @@
         if(val + n >= 1) input.value = val + n;
     }
 
+    // 加入購物車
     function addC() {
         let q = parseInt(document.getElementById('m-q').value) || 1;
         let opts_zh = cur.custom_options_zh || [];
@@ -541,6 +550,7 @@
         if(editIndex > -1) showCart();
     }
 
+    // 更新購物車總計顯示
     function upd() {
         if(C.length) {
             document.getElementById('bar').style.display = 'block';
@@ -562,6 +572,7 @@
         upd();
     }
 
+    // 顯示購物車明細彈窗
     function showCart() {
         let h = "";
         C.forEach((i, x) => {
@@ -599,6 +610,7 @@
         document.getElementById('cart-m').style.display = 'flex';
     }
 
+    // 最終結帳函式
     function sub() {
         if (IS_DELIVERY) {
             let foodTotal = C.reduce((a, b) => a + (b.unit_price * b.qty), 0);
@@ -613,7 +625,13 @@
             tableVal = '外送';
         } else if (currentMode === 'takeout') {
             tableVal = '外帶';
+            
+            // 1. 取得畫面上方介面輸入的「時間」與「手機號碼」
             const timeVal = document.getElementById('takeout_time').value;
+            // 【修復】宣告並取得手機號碼的值
+            const phoneVal = document.getElementById('phone').value; 
+            
+            // 2. 必填驗證
             if(!timeVal) {
                 alert("⚠️ 請選擇取餐時間");
                 return;
@@ -622,10 +640,13 @@
                 alert("⚠️ 請輸入聯絡手機號碼");
                 return;
             }
+            
+            // 3. 【關鍵對接】將使用者輸入的資料，塞入隱藏的表單欄位準備送出
             document.getElementById('scheduled_for_input').value = timeVal.replace('T', ' ');
-            // 將輸入的手機號碼放入隱藏的表單欄位中，以便 POST 送出
-            document.querySelector('input[name="customer_phone"]').value = phoneVal.trim();
+            document.getElementById('phone_input').value = phoneVal.trim();
+            
         } else {
+            // 若為內用模式，直接抓取桌號欄位
             tableVal = document.getElementById('visible_table').value;
         }
 
@@ -634,9 +655,13 @@
         }
         
         document.getElementById('tbl_input').value = tableVal;
+        
         if(confirm(T.confirm_order)) {
+            // 將購物車內容轉成字串塞入表單
             document.getElementById('cart_input').value = JSON.stringify(C);
+            // 清除暫存
             localStorage.removeItem('cart_cache');
+            // 送出表單 (這時會包含剛剛動態填寫的 customer_phone 與 scheduled_for)
             document.getElementById('order-form').submit();
         }
     }
