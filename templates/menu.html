@@ -6,236 +6,205 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=0">
     <style>
         /* =========================================
-           1. 全局變數與基礎設定 (CSS Variables)
+           1. 全局變數與基礎設定 (更緊湊、字體更大)
            ========================================= */
         :root {
-            --primary-color: #FF5A5F; /* 品牌主色：食慾感的珊瑚紅 */
-            --success-color: #10B981; /* 成功/新增顏色：翡翠綠 */
-            --bg-color: #F7F9FA;      /* 系統背景色：極淺灰 */
-            --surface-color: #FFFFFF; /* 卡片背景色：純白 */
-            --text-main: #1F2937;     /* 主文字：深灰 */
-            --text-muted: #6B7280;    /* 次要文字：中灰 */
-            --border-color: #E5E7EB;  /* 邊線顏色：淺灰 */
-            --shadow-sm: 0 2px 8px rgba(0,0,0,0.04);
-            --shadow-md: 0 8px 24px rgba(0,0,0,0.08);
-            --shadow-float: 0 -4px 24px rgba(0,0,0,0.12);
+            --primary-color: #FF5A5F; 
+            --success-color: #10B981; 
+            --bg-color: #F7F9FA;      
+            --surface-color: #FFFFFF; 
+            --text-main: #1F2937;     
+            --text-muted: #4B5563; /* 加深次要文字顏色提升辨識度 */
+            --border-color: #E5E7EB;  
+            --shadow-sm: 0 1px 4px rgba(0,0,0,0.05);
+            --shadow-float: 0 -4px 20px rgba(0,0,0,0.12);
         }
 
         body { 
             font-family: 'Inter', '-apple-system', 'BlinkMacSystemFont', 'Microsoft JhengHei', sans-serif; 
             margin: 0; 
-            padding-bottom: 180px; /* 給底部懸浮購物車留空間 */
+            padding-bottom: 150px; /* 縮小底部預留空間 */
             background: var(--bg-color); 
             color: var(--text-main);
             touch-action: manipulation; 
-            font-size: 16px; 
-            -webkit-tap-highlight-color: transparent; /* 移除點擊時的藍色閃爍 */
+            font-size: 18px; /* 基礎字體放大 */
+            -webkit-tap-highlight-color: transparent; 
         }
 
         /* =========================================
-           2. 頂部導覽列與模式切換 (Header & Mode Switch)
+           2. 頂部導覽列 (大幅縮減高度與留白)
            ========================================= */
         .top-container {
             position: sticky; 
             top: 0; 
             z-index: 99; 
-            background: rgba(255, 255, 255, 0.95);
-            backdrop-filter: blur(8px); /* 毛玻璃效果 */
+            background: rgba(255, 255, 255, 0.96);
+            backdrop-filter: blur(8px); 
             box-shadow: var(--shadow-sm);
         }
 
-        /* 模式切換：iOS Segmented Control 風格 */
-        .mode-section { padding: 12px 16px 4px 16px; }
+        .mode-section { padding: 6px 12px 0 12px; }
         .mode-switch { 
             display: flex; 
             background: #EDF2F7; 
-            border-radius: 12px; 
-            padding: 4px; 
-            margin-bottom: 12px;
+            border-radius: 8px; 
+            padding: 3px; 
+            margin-bottom: 6px;
         }
         .mode-opt { 
             flex: 1; 
             text-align: center; 
-            padding: 10px; 
-            border-radius: 8px; 
+            padding: 6px; 
+            border-radius: 6px; 
             cursor: pointer; 
-            transition: all 0.25s ease; 
-            font-weight: 600; 
+            transition: all 0.2s ease; 
+            font-weight: bold; 
             color: var(--text-muted); 
-            font-size: 0.95em;
+            font-size: 0.9em;
         }
-        .mode-opt.active { 
-            background: var(--surface-color); 
-            color: var(--primary-color); 
-            box-shadow: 0 2px 6px rgba(0,0,0,0.05); 
-        }
+        .mode-opt.active { background: var(--surface-color); color: var(--primary-color); box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
 
-        /* 桌號與時間輸入框：現代化無框線感設計 */
-        .input-group { margin-bottom: 10px; }
-        .input-label { font-weight: 600; color: var(--text-muted); font-size: 0.85em; margin-bottom: 6px; display: block; }
+        .input-group { margin-bottom: 6px; }
+        .input-label { font-weight: bold; color: var(--text-muted); font-size: 0.85em; margin-bottom: 4px; display: block; }
         .modern-input {
-            width: 100%; padding: 12px 16px; box-sizing: border-box;
+            width: 100%; padding: 8px 12px; box-sizing: border-box;
             background: var(--bg-color); border: 1px solid var(--border-color);
-            border-radius: 10px; font-size: 1.1em; color: var(--text-main);
-            transition: border-color 0.2s; outline: none;
+            border-radius: 8px; font-size: 1em; color: var(--text-main); font-weight: bold;
+            outline: none;
         }
         .modern-input:focus { border-color: var(--primary-color); background: var(--surface-color); }
-        .modern-input.delivery-mode { background: #eff6ff; border-color: #bfdbfe; color: #1d4ed8; text-align: center; font-weight: bold; }
+        .modern-input.delivery-mode { background: #eff6ff; border-color: #bfdbfe; color: #1d4ed8; text-align: center; }
 
-        .takeout-time-box { background: #fffbeb; padding: 12px; border-radius: 10px; border: 1px solid #fde68a; margin-bottom: 10px; }
+        .takeout-time-box { background: #fffbeb; padding: 8px 12px; border-radius: 8px; border: 1px solid #fde68a; margin-bottom: 6px; }
 
-        /* 分類滑動霸 (Category Bar) */
+        /* 分類導覽列 */
         .cat-bar { 
             display: flex; overflow-x: auto; white-space: nowrap; 
-            padding: 10px 16px 14px 16px; gap: 10px; scrollbar-width: none; 
+            padding: 4px 12px 8px 12px; gap: 8px; scrollbar-width: none; 
         }
         .cat-bar::-webkit-scrollbar { display: none; }
         .cat-btn { 
             background: var(--surface-color); border: 1px solid var(--border-color); 
-            padding: 8px 20px; border-radius: 20px; font-size: 0.95em; font-weight: 500;
-            color: var(--text-muted); cursor: pointer; transition: 0.2s; box-shadow: var(--shadow-sm);
+            padding: 6px 14px; border-radius: 16px; font-size: 0.9em; font-weight: bold;
+            color: var(--text-muted); cursor: pointer; box-shadow: var(--shadow-sm);
         }
-        .cat-btn.active { 
-            background: var(--text-main); color: white; border-color: var(--text-main); 
-        }
+        .cat-btn.active { background: var(--text-main); color: white; border-color: var(--text-main); }
 
         /* =========================================
-           3. 菜單列表與商品卡片 (Menu Items)
+           3. 菜單列表與商品卡片 (縮小留白、放大文字)
            ========================================= */
         .cat-header { 
-            padding: 20px 16px 10px 16px; font-weight: 800; font-size: 1.4em; 
-            color: var(--text-main); scroll-margin-top: 170px; 
+            padding: 12px 12px 6px 12px; font-weight: 900; font-size: 1.25em; 
+            color: var(--text-main); scroll-margin-top: 130px; 
         }
         
         .menu-item { 
-            background: var(--surface-color); margin: 0 16px 16px 16px; padding: 16px; 
-            border-radius: 16px; display: flex; box-shadow: var(--shadow-sm); 
-            position: relative; transition: transform 0.1s; border: 1px solid rgba(0,0,0,0.02);
+            background: var(--surface-color); margin: 0 12px 8px 12px; padding: 10px; 
+            border-radius: 12px; display: flex; box-shadow: var(--shadow-sm); 
+            position: relative; border: 1px solid rgba(0,0,0,0.03); cursor: pointer;
         }
-        .menu-item:active { transform: scale(0.98); } /* 點擊微縮回饋 */
         
         .menu-img { 
-            width: 105px; height: 105px; border-radius: 12px; 
+            width: 85px; height: 85px; border-radius: 8px; 
             object-fit: cover; background: var(--border-color); flex-shrink: 0;
         }
         
         .menu-info { 
-            flex: 1; padding-left: 16px; display: flex; flex-direction: column; justify-content: space-between; 
+            flex: 1; padding-left: 12px; display: flex; flex-direction: column; justify-content: space-between; 
         }
-        .item-name { font-size: 1.15em; font-weight: 700; color: var(--text-main); margin-bottom: 4px; line-height: 1.3; }
-        .item-price { color: var(--primary-color); font-weight: 800; font-size: 1.2em; }
+        .item-name { font-size: 1.1em; font-weight: bold; color: var(--text-main); margin-bottom: 2px; line-height: 1.25; }
+        .item-price { color: var(--primary-color); font-weight: 900; font-size: 1.15em; }
         
+        /* 讓按鈕視覺保留，但不干擾整張卡片的點擊 */
         .add-btn { 
             background: var(--success-color); color: white; border: none; 
-            padding: 8px 24px; border-radius: 20px; align-self: flex-end; 
-            font-size: 0.95em; font-weight: bold; box-shadow: 0 4px 10px rgba(16, 185, 129, 0.3);
+            padding: 6px 16px; border-radius: 16px; align-self: flex-end; 
+            font-size: 0.9em; font-weight: bold; pointer-events: none; 
         }
         
         .sold-out { filter: grayscale(1); opacity: 0.6; pointer-events: none; }
         .sold-out-badge { 
-            position: absolute; top: 12px; left: 12px; background: rgba(0,0,0,0.7); 
-            color: white; padding: 4px 10px; border-radius: 8px; font-size: 0.8em; font-weight: bold; z-index: 5; 
+            position: absolute; top: 8px; left: 8px; background: rgba(0,0,0,0.7); 
+            color: white; padding: 4px 8px; border-radius: 6px; font-size: 0.8em; font-weight: bold; z-index: 5; 
         }
 
-        /* 外送資訊卡片 (Delivery Card) */
         .delivery-info-card {
-            background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 16px; 
-            padding: 16px; margin: 16px; color: #1e3a8a; font-size: 0.95em; box-shadow: var(--shadow-sm);
+            background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 12px; 
+            padding: 12px; margin: 10px 12px; color: #1e3a8a; font-size: 0.9em; box-shadow: var(--shadow-sm);
         }
-        .di-row { margin-bottom: 6px; display: flex; align-items: flex-start; line-height: 1.4; }
-        .di-icon { margin-right: 10px; font-size: 1.1em; }
-        .di-fee { font-weight: bold; color: var(--primary-color); margin-top: 10px; text-align: right; border-top: 1px dashed #93c5fd; padding-top: 10px; }
+        .di-row { margin-bottom: 4px; display: flex; align-items: flex-start; line-height: 1.4; font-weight: bold; }
+        .di-icon { margin-right: 8px; font-size: 1.1em; }
+        .di-fee { font-weight: bold; color: var(--primary-color); margin-top: 6px; text-align: right; border-top: 1px dashed #93c5fd; padding-top: 6px; }
 
         /* =========================================
-           4. 底部懸浮購物車 (Floating Cart Bar)
+           4. 底部懸浮購物車
            ========================================= */
         .cart-bar-wrapper {
-            position: fixed; bottom: 20px; left: 0; width: 100%; 
-            display: none; padding: 0 16px; box-sizing: border-box; z-index: 100;
+            position: fixed; bottom: 12px; left: 0; width: 100%; 
+            display: none; padding: 0 12px; box-sizing: border-box; z-index: 100;
         }
         .cart-bar { 
-            background: var(--text-main); border-radius: 24px; padding: 16px 20px; 
+            background: var(--text-main); border-radius: 16px; padding: 12px 16px; 
             box-shadow: var(--shadow-float); display: flex; flex-direction: column; color: white;
         }
-        .cart-summary { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
-        .cart-total-text { font-weight: 800; font-size: 1.4em; }
-        .cart-buttons { display: flex; gap: 12px; }
-        .btn-view-cart { background: rgba(255,255,255,0.15); color: white; border: none; flex: 1; padding: 14px; border-radius: 16px; font-weight: bold; font-size: 1.1em; }
-        .btn-checkout { background: var(--success-color); color: white; border: none; flex: 1.5; padding: 14px; border-radius: 16px; font-weight: bold; font-size: 1.1em; box-shadow: 0 4px 12px rgba(16, 185, 129, 0.4); }
+        .cart-summary { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+        .cart-total-text { font-weight: 900; font-size: 1.25em; }
+        .cart-buttons { display: flex; gap: 10px; }
+        .btn-view-cart { background: rgba(255,255,255,0.2); color: white; border: none; flex: 1; padding: 10px; border-radius: 10px; font-weight: bold; font-size: 1em; }
+        .btn-checkout { background: var(--success-color); color: white; border: none; flex: 1.5; padding: 10px; border-radius: 10px; font-weight: bold; font-size: 1em; }
 
         /* =========================================
-           5. 彈出視窗 (Bottom Sheet Modal)
+           5. 彈出視窗
            ========================================= */
         .modal { 
             position: fixed; top: 0; left: 0; width: 100%; height: 100%; 
-            background: rgba(0,0,0,0.5); backdrop-filter: blur(4px); 
-            display: none; z-index: 200; justify-content: center; align-items: flex-end; 
-            /* 進場動畫設定 */
-            opacity: 0; animation: fadeIn 0.3s forwards;
+            background: rgba(0,0,0,0.6); display: none; z-index: 200; justify-content: center; align-items: flex-end; 
+            opacity: 0; animation: fadeIn 0.2s forwards;
         }
         .modal-c { 
-            background: var(--surface-color); width: 100%; padding: 24px 20px 40px 20px; 
-            border-radius: 24px 24px 0 0; max-height: 85vh; overflow-y: auto; box-sizing: border-box;
-            transform: translateY(100%); animation: slideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+            background: var(--surface-color); width: 100%; padding: 20px 16px 24px 16px; 
+            border-radius: 20px 20px 0 0; max-height: 85vh; overflow-y: auto; box-sizing: border-box;
+            transform: translateY(100%); animation: slideUp 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
         }
         
-        /* 彈窗動畫 Keyframes */
         @keyframes fadeIn { to { opacity: 1; } }
         @keyframes slideUp { to { transform: translateY(0); } }
 
-        /* 選項標籤 (Option Tags) */
         .opt-tag { 
-            border: 1px solid var(--border-color); padding: 10px 18px; 
-            border-radius: 25px; margin: 6px; display: inline-block; 
-            font-size: 1.05em; transition: 0.2s; color: var(--text-main); font-weight: 500;
+            border: 1px solid var(--border-color); padding: 8px 14px; 
+            border-radius: 20px; margin: 4px; display: inline-block; 
+            font-size: 1em; color: var(--text-main); font-weight: bold;
         }
-        .opt-tag.sel { 
-            background: #eff6ff; border-color: #3b82f6; color: #2563eb; 
-            font-weight: bold; box-shadow: 0 2px 8px rgba(59, 130, 246, 0.2);
-        }
+        .opt-tag.sel { background: #eff6ff; border-color: #3b82f6; color: #2563eb; }
         
-        /* 數量控制器 (Quantity Control) */
-        .qty-ctrl { display: flex; align-items: center; gap: 16px; justify-content: center; margin: 24px 0; }
+        .qty-ctrl { display: flex; align-items: center; gap: 12px; justify-content: center; margin: 16px 0; }
         .qty-btn { 
-            width: 48px; height: 48px; border-radius: 24px; border: none; 
-            background: var(--bg-color); font-size: 1.6em; font-weight: bold; color: var(--text-main);
-            box-shadow: 0 2px 6px rgba(0,0,0,0.05); display: flex; align-items: center; justify-content: center;
+            width: 44px; height: 44px; border-radius: 22px; border: none; 
+            background: var(--bg-color); font-size: 1.5em; font-weight: bold; color: var(--text-main);
+            display: flex; align-items: center; justify-content: center;
         }
-        .qty-input { 
-            width: 60px; text-align: center; font-size: 1.5em; border: none; 
-            font-weight: 800; background: transparent; color: var(--text-main);
-        }
+        .qty-input { width: 50px; text-align: center; font-size: 1.3em; border: none; font-weight: 900; background: transparent; color: var(--text-main); }
 
-        /* 購物車列表樣式 */
-        .cart-item-row { border-bottom: 1px solid var(--border-color); padding: 16px 0; }
+        .cart-item-row { border-bottom: 1px solid var(--border-color); padding: 12px 0; }
         .cart-item-row:last-child { border-bottom: none; }
-        .cart-item-main { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px; }
+        .cart-item-main { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px; }
         .cart-qty-sub { display: flex; align-items: center; justify-content: space-between; width: 100%; }
-        .btn-edit-opt { background: #eff6ff; color: #2563eb; border: none; padding: 8px 14px; border-radius: 10px; font-size: 0.9em; font-weight: bold; cursor: pointer; }
-        .btn-del { background: #fef2f2; color: #ef4444; border: none; padding: 8px 14px; border-radius: 10px; font-size: 0.9em; font-weight: bold; cursor: pointer; }
+        .btn-edit-opt { background: #eff6ff; color: #2563eb; border: none; padding: 6px 12px; border-radius: 8px; font-size: 0.9em; font-weight: bold; }
+        .btn-del { background: #fef2f2; color: #ef4444; border: none; padding: 6px 12px; border-radius: 8px; font-size: 0.9em; font-weight: bold; }
 
-        /* 彈窗按鈕 */
-        .modal-action-btn {
-            width: 100%; padding: 16px; border: none; border-radius: 16px; 
-            font-size: 1.2em; font-weight: bold; margin-top: 12px;
-        }
-        .btn-primary { background: var(--success-color); color: white; box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3); }
+        .modal-action-btn { width: 100%; padding: 14px; border: none; border-radius: 12px; font-size: 1.1em; font-weight: bold; margin-top: 8px; }
+        .btn-primary { background: var(--success-color); color: white; }
         .btn-secondary { background: var(--bg-color); color: var(--text-main); }
         
-        .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
-        .close-icon { font-size: 1.8em; color: var(--text-muted); cursor: pointer; line-height: 1; }
+        .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+        .close-icon { font-size: 1.6em; color: var(--text-muted); padding: 0 5px; }
 
     </style>
 </head>
 <body>
-    {# --- 1. 強制從 Session 讀取資料 --- #}
     {% set session_delivery = session.get('delivery_data', {}) %}
     {% set session_table = session.get('table_num') %}
-    
-    {# --- 2. 判斷邏輯 --- #}
     {% set is_delivery_mode = (session_delivery.get('phone')) or (session_table == '外送') %}
-    
-    {# --- 3. 決定最終顯示的桌號 --- #}
     {% set final_table_num = '外送' if is_delivery_mode else (table_num or session_table or '') %}
 
     <div class="top-container">
@@ -245,30 +214,27 @@
                 <div class="mode-opt active" id="mode-dinein" onclick="setMode('dinein')">🍽️ 現場 Dine-in</div>
                 <div class="mode-opt" id="mode-takeout" onclick="setMode('takeout')">🛍️ 外帶 Takeout</div>
             </div>
-
             <div id="sec-takeout" style="display: none;">
                 <div class="takeout-time-box">
                     <span class="input-label" style="color:#b45309;">🕒 預計取餐時間 (Pickup Time)</span>
-                    <input type="datetime-local" id="takeout_time" class="modern-input" style="background:white; border-color:#fcd34d;" step="60">
+                    <input type="datetime-local" id="takeout_time" class="modern-input" style="background:white; border-color:#fcd34d; padding:6px 10px;" step="60">
                 </div>
             </div>
         </div>
         {% endif %}
 
-        <div style="padding: 10px 16px 0 16px;">
+        <div style="padding: 6px 12px 0 12px;">
             {% if edit_oid %}
-            <div style="background:#fffbeb; padding:12px; color:#b45309; text-align:center; font-weight:bold; margin-bottom:12px; border-radius:12px; border: 1px solid #fde68a;">
+            <div style="background:#fffbeb; padding:8px; color:#b45309; text-align:center; font-weight:bold; margin-bottom:6px; border-radius:8px; border: 1px solid #fde68a; font-size: 0.9em;">
                 ⚠️ {{ texts['edit_notice'] or '正在編輯' }} #{{ edit_oid }} ({{ order_lang }})
             </div>
             {% endif %}
             
-            <h2 style="margin:0 0 12px 0; font-size:1.6em; font-weight:800; color:var(--text-main);">{{ texts['welcome'] }}</h2>
+            <h2 style="margin:0 0 6px 0; font-size:1.2em; font-weight:900;">{{ texts['welcome'] }}</h2>
 
-            {# --- 桌號輸入/顯示區 --- #}
             <div id="sec-dinein" class="input-group">
-                <span class="input-label" style="color:{{ '#1d4ed8' if is_delivery_mode else 'var(--text-muted)' }};">{{ texts['table_placeholder'] }}</span>
                 <input type="text" id="visible_table" value="{{ final_table_num }}" 
-                       placeholder="請輸入桌號" 
+                       placeholder="請輸入桌號 / {{ texts['table_placeholder'] }}" 
                        class="modern-input {{ 'delivery-mode' if is_delivery_mode else '' }}"
                        {{ 'readonly' if is_delivery_mode else '' }}>
             </div>
@@ -279,11 +245,10 @@
 
     {% if is_delivery_mode %}
     <div class="delivery-info-card">
-        <div class="di-row" style="font-size: 1.1em; font-weight: 800; margin-bottom: 12px;"><span class="di-icon">🛵</span> 外送訂單 (Delivery)</div>
+        <div class="di-row" style="font-size: 1.1em; margin-bottom: 8px;"><span class="di-icon">🛵</span> 外送訂單 (Delivery)</div>
         <div class="di-row"><span class="di-icon">👤</span> {{ session_delivery.get('name', '貴賓') }} / {{ session_delivery.get('phone', '-') }}</div>
         <div class="di-row"><span class="di-icon">📍</span> {{ session_delivery.get('address', '地址載入中') }}</div>
         <div class="di-row"><span class="di-icon">🕒</span> 預約時間: {{ session_delivery.get('scheduled_for', '盡快送達') }}</div>
-        
         <div class="di-fee">
             運費 Delivery Fee: ${{ session.get('delivery_info', {}).get('shipping_fee', 0) }}
             {% set d_note = session_delivery.get('note') or session.get('delivery_info', {}).get('note') %}
@@ -315,8 +280,8 @@
         <div class="cart-bar-wrapper" id="bar">
             <div class="cart-bar">
                 <div class="cart-summary">
-                    <div class="cart-total-text">Total: $<span id="tot">0</span> <span style="font-size:0.7em; font-weight:normal; opacity:0.8;">(<span id="cnt">0</span>)</span></div>
-                    <label style="font-size:0.9em; display:flex; align-items:center; gap:6px;">
+                    <div class="cart-total-text">Total: $<span id="tot">0</span> <span style="font-size:0.8em; font-weight:normal; opacity:0.8;">(<span id="cnt">0</span>)</span></div>
+                    <label style="font-size:0.9em; display:flex; align-items:center; gap:6px; font-weight:bold;">
                         <input type="checkbox" name="need_receipt" checked style="width:18px;height:18px;accent-color:var(--success-color);"> 
                         {{ texts['print_receipt_opt'] }}
                     </label>
@@ -332,11 +297,11 @@
     <div class="modal" id="opt-m" onclick="closeModalByBg(event, 'opt-m')">
         <div class="modal-c" onclick="event.stopPropagation()">
             <div class="modal-header">
-                <h3 id="m-name" style="font-size:1.4em; margin:0; color:var(--text-main); font-weight:800;"></h3>
+                <h3 id="m-name" style="font-size:1.3em; margin:0; font-weight:900;"></h3>
                 <div class="close-icon" onclick="document.getElementById('opt-m').style.display='none'">&times;</div>
             </div>
             
-            <div id="m-opts" style="margin-top:10px;"></div>
+            <div id="m-opts"></div>
             
             <div class="qty-ctrl">
                 <button class="qty-btn" onclick="cq(-1)">-</button>
@@ -351,11 +316,11 @@
     <div class="modal" id="cart-m" onclick="closeModalByBg(event, 'cart-m')">
         <div class="modal-c" onclick="event.stopPropagation()">
             <div class="modal-header">
-                <h2 style="margin:0; font-weight:800; font-size:1.5em;">{{ texts['cart_title'] }}</h2>
+                <h2 style="margin:0; font-weight:900; font-size:1.4em;">{{ texts['cart_title'] }}</h2>
                 <div class="close-icon" onclick="document.getElementById('cart-m').style.display='none'">&times;</div>
             </div>
             
-            <div id="c-list" style="margin-top: 10px;"></div>
+            <div id="c-list"></div>
             
             <button class="modal-action-btn btn-secondary" onclick="document.getElementById('cart-m').style.display='none'">{{ texts['close'] }}</button>
         </div>
@@ -385,7 +350,7 @@
         const tableInput = document.getElementById('visible_table');
 
         if(mode === 'dinein') {
-            tableInput.placeholder = "請輸入桌號";
+            tableInput.placeholder = "請輸入桌號 / " + (T.table_placeholder || "");
             if(tableInput.value === '外帶') tableInput.value = '';
             document.getElementById('sec-takeout').style.display = 'none';
         } else {
@@ -427,7 +392,7 @@
         }
     });
 
-    // 渲染商品列表
+    // 渲染商品列表：將 onclick 綁定在整張卡片上，並將 ID 轉為字串確保不會因為型別報錯
     let h = "", lastCatKey = "", cats = [];
     P.forEach(p => {
         let currentCatName = p['category_' + CUR_LANG] || p.category_zh;
@@ -439,7 +404,9 @@
         }
         let isAvail = p.is_available;
         let d_name = p['name_' + CUR_LANG] || p.name_zh;
-        h += `<div class="menu-item ${isAvail ? '' : 'sold-out'}">
+        
+        // 修正點擊問題：將 onclick 放卡片外層，確保點哪都有反應
+        h += `<div class="menu-item ${isAvail ? '' : 'sold-out'}" ${isAvail ? `onclick="openOpt('${p.id}')"` : ''}>
             ${isAvail ? '' : `<div class="sold-out-badge">${T.sold_out}</div>`}
             ${p.image_url ? `<img src="${p.image_url}" class="menu-img">` : ''}
             <div class="menu-info">
@@ -447,24 +414,22 @@
                     <div class="item-name">${d_name}</div>
                     <div class="item-price">$${p.price}</div>
                 </div>
-                <button class="add-btn" onclick="openOpt(${p.id})" ${isAvail ? '' : 'disabled'}>${isAvail ? '+ ' + T.add : T.sold_out}</button>
+                <button class="add-btn" ${isAvail ? '' : 'disabled'}>${isAvail ? '+ ' + T.add : T.sold_out}</button>
             </div>
         </div>`;
     });
     document.getElementById('list').innerHTML = h;
 
-    // 渲染分類導覽列
     let navH = ""; 
     cats.forEach(c => { 
         navH += `<div class="cat-btn" onclick="scrollToCat('${c.id}', this)">${c.name}</div>`; 
     });
     document.getElementById('cat-nav').innerHTML = navH;
 
-    // 分類滾動與反白特效
     function scrollToCat(catId, btn) {
         const el = document.getElementById(catId);
         if(el) {
-            const offset = 170; // 配合固定高度的 Header
+            const offset = 130; // 配合縮小後的 Header 高度調整滾動誤差
             const bodyRect = document.body.getBoundingClientRect().top;
             const elementRect = el.getBoundingClientRect().top;
             const elementPosition = elementRect - bodyRect;
@@ -478,9 +443,11 @@
 
     function closeModalByBg(e, id) { if(e.target.id === id) document.getElementById(id).style.display = 'none'; }
 
-    // 開啟選項彈窗
     function openOpt(productId, cartIndex = -1) {
+        // 使用 == 確保數字或字串的 ID 都能正確比對
         cur = P.find(x => x.id == productId); 
+        if(!cur) return;
+        
         editIndex = cartIndex;
         selectedOptIndices = []; 
         addP = 0;
@@ -563,7 +530,6 @@
         if(editIndex > -1) showCart();
     }
 
-    // 更新底部購物車狀態
     function upd() {
         if(C.length) {
             document.getElementById('bar').style.display = 'block';
@@ -585,41 +551,40 @@
         upd();
     }
 
-    // 渲染購物車明細
     function showCart() {
         let h = "";
         C.forEach((i, x) => {
             let d_name = i['name_' + CUR_LANG] || i.name_zh;
             let opts = i['options_' + CUR_LANG] || i.options_zh || [];
-            let opt_str = opts.length ? `<div style="font-size:0.85em;color:var(--text-muted);margin-top:6px;">選項: ${opts.join(', ')}</div>` : '';
+            let opt_str = opts.length ? `<div style="font-size:0.9em;color:var(--text-muted);margin-top:4px;font-weight:bold;">選項: ${opts.join(', ')}</div>` : '';
             h += `<div class="cart-item-row">
                 <div class="cart-item-main">
                     <div style="flex:1; padding-right:10px;">
                         <b style="font-size:1.15em; color:var(--text-main);">${d_name}</b>
                         ${opt_str}
                     </div>
-                    <div style="font-weight:800; color:var(--primary-color); font-size:1.2em;">$${i.unit_price * i.qty}</div>
+                    <div style="font-weight:900; color:var(--primary-color); font-size:1.2em;">$${i.unit_price * i.qty}</div>
                 </div>
                 <div class="cart-qty-sub">
-                    <div style="display:flex; gap:8px;">
+                    <div style="display:flex; gap:6px;">
                         <button class="btn-del" onclick="if(confirm('${T.confirm_delete || 'Delete?'}')){C.splice(${x},1);saveCache();upd();showCart();}">刪除</button>
-                        <button class="btn-edit-opt" onclick="openOpt(${i.id}, ${x})">${T.edit_options || '修改'}</button>
+                        <button class="btn-edit-opt" onclick="openOpt('${i.id}', ${x})">${T.edit_options || '修改'}</button>
                     </div>
-                    <div class="qty-ctrl" style="margin:0; gap:10px;">
-                        <button class="qty-btn" style="width:36px;height:36px;font-size:1.3em;" onclick="updateCartQty(${x}, -1)">-</button>
-                        <span style="min-width:24px; text-align:center; font-weight:800; font-size:1.2em;">${i.qty}</span>
-                        <button class="qty-btn" style="width:36px;height:36px;font-size:1.3em;" onclick="updateCartQty(${x}, 1)">+</button>
+                    <div class="qty-ctrl" style="margin:0; gap:8px;">
+                        <button class="qty-btn" style="width:34px;height:34px;font-size:1.2em;" onclick="updateCartQty(${x}, -1)">-</button>
+                        <span style="min-width:24px; text-align:center; font-weight:900; font-size:1.1em;">${i.qty}</span>
+                        <button class="qty-btn" style="width:34px;height:34px;font-size:1.2em;" onclick="updateCartQty(${x}, 1)">+</button>
                     </div>
                 </div>
             </div>`;
         });
         
         if (IS_DELIVERY && C.length > 0) {
-            h += `<div style="text-align:right; padding:16px 0; border-top:1px dashed var(--border-color); color:#1d4ed8; font-weight:bold; font-size:1.1em;">
+            h += `<div style="text-align:right; padding:12px 0; border-top:1px dashed var(--border-color); color:#1d4ed8; font-weight:bold; font-size:1.1em;">
                     Delivery Fee: $${DELIVERY_FEE}
                   </div>`;
         }
-        document.getElementById('c-list').innerHTML = h || `<div style="text-align:center; padding: 40px 0; color:var(--text-muted);">${T.empty_cart}</div>`;
+        document.getElementById('c-list').innerHTML = h || `<div style="text-align:center; padding: 40px 0; font-weight:bold; color:var(--text-muted);">${T.empty_cart}</div>`;
         document.getElementById('cart-m').style.display = 'flex';
     }
 
