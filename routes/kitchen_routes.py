@@ -469,7 +469,7 @@ def print_order(oid):
             if is_receipt:
                 res += LEFT + SIZE_X01
                 if c_fee > 0:
-                    res += f"Delivery Fee: ${c_fee}\n".encode(ENCODE)
+                    res += b"\n"
                 
                 # 總價放大
                 label_total = "TOTAL: " if lang_override == 'en' else "總計: "
