@@ -382,16 +382,21 @@ def delivery_menu():
 # --- 下單成功頁面 ---
 @menu_bp.route('/success')
 def order_success():
+    # 取得 URL 參數
     oid = request.args.get('order_id')
     lang = request.args.get('lang', 'zh')
-    # 假設你有 load_translations() 函式，請確認環境中有這支函式
+    
+    # 載入翻譯檔，預設使用中文
+    # (假設環境中已有 load_translations() 函式)
     translations = load_translations()
     t = translations.get(lang, translations['zh'])
     
     conn = get_db_connection()
     cur = conn.cursor()
     
+    # ==========================================
     # 1. 讀取訂單詳細資料
+    # ==========================================
     cur.execute("""
         SELECT daily_seq, content_json, total_price, created_at, 
                order_type, delivery_info, delivery_fee,
@@ -401,7 +406,9 @@ def order_success():
     """, (oid,))
     row = cur.fetchone()
     
-    # 2. 【新增】讀取所有產品的客製化選項，用來建立動態翻譯字典
+    # ==========================================
+    # 2. 讀取所有產品的客製化選項 (建立動態翻譯字典)
+    # ==========================================
     cur.execute("""
         SELECT name, custom_options, custom_options_en, custom_options_jp, custom_options_kr 
         FROM products
@@ -410,7 +417,7 @@ def order_success():
     for p_row in cur.fetchall():
         p_name = p_row[0]
         
-        # 輔助函式：切分逗號字串
+        # 輔助函式：切分逗號字串，過濾空白
         def split_opts(opt_str):
             if not opt_str: return []
             return [o.strip() for o in opt_str.split(',') if o.strip()]
@@ -425,12 +432,15 @@ def order_success():
     cur.close()
     conn.close()
     
+    # 若找不到訂單則返回 404
     if not row: return "Order Not Found", 404
     
-    # 解構訂單資料
+    # ==========================================
+    # 3. 解構訂單資料與邏輯判斷
+    # ==========================================
     seq, json_str, total, created_at, order_type, delivery_info_json, delivery_fee, c_name, c_phone, c_addr, c_time, table_num_db = row
     
-    # 判斷是否為外送 (根據 type 或 table_number)
+    # 判斷是否為外送 (根據 type 欄位或 table_number 是否為 '外送')
     type_is_delivery = (str(order_type or '').strip().lower() == 'delivery')
     table_is_delivery = (str(table_num_db or '').strip() == '外送')
     is_delivery = type_is_delivery or table_is_delivery
@@ -443,12 +453,13 @@ def order_success():
         except:
             delivery_info_dict = {}
 
-    # 優先使用欄位資料，若無則讀取 JSON
+    # 優先使用實體欄位資料，若無則降級讀取 JSON 內的資料
     d_name = c_name if c_name else delivery_info_dict.get('name', 'N/A')
     d_phone = c_phone if c_phone else delivery_info_dict.get('phone', 'N/A')
     d_addr = c_addr if c_addr else delivery_info_dict.get('address', 'N/A')
     d_note = delivery_info_dict.get('note', '')
     
+    # 處理預約時間顯示
     d_scheduled = ""
     if c_time:
         d_scheduled = str(c_time)
@@ -456,21 +467,26 @@ def order_success():
         d_scheduled = str(delivery_info_dict.get('scheduled_for'))
         
     if d_scheduled and len(d_scheduled) > 16:
-        d_scheduled = d_scheduled[:16]
+        d_scheduled = d_scheduled[:16] # 截斷秒數，只顯示到分
 
-    # --- 【新增】選項動態翻譯函式 ---
+    # ==========================================
+    # 4. 選項動態翻譯函式
+    # ==========================================
     def translate_option(p_name, opt_str, target_lang):
+        # 若商品不在字典中，回傳原字串
         if p_name not in product_map:
             return opt_str
         
         p_data = product_map[p_name]
         found_idx = -1
         
+        # 尋找該選項在哪個語言列表中的索引位置
         for l in ['zh', 'en', 'jp', 'kr']:
             if opt_str in p_data[l]:
                 found_idx = p_data[l].index(opt_str)
                 break
         
+        # 若有找到，嘗試去目標語言列表對應位置取值
         if found_idx != -1:
             target_list = p_data.get(target_lang, [])
             if found_idx < len(target_list):
@@ -478,109 +494,229 @@ def order_success():
                 
         return opt_str
 
-    # 生成商品列表 HTML
+    # ==========================================
+    # 5. 生成動態 HTML 內容 (商品列表、外送資訊)
+    # ==========================================
     items = json.loads(json_str) if json_str else []
     items_html = ""
     
     for i in items:
+        # 計算單品總價
         row_total = int(float(i['unit_price'])) * int(float(i['qty']))
         
         # 取得基準的中文商品名稱 (用作查字典的 Key)
         name_zh = i.get('name_zh', i.get('name', 'Product'))
-        # 顯示用的商品名稱 (客人選的語言)
+        # 顯示用的商品名稱 (依據客人的語言)
         d_name_prod = i.get(f'name_{lang}', name_zh)
         
-        # --- 【修改這裡】抓取選項並動態翻譯 ---
+        # 抓取選項並動態翻譯
         raw_ops = i.get(f'options_{lang}') or i.get('options_zh') or i.get('options') or []
         if isinstance(raw_ops, str):
             raw_ops = [raw_ops]
             
         translated_ops = []
         for opt in raw_ops:
-            # 傳入：(產品中文名稱, 要翻譯的選項字串, 目標語言)
             translated_ops.append(translate_option(name_zh, str(opt).strip(), lang))
             
-        opt_str = f"<br><small style='color:#777; font-size:0.9em;'>└ {', '.join(translated_ops)}</small>" if translated_ops else ""
+        # 選項 HTML 組合
+        opt_str = f"<div class='item-options'>└ {', '.join(translated_ops)}</div>" if translated_ops else ""
         
+        # 單個商品項目的 HTML
         items_html += f"""
-        <div style='display:flex; justify-content:space-between; align-items: flex-start; border-bottom:1px solid #eee; padding:15px 0;'>
-            <div style="text-align: left; padding-right: 10px;">
-                <div style="font-size:1.1em; font-weight:bold; color:#333;">{d_name_prod} <span style="color:#888; font-weight:normal;">x{i['qty']}</span></div>
+        <div class="item-row">
+            <div class="item-info">
+                <div class="item-name">{d_name_prod} <span class="item-qty">x{i['qty']}</span></div>
                 {opt_str}
             </div>
-            <div style="font-weight:bold; font-size:1.1em; white-space:nowrap;">${row_total}</div>
+            <div class="item-price">${row_total}</div>
         </div>
         """
     
-    # 生成外送資訊區塊 HTML
+    # 初始化外送相關變數
     delivery_html = ""
     fee_row_html = ""
-    
     status_msg = ""
     wait_msg = ""
 
+    # 判斷是否顯示外送資訊
     if is_delivery:
         fee_label = "Delivery Fee" if lang == 'en' else "運費"
         fee_row_html = f"""
-        <div style='display:flex; justify-content:space-between; align-items: center; border-bottom:2px solid #333; padding:15px 0; color:#007bff;'>
-            <div style="font-weight:bold;">🛵 {fee_label}</div>
-            <div style="font-weight:bold; font-size:1.1em;">${delivery_fee}</div>
+        <div class="fee-row">
+            <div>🛵 {fee_label}</div>
+            <div>${delivery_fee}</div>
         </div>
         """
         
-        time_display = ""
-        if d_scheduled:
-            time_display = f"<div style='margin-bottom:8px; color:#d32f2f; font-size:1.1em;'><b>📅 預約時間:</b> {d_scheduled}</div>"
+        time_display = f"<div class='d-time'><b>📅 預約時間:</b> {d_scheduled}</div>" if d_scheduled else ""
 
         delivery_html = f"""
-        <div style="background:#e3f2fd; padding:15px; border-radius:10px; margin-bottom:20px; text-align:left; border:1px solid #90caf9;">
-            <h4 style="margin:0 0 10px 0; color:#1565c0; border-bottom: 1px solid #bbdefb; padding-bottom:5px;">🛵 外送資訊 / Delivery Info</h4>
+        <div class="delivery-box">
+            <h4>🛵 外送資訊 / Delivery Info</h4>
             {time_display}
-            <div style="margin-bottom:5px;"><b>姓名:</b> {d_name}</div>
-            <div style="margin-bottom:5px;"><b>電話:</b> <a href="tel:{d_phone}">{d_phone}</a></div>
-            <div style="margin-bottom:5px;"><b>地址:</b> {d_addr}</div>
-            <div style="font-size:0.95em; color:#555; margin-top:5px; background:#fff; padding:5px; border-radius:5px;"><b>備註:</b> {d_note}</div>
+            <div class="d-info-row"><b>姓名:</b> {d_name}</div>
+            <div class="d-info-row"><b>電話:</b> <a href="tel:{d_phone}">{d_phone}</a></div>
+            <div class="d-info-row"><b>地址:</b> {d_addr}</div>
+            <div class="d-note"><b>備註:</b> {d_note if d_note else '無'}</div>
         </div>
         """
         status_msg = "Order Received / 訂單已收到"
         wait_msg = "Please wait for confirmation call.<br>請留意電話，我們將與您確認餐點與外送時間。"
     else:
         status_msg = t.get('pay_at_counter', '請至櫃檯結帳')
-        wait_msg = t.get('kitchen_prep', 'Kitchen is preparing your meal.')
+        wait_msg = t.get('kitchen_prep', 'Kitchen is preparing your meal.<br>廚房正在為您準備餐點。')
 
+    # 時間轉換 (加 8 小時轉為台灣時間)
     tw_time = created_at + timedelta(hours=8)
     time_str = tw_time.strftime('%Y-%m-%d %H:%M:%S')
 
-    back_link = url_for('menu.index', lang=lang) if is_delivery else url_for('menu.index', lang=lang)
-    back_text = "Back to Menu" if is_delivery else "Back to Menu"
+    # 返回按鈕連結
+    back_link = url_for('menu.index', lang=lang)
+    back_text = "Back to Menu / 返回菜單"
 
+    # ==========================================
+    # 6. 回傳最終組合的 HTML (使用 CSS 變數與乾淨的類別命名)
+    # ==========================================
+    # 注意：f-string 內的 CSS 若用到大括號，需寫成雙大括號 {{ }}
     return f"""
     <!DOCTYPE html>
-    <html>
+    <html lang="{lang}">
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
         <title>Order Success</title>
         <style>
-            body {{ margin: 0; padding: 0; background: #fdfdfd; font-family: 'Microsoft JhengHei', -apple-system, sans-serif; }}
-            .container {{ min-height: 100vh; display: flex; flex-direction: column; padding: 20px; box-sizing: border-box; }}
-            .card {{ background: #fff; flex-grow: 1; border-radius: 20px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); padding: 30px 20px; text-align: center; display: flex; flex-direction: column; }}
-            .success-icon {{ font-size: 60px; margin-bottom: 10px; }}
-            .status-title {{ color: #28a745; margin: 0 0 20px 0; font-size: 1.8em; }}
-            .seq-box {{ background: #fff5f8; border-radius: 15px; padding: 20px; margin-bottom: 25px; border: 2px solid #ffeef2; }}
-            .seq-label {{ font-size: 1em; color: #e91e63; font-weight: bold; margin-bottom: 8px; letter-spacing: 1px; }}
-            .seq-number {{ font-size: 5em; font-weight: 900; color: #e91e63; line-height: 1; }}
-            .notice-box {{ background: #fdf6e3; padding: 18px; border-left: 6px solid #ff9800; border-radius: 8px; margin-bottom: 30px; text-align: left; }}
+            /* 顏色變數設定 */
+            :root {{
+                --bg-color: #F7F9FA;
+                --card-bg: #FFFFFF;
+                --text-main: #1F2937;
+                --text-muted: #6B7280;
+                --success: #10B981;
+                --primary: #FF5A5F;
+                --warning-bg: #FEF3C7;
+                --warning-text: #B45309;
+                --border: #E5E7EB;
+                --delivery-bg: #EFF6FF;
+                --delivery-border: #BFDBFE;
+                --delivery-text: #1E3A8A;
+            }}
+            
+            /* 全局基礎設定 */
+            body {{ 
+                margin: 0; padding: 0; 
+                background: var(--bg-color); 
+                font-family: 'Inter', '-apple-system', 'BlinkMacSystemFont', 'Microsoft JhengHei', sans-serif; 
+                color: var(--text-main);
+                -webkit-font-smoothing: antialiased;
+            }}
+            
+            /* 佈局容器：限制電腦版寬度，手機版保留邊距 */
+            .container {{ 
+                min-height: 100vh; 
+                display: flex; flex-direction: column; 
+                padding: 20px; box-sizing: border-box; 
+                max-width: 600px; margin: 0 auto; 
+            }}
+            
+            /* 主卡片樣式 */
+            .card {{ 
+                background: var(--card-bg); 
+                flex-grow: 1; border-radius: 20px; 
+                box-shadow: 0 4px 24px rgba(0,0,0,0.06); 
+                padding: 30px 20px; text-align: center; 
+                display: flex; flex-direction: column; 
+            }}
+            
+            /* 頂部成功狀態區 */
+            .header-sec {{ margin-bottom: 24px; }}
+            .success-icon {{ 
+                width: 64px; height: 64px; 
+                background: #D1FAE5; color: var(--success); 
+                border-radius: 50%; display: flex; 
+                align-items: center; justify-content: center; 
+                font-size: 32px; margin: 0 auto 16px auto; 
+            }}
+            .status-title {{ margin: 0; font-size: 1.6em; font-weight: 900; color: var(--text-main); }}
+            
+            /* 取餐單號區塊 */
+            .seq-box {{ 
+                background: #FFF1F2; border-radius: 16px; 
+                padding: 24px 16px; margin-bottom: 24px; 
+            }}
+            .seq-label {{ font-size: 0.9em; color: var(--primary); font-weight: bold; letter-spacing: 1px; margin-bottom: 8px; }}
+            .seq-number {{ font-size: 4.5em; font-weight: 900; color: var(--primary); line-height: 1; }}
+            
+            /* 提示訊息區塊 */
+            .notice-box {{ 
+                background: var(--warning-bg); padding: 16px; 
+                border-radius: 12px; margin-bottom: 24px; text-align: left; 
+            }}
+            .notice-title {{ font-weight: 900; color: var(--warning-text); font-size: 1.1em; margin-bottom: 4px; }}
+            .notice-desc {{ color: var(--warning-text); font-size: 0.95em; line-height: 1.5; }}
+            
+            /* 外送資訊區塊 */
+            .delivery-box {{ 
+                background: var(--delivery-bg); border: 1px solid var(--delivery-border); 
+                padding: 16px; border-radius: 12px; margin-bottom: 24px; 
+                text-align: left; color: var(--delivery-text);
+            }}
+            .delivery-box h4 {{ margin: 0 0 12px 0; border-bottom: 1px dashed var(--delivery-border); padding-bottom: 8px; font-size: 1.1em; }}
+            .d-time {{ color: #D97706; font-size: 1.05em; margin-bottom: 8px; }}
+            .d-info-row {{ margin-bottom: 6px; font-size: 0.95em; }}
+            .d-info-row a {{ color: var(--delivery-text); text-decoration: none; font-weight: bold; }}
+            .d-note {{ font-size: 0.9em; margin-top: 10px; background: white; padding: 8px; border-radius: 8px; border: 1px solid var(--delivery-border); }}
+            
+            /* 訂單明細區塊 */
             .details-area {{ text-align: left; margin-bottom: 30px; }}
-            .total-row {{ text-align: right; font-weight: 900; font-size: 1.8em; margin-top: 20px; color: #d32f2f; border-top: 2px solid #ddd; padding-top: 15px; }}
-            .home-btn {{ display: block; padding: 18px; background: #007bff; color: white !important; text-decoration: none; border-radius: 12px; font-weight: bold; font-size: 1.2em; margin-top: auto; box-shadow: 0 4px 10px rgba(0,123,255,0.3); }}
+            .details-title {{ 
+                font-size: 1.1em; font-weight: 900; color: var(--text-main); 
+                border-bottom: 2px solid var(--border); 
+                padding-bottom: 10px; margin: 0 0 16px 0; 
+            }}
+            
+            .item-row {{ 
+                display: flex; justify-content: space-between; 
+                align-items: flex-start; padding: 12px 0; 
+                border-bottom: 1px solid var(--border); 
+            }}
+            .item-info {{ flex: 1; padding-right: 12px; }}
+            .item-name {{ font-size: 1.05em; font-weight: bold; color: var(--text-main); line-height: 1.3; }}
+            .item-qty {{ color: var(--text-muted); font-weight: normal; margin-left: 4px; font-size: 0.9em; }}
+            .item-options {{ color: var(--text-muted); font-size: 0.85em; margin-top: 4px; }}
+            .item-price {{ font-weight: bold; font-size: 1.1em; white-space: nowrap; color: var(--text-main); }}
+            
+            /* 費用小計與總計 */
+            .fee-row {{ 
+                display: flex; justify-content: space-between; align-items: center; 
+                padding: 16px 0 0 0; color: #3B82F6; font-weight: bold; font-size: 1.05em; 
+            }}
+            .total-row {{ 
+                display: flex; justify-content: space-between; align-items: center; 
+                margin-top: 16px; padding-top: 16px; border-top: 2px solid var(--border); 
+            }}
+            .total-label {{ font-size: 1.2em; font-weight: bold; }}
+            .total-price {{ font-size: 1.8em; font-weight: 900; color: var(--primary); }}
+            
+            /* 底部時間與按鈕 */
+            .order-time {{ color: var(--text-muted); font-size: 0.85em; margin: 24px 0; text-align: center; }}
+            .home-btn {{ 
+                display: block; padding: 16px; background: var(--text-main); 
+                color: white; text-decoration: none; border-radius: 12px; 
+                font-weight: bold; font-size: 1.1em; margin-top: auto; 
+                transition: transform 0.1s;
+            }}
+            .home-btn:active {{ transform: scale(0.98); }}
         </style>
     </head>
     <body>
         <div class="container">
             <div class="card">
-                <div class="success-icon">✅</div>
-                <h1 class="status-title">{t.get('order_success', '下單成功')}</h1>
+                
+                <div class="header-sec">
+                    <div class="success-icon">✓</div>
+                    <h1 class="status-title">{t.get('order_success', '下單成功')}</h1>
+                </div>
                 
                 <div class="seq-box">
                     <div class="seq-label">取餐單號 / ORDER NO.</div>
@@ -588,21 +724,27 @@ def order_success():
                 </div>
 
                 <div class="notice-box">
-                    <div style="font-weight:bold; color:#856404; font-size:1.3em; margin-bottom:5px;">⚠️ {status_msg}</div>
-                    <div style="color:#856404; font-size:1em; line-height:1.4;">{wait_msg}</div>
+                    <div class="notice-title">⚠️ {status_msg}</div>
+                    <div class="notice-desc">{wait_msg}</div>
                 </div>
 
                 {delivery_html}
 
                 <div class="details-area">
-                    <h3 style="border-bottom:2px solid #eee; padding-bottom:10px; margin-bottom:10px; color:#444;">🧾 {t.get('order_details', '訂單明細')}</h3>
+                    <h3 class="details-title">🧾 {t.get('order_details', '訂單明細')}</h3>
+                    
                     {items_html}
                     {fee_row_html}
-                    <div class="total-row">{t.get('total', 'Total')}: ${total}</div>
+                    
+                    <div class="total-row">
+                        <div class="total-label">{t.get('total', 'Total')}</div>
+                        <div class="total-price">${total}</div>
+                    </div>
                 </div>
                 
-                <p style="color:#999; font-size:0.85em; margin: 20px 0;">下單時間: {time_str}</p>
-                <a href="{back_link}" class="home-btn">{back_text }</a>
+                <div class="order-time">下單時間: {time_str}</div>
+                
+                <a href="{back_link}" class="home-btn">{back_text}</a>
             </div>
         </div>
     </body>
