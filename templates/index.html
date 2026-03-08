@@ -194,19 +194,19 @@
                 </div>
             </div>
 
-            <div style="margin-top: 1px;">
-                {% if delivery_enabled %}
-                <div class="footer-info">
-                    <h6>滿1000可外送 1.6km以內</h6>
-                    </div>
-                    <a href="/delivery/setup" class="delivery-btn delivery-internal">
-                        🛵 外送服務 (Delivery)
-                    </a>
-                {% else %}
-                    <a href="https://www.foodpanda.com.tw/restaurant/uf01/hong-xing-xiao-chi-dian" target="_blank" class="delivery-btn delivery-panda">
-                        🐼 Foodpanda 外送
-                    </a>
-                {% endif %}
+            <div style="margin-top: 0px;">  {% if delivery_enabled %}
+                <div class="footer-info" style="margin-top: 5px;">
+                    <h6 style="margin: 0 0 5px 0;">滿1000可外送 1.6km以內</h6>
+                </div>
+                <a href="/delivery/setup" class="delivery-btn delivery-internal">
+                    🛵 外送服務 (Delivery)
+                </a>
+            {% else %}
+                <a href="https://www.foodpanda.com.tw/restaurant/uf01/hong-xing-xiao-chi-dian" 
+                   target="_blank" class="delivery-btn delivery-panda" style="margin-top: 10px;">
+                    🐼 Foodpanda 外送
+                </a>
+            {% endif %}
             </div>
 
         {% else %}
@@ -224,6 +224,7 @@
     </div>
 </body>
 </html>
+
 
 
 
