@@ -426,20 +426,20 @@ def print_order(oid):
             
             # 3. 基礎資訊區 (靠左)
             res += LEFT + SIZE_X01
-            res += f"TIME: {time_str}\n".encode(ENCODE)
+            res += f"時間: {time_str}\n".encode(ENCODE)
             
             # --- 這裡加入所有資料庫欄位的判斷 ---
             if has_schedule:
-                res += BOLD_ON + f"PREORDER: {c_schedule}\n".encode(ENCODE) + BOLD_OFF + SIZE_X01
+                res += BOLD_ON + f"訂單時間: {c_schedule}\n".encode(ENCODE) + BOLD_OFF + SIZE_X01
             
             if is_receipt:
                 if c_name:
-                    res += f"CUSTOMER: {c_name}\n".encode(ENCODE, 'replace') + SIZE_X01
+                    res += f"姓名: {c_name}\n".encode(ENCODE, 'replace') + SIZE_X01
                 if has_contact:
-                    res += f"PHONE: {c_phone}\n".encode(ENCODE) + SIZE_X01
+                    res += f"電話: {c_phone}\n".encode(ENCODE) + SIZE_X01
                 if has_addr:
                     # 地址通常較長，使用標準大小避免跑版
-                    res += SIZE_NORM + f"ADDR: {c_addr}\n".encode(ENCODE, 'replace') + SIZE_X01
+                    res += SIZE_X01 + f"地址: {c_addr}\n".encode(ENCODE, 'replace')
         
             # 分隔線
             res += SIZE_NORM + b"-"*48 + b"\n"
