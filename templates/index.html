@@ -7,7 +7,6 @@
     <style>
         /* --- 基礎設定：確保撐滿全螢幕 --- */
         html, body {
-            height: 100%;
             margin: 0;
             padding: 0;
         }
@@ -16,44 +15,47 @@
             font-family: 'Microsoft JhengHei', -apple-system, sans-serif;
             display: flex;
             flex-direction: column;
+            justify-content: space-between; /* 讓頭尾分散到最上下兩端 */
             background: #fdfdfd;
-            padding: 10px 15px; /* 側邊留一點空間，上下留一點 */
+            padding: 10px 15px; 
             box-sizing: border-box;
             color: #333;
+            height: 100vh; /* 舊版瀏覽器備案 */
+            height: 100dvh; /* 動態視口高度：完美避開手機網址列的干擾 */
         }
 
-        /* --- 頁首：縮減邊距 --- */
+        /* --- 頁首 --- */
         .header-info {
             text-align: center;
             margin-top: 5px;
-            margin-bottom: 10px;
+            /* 取消過大的 margin-bottom，讓它自然排列 */
         }
         h2 {
-            font-size: 1.5em; /* 略縮小以保證空間 */
-            margin: 0;
+            font-size: 1.55em; 
+            margin: 0 0 4px 0;
             font-weight: 900;
         }
         .sub-title {
             color: #666;
-            font-size: 0.9em;
+            font-size: 0.95em;
         }
 
-        /* --- 主容器：使用 Flex 成長來推開內容 --- */
+        /* --- 主容器：自動垂直置中 --- */
         .main-container {
             width: 100%;
             max-width: 500px;
-            margin: 0 auto;
+            /* margin: auto 是精髓！它會自動吸收上下多餘的空白，讓這個區塊完美置中 */
+            margin: auto; 
             display: flex;
             flex-direction: column;
-            flex: 1; /* 佔據中間剩餘所有空間 */
-            gap: 10px; /* 區塊之間的間距 */
+            gap: 12px; /* 區塊之間的間距，微調至最舒適的視覺比例 */
         }
 
-        /* --- 點餐區塊：極致簡約 --- */
+        /* --- 點餐區塊 --- */
         .order-section {
             background: #fff;
             border-radius: 16px;
-            padding: 12px;
+            padding: 14px; /* 稍微增加一點內距讓視覺不擁擠 */
             box-shadow: 0 2px 8px rgba(0,0,0,0.06);
             border: 1px solid #eee;
             text-align: center;
@@ -62,7 +64,7 @@
         .section-title {
             font-size: 1.25em;
             font-weight: bold;
-            margin-bottom: 6px;
+            margin-bottom: 8px;
             display: flex;
             align-items: center;
             justify-content: center;
@@ -76,19 +78,21 @@
         .lang-grid {
             display: grid;
             grid-template-columns: 1fr 1fr;
-            gap: 8px;
+            gap: 10px; /* 按鈕間距微微拉開 */
         }
 
         .btn-lang {
-            padding: 12px 0;
+            padding: 14px 0;
             text-align: center;
             text-decoration: none;
-            font-size: 1.15em; /* 保持文字巨大 */
+            font-size: 1.15em; 
             font-weight: bold;
-            border-radius: 10px;
+            border-radius: 12px; /* 圓角稍微柔和 */
             color: white;
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            transition: transform 0.1s;
         }
+        .btn-lang:active { transform: scale(0.97); }
 
         /* 顏色漸層 */
         .zh { background: linear-gradient(135deg, #e91e63, #c2185b); } 
@@ -100,7 +104,7 @@
         .delivery-btn {
             display: block;
             width: 100%;
-            padding: 14px 0;
+            padding: 15px 0;
             text-align: center;
             text-decoration: none;
             font-size: 1.2em;
@@ -108,25 +112,26 @@
             color: white;
             border-radius: 50px;
             margin-top: 5px;
+            box-shadow: 0 3px 6px rgba(0,0,0,0.1);
         }
         .delivery-internal { background: linear-gradient(135deg, #ff5722, #d84315); }
         .delivery-panda { background: linear-gradient(135deg, #D70F64, #C20D5A); }
 
-        /* --- 頁尾：固定在最下方且不會消失 --- */
+        /* --- 頁尾 --- */
         .footer-info {
             text-align: center;
-            margin-top: auto; /* 強制頁尾推到最底部 */
-            padding-top: 10px;
+            /* 取消原本的 margin-top: auto，因為 body 已設定分散對齊 */
+            padding-top: 8px;
             padding-bottom: 5px;
-            border-top: 1px solid #f0f0f0;
+            border-top: 1px solid #eee;
         }
-        .footer-info h3 { margin: 2px 0; font-size: 1.2em; color: #333; }
+        .footer-info h3 { margin: 2px 0; font-size: 1.15em; color: #333; }
         .footer-info h4 { margin: 2px 0; font-size: 0.85em; font-weight: normal; color: #777; }
 
         .table-hint {
             font-size: 0.8em;
             color: #888;
-            margin-bottom: 6px;
+            margin-bottom: 8px;
         }
 
         /* 如果是休息中 */
