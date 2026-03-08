@@ -426,11 +426,11 @@ def print_order(oid):
             
             # 3. 基礎資訊區 (靠左)
             res += LEFT + SIZE_X01
-            res += f"時間: {time_str}\n".encode(ENCODE)
+            res += f"訂單時間: {time_str}\n".encode(ENCODE)
             
             # --- 這裡加入所有資料庫欄位的判斷 ---
             if has_schedule:
-                res += BOLD_ON + f"訂單時間: {c_schedule}\n".encode(ENCODE) + BOLD_OFF + SIZE_X01
+                res += BOLD_ON + f"取單時間: {c_schedule}\n".encode(ENCODE) + BOLD_OFF + SIZE_X01
             
             if is_receipt:
                 if c_name:
