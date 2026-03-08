@@ -217,13 +217,16 @@
     {% if not is_delivery_mode %}
     <div class="static-top-section">
         <div class="mode-switch">
-            <div class="mode-opt active" id="mode-dinein" onclick="setMode('dinein')">🍽️ 現場 Dine-in</div>
-            <div class="mode-opt" id="mode-takeout" onclick="setMode('takeout')">🛍️ 外帶 Takeout</div>
+            <div class="mode-opt active" id="mode-dinein" onclick="setMode('dinein')">現場 Dine-in</div>
+            <div class="mode-opt" id="mode-takeout" onclick="setMode('takeout')">預約自取 Takeout</div>
         </div>
         <div id="sec-takeout" style="display: none;">
             <div class="takeout-time-box">
                 <span class="input-label" style="color:#b45309;">🕒 預計取餐時間 (Pickup Time)</span>
                 <input type="datetime-local" id="takeout_time" class="modern-input" style="background:white; border-color:#fcd34d; padding:6px 10px;" step="60">
+                
+                <span class="input-label" style="color:#b45309;">📱 手機號碼 (Phone)</span>
+                <input type="tel" id="phone" class="modern-input" placeholder="09xx-xxx-xxx" style="background:white; border-color:#fcd34d; padding:6px 10px;" required>
             </div>
         </div>
     </div>
@@ -615,7 +618,13 @@
                 alert("⚠️ 請選擇取餐時間");
                 return;
             }
+            if(!phoneVal || phoneVal.trim() === '') {
+                alert("⚠️ 請輸入聯絡手機號碼");
+                return;
+            }
             document.getElementById('scheduled_for_input').value = timeVal.replace('T', ' ');
+            // 將輸入的手機號碼放入隱藏的表單欄位中，以便 POST 送出
+            document.querySelector('input[name="customer_phone"]').value = phoneVal.trim();
         } else {
             tableVal = document.getElementById('visible_table').value;
         }
