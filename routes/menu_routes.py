@@ -605,10 +605,34 @@ def order_success():
             /* 全局基礎設定 */
             body {{ 
                 margin: 0; padding: 0; 
-                background: var(--bg-color); 
                 font-family: 'Inter', '-apple-system', 'BlinkMacSystemFont', 'Microsoft JhengHei', sans-serif; 
                 color: var(--text-main);
                 -webkit-font-smoothing: antialiased;
+            }}
+
+            /* 背景圖片設定 (使用偽元素避免 opacity 影響到文字與卡片) */
+            body::before {{
+                content: "";
+                position: fixed;
+                top: 0; left: 0; right: 0; bottom: 0;
+                background: url('https://i.ibb.co/sJFBdMfs/1622093786-81a879fc1f1b41afed71696a0e45d95f.png') no-repeat center center;
+                background-size: cover; 
+                /* 【核心】設定背景圖片透明度 (0.8 表示 80% 可見，即 20% 透明) */
+                opacity: 0.8; 
+                z-index: -1; /* 放在所有內容的最下方 */
+            }}
+
+            /* 銳利白邊文字效果 */
+            .text-outline {{
+                text-shadow: 
+                    -1px -1px 0 #FFF,
+                     0   -1px 0 #FFF,
+                     1px -1px 0 #FFF,
+                     1px  0   0 #FFF,
+                     1px  1px 0 #FFF,
+                     0    1px 0 #FFF,
+                    -1px  1px 0 #FFF,
+                    -1px  0   0 #FFF;
             }}
             
             /* 佈局容器：限制電腦版寬度，手機版保留邊距 */
@@ -621,6 +645,7 @@ def order_success():
             
             /* 主卡片樣式 */
             .card {{ 
+                /* 若希望背景圖能透出卡片，可將 var(--card-bg) 改為 rgba(255,255,255,0.9) 等半透明值 */
                 background: var(--card-bg); 
                 flex-grow: 1; border-radius: 20px; 
                 box-shadow: 0 4px 24px rgba(0,0,0,0.06); 
@@ -705,11 +730,13 @@ def order_success():
                 color: white; text-decoration: none; border-radius: 12px; 
                 font-weight: bold; font-size: 1.1em; margin-top: auto; 
                 transition: transform 0.1s;
+                /* 按鈕文字若是白色，可以考慮取消白邊效果，讓它保持清晰 */
+                text-shadow: none;
             }}
             .home-btn:active {{ transform: scale(0.98); }}
         </style>
     </head>
-    <body>
+    <body class="text-outline">
         <div class="container">
             <div class="card">
                 
