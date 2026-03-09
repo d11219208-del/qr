@@ -16,7 +16,12 @@
             display: flex;
             flex-direction: column;
             justify-content: space-between; /* 讓頭尾分散到最上下兩端 */
-            background: #fdfdfd;
+            
+            /* 【修改重點】設定背景圖片，並加上一層半透明白色遮罩讓文字保持清晰 */
+            background: linear-gradient(rgba(255, 255, 255, 0.4), rgba(255, 255, 255, 0.4)), 
+                        url('https://i.ibb.co/sJFBdMfs/1622093786-81a879fc1f1b41afed71696a0e45d95f.png') no-repeat center center fixed;
+            background-size: cover; /* 讓圖片依比例撐滿螢幕 */
+
             padding: 10px 15px; 
             box-sizing: border-box;
             color: #333;
@@ -28,7 +33,12 @@
         .header-info {
             text-align: center;
             margin-top: 5px;
-            /* 取消過大的 margin-bottom，讓它自然排列 */
+            /* 增加一點毛玻璃效果/半透明底色，讓店名更突出 */
+            background: rgba(255, 255, 255, 0.85);
+            padding: 10px;
+            border-radius: 12px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+            backdrop-filter: blur(5px);
         }
         h2 {
             font-size: 1.55em; 
@@ -56,8 +66,8 @@
             background: #fff;
             border-radius: 16px;
             padding: 14px; /* 稍微增加一點內距讓視覺不擁擠 */
-            box-shadow: 0 2px 8px rgba(0,0,0,0.06);
-            border: 1px solid #eee;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.08); /* 稍微加深陰影讓卡片浮出來 */
+            border: 1px solid rgba(255,255,255,0.5);
             text-align: center;
         }
         
@@ -112,7 +122,7 @@
             color: white;
             border-radius: 50px;
             margin-top: 5px;
-            box-shadow: 0 3px 6px rgba(0,0,0,0.1);
+            box-shadow: 0 4px 10px rgba(0,0,0,0.15);
         }
         .delivery-internal { background: linear-gradient(135deg, #ff5722, #d84315); }
         .delivery-panda { background: linear-gradient(135deg, #D70F64, #C20D5A); }
@@ -120,10 +130,14 @@
         /* --- 頁尾 --- */
         .footer-info {
             text-align: center;
-            /* 取消原本的 margin-top: auto，因為 body 已設定分散對齊 */
             padding-top: 8px;
             padding-bottom: 5px;
-            border-top: 1px solid #eee;
+            /* 增加半透明背景 */
+            background: rgba(255, 255, 255, 0.85);
+            border-radius: 12px;
+            margin-bottom: 5px;
+            box-shadow: 0 -2px 10px rgba(0,0,0,0.05);
+            backdrop-filter: blur(5px);
         }
         .footer-info h3 { margin: 2px 0; font-size: 1.15em; color: #333; }
         .footer-info h4 { margin: 2px 0; font-size: 0.85em; font-weight: normal; color: #777; }
@@ -136,13 +150,14 @@
 
         /* 如果是休息中 */
         .closed-notice {
-            background: #f8f9fa;
+            background: rgba(248, 249, 250, 0.95);
             padding: 30px;
             border-radius: 15px;
             text-align: center;
             font-size: 1.3em;
             font-weight: bold;
             border: 1px solid #ddd;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
         }
     </style>
 </head>
@@ -182,7 +197,7 @@
 
             <div style="text-align: center;">
                 {% if delivery_enabled %}
-                    <h6 style="margin: 0 0 5px 0; color: #d84315; font-size: 0.9em;">滿1000可外送 1.6km以內</h6>
+                    <h6 style="margin: 0 0 5px 0; color: #d84315; font-size: 0.9em; background: rgba(255,255,255,0.8); display: inline-block; padding: 2px 8px; border-radius: 4px;">滿1000可外送 1.6km以內</h6>
                     <a href="/delivery/setup" class="delivery-btn delivery-internal">🛵 外送服務 (Delivery)</a>
                 {% else %}
                     <a href="https://www.foodpanda.com.tw/restaurant/uf01/hong-xing-xiao-chi-dian" target="_blank" class="delivery-btn delivery-panda">🐼 Foodpanda 外送</a>
