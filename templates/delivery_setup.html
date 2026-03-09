@@ -8,7 +8,6 @@
         /* 全局與背景設定 */
         body { 
             font-family: 'Segoe UI', 'Microsoft JhengHei', sans-serif; 
-            background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
             min-height: 100vh;
             margin: 0;
             display: flex;
@@ -17,6 +16,19 @@
             padding: 20px;
             box-sizing: border-box;
             color: #333;
+            /* 移除原本的 linear-gradient，避免蓋住偽元素的背景圖 */
+        }
+
+        /* 背景圖片設定 (使用偽元素避免 opacity 影響到文字與卡片) */
+        body::before {
+            content: "";
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: url('https://i.ibb.co/sJFBdMfs/1622093786-81a879fc1f1b41afed71696a0e45d95f.png') no-repeat center center;
+            background-size: cover; 
+            /* 【核心】設定背景圖片透明度 (0.6表示 60% 可見，即 40% 透明) */
+            opacity: 0.6; 
+            z-index: -1; /* 放在所有內容的最下方 */
         }
 
         /* 主容器卡片 */
