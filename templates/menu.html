@@ -24,11 +24,31 @@
             font-family: 'Inter', '-apple-system', 'BlinkMacSystemFont', 'Microsoft JhengHei', sans-serif; 
             margin: 0; 
             padding-bottom: 150px; 
-            background: var(--bg-color); 
+            background: transparent; /* 【修改重點】將原本的底色改為透明，讓背景圖透出來 */
             color: var(--text-main);
             touch-action: manipulation; 
             font-size: 18px; 
             -webkit-tap-highlight-color: transparent; 
+            
+            /* 【新增重點】為偽元素背景做準備 */
+            position: relative;
+            z-index: 1;
+        }
+
+        /* 【新增重點】背景圖片獨立區塊 (不影響其他內容的透明度) */
+        body::after {
+            content: "";
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            /* 背景圖片設定 */
+            background: url('https://i.ibb.co/sJFBdMfs/1622093786-81a879fc1f1b41afed71696a0e45d95f.png') no-repeat center center;
+            background-size: cover; 
+            /* 【核心】設定背景圖片透明度 (0.2 表示 80% 可見，即 20% 透明) */
+            opacity: 0.8; 
+            z-index: -1; /* 放在所有內容的最下方 */
         }
 
         /* =========================================
@@ -36,12 +56,12 @@
            ========================================= */
         .static-top-section {
             padding: 12px 12px 0 12px;
-            background: var(--bg-color);
+            background: transparent; /* 【修改重點】將頂部區塊改為透明 */
         }
         
         .mode-switch { 
             display: flex; 
-            background: #EDF2F7; 
+            background: rgba(237, 242, 247, 0.9); /* 稍微帶點透明度，質感更好 */
             border-radius: 8px; 
             padding: 3px; 
             margin-bottom: 6px;
@@ -59,7 +79,7 @@
         }
         .mode-opt.active { background: var(--surface-color); color: var(--primary-color); box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
         
-        .takeout-time-box { background: #fffbeb; padding: 8px 12px; border-radius: 8px; border: 1px solid #fde68a; margin-bottom: 6px; }
+        .takeout-time-box { background: rgba(255, 251, 235, 0.95); padding: 8px 12px; border-radius: 8px; border: 1px solid #fde68a; margin-bottom: 6px; }
 
         /* =========================================
            3. 黏性導覽列 (隨畫面滑動)
@@ -68,7 +88,7 @@
             position: sticky; 
             top: 0; 
             z-index: 99; 
-            background: rgba(255, 255, 255, 0.96);
+            background: rgba(255, 255, 255, 0.85); /* 微調導覽列毛玻璃背景 */
             backdrop-filter: blur(8px); 
             box-shadow: var(--shadow-sm);
         }
@@ -77,7 +97,7 @@
         .input-label { font-weight: bold; color: var(--text-muted); font-size: 0.85em; margin-bottom: 4px; display: block; }
         .modern-input {
             width: 100%; padding: 8px 12px; box-sizing: border-box;
-            background: var(--bg-color); border: 1px solid var(--border-color);
+            background: rgba(255, 255, 255, 0.9); border: 1px solid var(--border-color);
             border-radius: 8px; font-size: 1em; color: var(--text-main); font-weight: bold;
             outline: none;
         }
@@ -105,7 +125,7 @@
         }
         
         .menu-item { 
-            background: var(--surface-color); margin: 0 12px 8px 12px; padding: 10px; 
+            background: rgba(255, 255, 255, 0.95); margin: 0 12px 8px 12px; padding: 10px; 
             border-radius: 12px; display: flex; box-shadow: var(--shadow-sm); 
             position: relative; border: 1px solid rgba(0,0,0,0.03); cursor: pointer;
         }
