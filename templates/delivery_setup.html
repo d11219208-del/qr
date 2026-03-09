@@ -15,8 +15,7 @@
             justify-content: center;
             padding: 20px;
             box-sizing: border-box;
-            color: #333;
-            /* 移除原本的 linear-gradient，避免蓋住偽元素的背景圖 */
+            color: #111; /* 加深整體文字顏色以凸顯白邊 */
         }
 
         /* 背景圖片設定 (使用偽元素避免 opacity 影響到文字與卡片) */
@@ -26,17 +25,31 @@
             top: 0; left: 0; right: 0; bottom: 0;
             background: url('https://i.ibb.co/sJFBdMfs/1622093786-81a879fc1f1b41afed71696a0e45d95f.png') no-repeat center center;
             background-size: cover; 
-            /* 【核心】設定背景圖片透明度 (0.6表示 60% 可見，即 40% 透明) */
             opacity: 0.6; 
-            z-index: -1; /* 放在所有內容的最下方 */
+            z-index: -1; 
         }
 
-        /* 主容器卡片 */
+        /* 【核心修改】統一為特定文字加上白邊與加粗 */
+        h2, .subtitle, label, .notice-badge, .error-msg, .back-link, input, select {
+            font-weight: 900;
+            /* 利用八方向的文字陰影來模擬文字白邊 */
+            text-shadow: 
+                -1.5px -1.5px 0 #fff,
+                 0     -1.5px 0 #fff,
+                 1.5px -1.5px 0 #fff,
+                 1.5px  0     0 #fff,
+                 1.5px  1.5px 0 #fff,
+                 0      1.5px 0 #fff,
+                -1.5px  1.5px 0 #fff,
+                -1.5px  0     0 #fff;
+        }
+
+        /* 主容器卡片 - 去除白色區塊與陰影 */
         .container { 
-            background: white; 
+            background: transparent; 
             padding: 40px; 
             border-radius: 20px; 
-            box-shadow: 0 10px 30px rgba(0,0,0,0.08); 
+            box-shadow: none; 
             width: 100%;
             max-width: 420px; 
             box-sizing: border-box;
@@ -46,13 +59,13 @@
         h2 { 
             margin-top: 0; 
             margin-bottom: 8px;
-            color: #2c3e50; 
+            color: #1a252f; 
             font-size: 1.8em; 
             text-align: center;
         }
         .subtitle { 
-            color: #7f8c8d; 
-            font-size: 0.95em; 
+            color: #2c3e50; 
+            font-size: 1em; 
             margin-top: 0;
             margin-bottom: 25px; 
             text-align: center;
@@ -66,32 +79,35 @@
         label { 
             display: block; 
             margin-bottom: 8px; 
-            font-weight: 600; 
-            color: #34495e; 
-            font-size: 0.95em;
+            color: #1a252f; 
+            font-size: 1.05em;
         }
 
-        /* 輸入框與下拉選單 */
+        /* 輸入框與下拉選單 - 去除背景並加深邊框 */
         input, select { 
             width: 100%; 
             padding: 14px 15px; 
-            border: 1.5px solid #dcdde1; 
+            border: 2px solid #2c3e50; /* 加粗且加深邊框，以便在透明背景下辨識 */
             border-radius: 12px; 
             font-size: 16px; 
             box-sizing: border-box; 
-            background: #fdfdfd; 
-            color: #2c3e50;
+            background: transparent; /* 去除白色背景 */
+            color: #111;
             transition: all 0.3s ease; 
             font-family: inherit;
         }
-        input::placeholder { color: #bdc3c7; }
+        input::placeholder { 
+            color: #444; /* 加深 placeholder 顏色 */
+            text-shadow: none; /* placeholder 不加白邊避免太亂 */
+            font-weight: normal;
+        }
         
         /* 輸入框 Focus 狀態 */
         input:focus, select:focus { 
             outline: none; 
             border-color: #ff5722; 
-            background: white; 
-            box-shadow: 0 0 0 3px rgba(255, 87, 34, 0.15); 
+            background: transparent; 
+            box-shadow: 0 0 8px rgba(255, 255, 255, 0.8); /* 點擊時外圍給一點白色光暈 */
         }
 
         /* 時間選擇區塊 */
@@ -101,40 +117,37 @@
         }
         .datetime-col { flex: 1; }
 
-        /* 提示標籤 */
+        /* 提示標籤 - 去除背景 */
         .notice-badge {
             display: inline-block;
-            background: #fff3e0;
-            color: #e65100;
-            padding: 6px 12px;
-            border-radius: 8px;
-            font-size: 0.85em;
+            background: transparent;
+            color: #d35400;
+            padding: 6px 0;
+            font-size: 0.9em;
             margin-top: 10px;
-            font-weight: 600;
         }
 
-        /* 送出按鈕 */
+        /* 送出按鈕 (按鈕維持底色，文字為白色，所以不用加白邊) */
         .btn-submit {
             width: 100%; 
             padding: 16px;
             background: #ff5722; 
             color: white;
-            border: none; 
+            border: 2px solid #fff; /* 給按鈕加個白框讓它更跳脫 */
             border-radius: 50px;
             font-size: 1.15em; 
             font-weight: bold;
             cursor: pointer;
             transition: all 0.3s ease;
-            box-shadow: 0 4px 15px rgba(255, 87, 34, 0.2);
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
             margin-top: 10px;
             display: flex;
             align-items: center;
             justify-content: center;
-            min-height: 56px; /* 固定高度，避免 loading 時按鈕跳動 */
+            min-height: 56px;
         }
         .btn-submit:hover:not(:disabled) {
             background: #e64a19;
-            box-shadow: 0 6px 20px rgba(255, 87, 34, 0.3);
             transform: translateY(-2px);
         }
         .btn-submit:active:not(:disabled) {
@@ -144,6 +157,7 @@
             background: #bdc3c7; 
             box-shadow: none;
             cursor: not-allowed; 
+            border-color: transparent;
         }
 
         /* 載入中動畫 */
@@ -161,18 +175,16 @@
             100% { transform: rotate(360deg); } 
         }
 
-        /* 錯誤訊息 */
+        /* 錯誤訊息 - 去除背景 */
         .error-msg { 
-            background: #fdf2f2;
+            background: transparent;
             color: #c0392b; 
-            padding: 12px;
-            border-radius: 10px;
-            border: 1px solid #fadbd8;
-            margin-top: 15px;
-            margin-bottom: 15px; 
+            padding: 10px 0;
+            border: none;
+            margin-top: 10px;
+            margin-bottom: 10px; 
             display: none; 
-            font-weight: 600;
-            font-size: 0.95em;
+            font-size: 1.05em;
             text-align: center;
         }
 
@@ -181,12 +193,12 @@
             display: block;
             text-align: center;
             margin-top: 25px;
-            color: #95a5a6;
+            color: #2c3e50;
             text-decoration: none;
-            font-size: 0.95em;
+            font-size: 1em;
             transition: color 0.3s;
         }
-        .back-link:hover { color: #34495e; }
+        .back-link:hover { color: #000; }
     </style>
 </head>
 <body>
