@@ -34,7 +34,6 @@
             padding: 30px 20px; 
         }
 
-        /* 頂部導覽列 (方便做 RWD 切換) */
         .top-bar {
             display: flex; 
             justify-content: space-between; 
@@ -201,27 +200,32 @@
            8. 行動裝置響應式 (RWD) 深度優化
            ========================================== */
         @media (max-width: 768px) {
-            /* 縮小容器與卡片邊距，爭取更多螢幕空間 */
             .container { padding: 15px 10px; }
             .card { padding: 20px 15px; margin-bottom: 20px; }
             
-            /* 頂部導覽列改為垂直排列 */
+            /* 【修復重點】：讓所有並排的列在手機上垂直排列，並且滿版 */
+            .row { flex-direction: column; }
+            .column, .column-40, .column-50 { 
+                width: 100% !important; 
+                max-width: 100% !important; 
+                margin-left: 0 !important; 
+                margin-bottom: 15px; 
+            }
+            .column:last-child { margin-bottom: 0; }
+
             .top-bar { flex-direction: column; align-items: flex-start; gap: 15px; }
             .top-bar h2 { font-size: 2.2rem; }
             .top-bar .button { width: 100%; text-align: center; }
 
-            /* 確保所有的輸入框與按鈕符合觸控友善大小 */
             input, select, button, .button { min-height: 44px; }
             .btn-sm { min-height: 36px; line-height: 36px; padding: 0 20px; }
 
-            /* 搜尋列縮小與重新定位 */
             .sticky-header { top: 10px; margin-bottom: 15px; }
             .sticky-header input { height: 4.4rem; font-size: 1.3rem; border-radius: 12px; }
 
-            /* 動作按鈕滿版 (Excel 匯出/匯入/清空等) */
             .row .column a.button, .row .column button.button { width: 100%; margin-bottom: 10px; }
             
-            /* --- 菜單列表轉卡片式設計 (Card UI) --- */
+            /* 菜單列表轉卡片式設計 */
             table, thead, tbody, th, td, tr { display: block; }
             thead tr { position: absolute; top: -9999px; left: -9999px; } 
             
@@ -232,12 +236,11 @@
                 border-radius: 12px; 
                 background: #fff; 
                 box-shadow: 0 4px 10px rgba(0,0,0,0.03); 
-                overflow: hidden; /* 確保圓角不被內容蓋住 */
+                overflow: hidden; 
             }
             
             td { border: none; padding: 12px 15px; position: relative; }
             
-            /* 第 1 欄：拖曳控制區塊轉為頂部橫幅 */
             td.handle { 
                 background: #f8f9fa; 
                 border-bottom: 1px solid var(--border-color); 
@@ -248,10 +251,8 @@
                 font-size: 18px;
             }
             
-            /* 第 2 欄：品項名稱與資訊 */
             td:nth-child(2) { padding-top: 15px; }
             
-            /* 第 3、4 欄：價格與狀態按鈕 (水平並排) */
             td:nth-child(3) { 
                 display: inline-block; 
                 width: 50%; 
@@ -265,7 +266,6 @@
                 padding-bottom: 15px;
             }
             
-            /* 第 5 欄：操作按鈕區 (編輯、刪除左右平分滿版) */
             td:last-child { 
                 display: flex; 
                 gap: 10px; 
