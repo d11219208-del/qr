@@ -618,7 +618,7 @@ def order_success():
                 background: url('https://i.ibb.co/sJFBdMfs/1622093786-81a879fc1f1b41afed71696a0e45d95f.png') no-repeat center center;
                 background-size: cover; 
                 /* 【核心】設定背景圖片透明度 (0.8 表示 80% 可見，即 20% 透明) */
-                opacity: 0.8; 
+                opacity: 0.6; 
                 z-index: -1; /* 放在所有內容的最下方 */
             }}
 
