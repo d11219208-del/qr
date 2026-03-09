@@ -188,7 +188,7 @@
             {% set takeout_param = "&table=外帶" + table_num if table_num else "&table=外帶" %}
 
             <div class="order-section">
-                <div class="section-title dine-in-title text-outline">🏠 內用 (Dine In)</div>
+                <div class="section-title dine-in-title text-outline">內用 (Dine In)</div>
                 {% if table_num %}<div class="table-hint text-outline">目前桌號: {{ table_num }}</div>{% endif %}
                 <div class="lang-grid">
                     <a href="/menu?lang=zh{{ table_param }}" class="btn-lang zh">中文</a>
@@ -199,7 +199,7 @@
             </div>
 
             <div class="order-section">
-                <div class="section-title takeout-title text-outline">👜 外帶 (Takeout)</div>
+                <div class="section-title takeout-title text-outline">外帶 (Takeout)</div>
                 <div class="table-hint text-outline">{% if table_num %} 外帶 (桌號: {{ table_num }}) {% else %} Takeout Order {% endif %}</div>
                 <div class="lang-grid">
                     <a href="/menu?lang=zh{{ takeout_param }}" class="btn-lang zh">中文</a>
@@ -229,3 +229,4 @@
     </div>
 </body>
 </html>
+
