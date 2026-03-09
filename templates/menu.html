@@ -52,6 +52,21 @@
         }
 
         /* =========================================
+           ✨ 新增：文字實心白邊 (取代模糊發光)
+           ========================================= */
+        .text-outline {
+            text-shadow: 
+                -1px -1px 0 #FFFFFF,
+                 0px -1px 0 #FFFFFF,
+                 1px -1px 0 #FFFFFF,
+                -1px  0px 0 #FFFFFF,
+                 1px  0px 0 #FFFFFF,
+                -1px  1px 0 #FFFFFF,
+                 0px  1px 0 #FFFFFF,
+                 1px  1px 0 #FFFFFF;
+        }
+
+        /* =========================================
            2. 靜態頂部 (不隨畫面滑動)
            ========================================= */
         .static-top-section {
@@ -228,7 +243,7 @@
 
     </style>
 </head>
-<body>
+<body class="text-outline">
     {% set session_delivery = session.get('delivery_data', {}) %}
     {% set session_table = session.get('table_num') %}
     {% set is_delivery_mode = (session_delivery.get('phone')) or (session_table == '外送') %}
