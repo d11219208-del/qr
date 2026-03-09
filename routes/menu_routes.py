@@ -589,7 +589,7 @@ def order_success():
             /* 顏色變數設定 */
             :root {{
                 --bg-color: #F7F9FA;
-                --card-bg: transparent; /* 將原本的 #FFFFFF 改為 transparent */
+                --card-bg: transparent; /* 卡片背景保持透明 */
                 --text-main: #1F2937;
                 --text-muted: #6B7280;
                 --success: #10B981;
@@ -622,17 +622,17 @@ def order_success():
                 z-index: -1; /* 放在所有內容的最下方 */
             }}
 
-            /* 銳利邊框文字效果 (將原本的 #FFF 全部改為 transparent) */
+            /* 銳利邊框文字效果 (將 transparent 改回 #FFF 恢復白邊) */
             .text-outline {{
                 text-shadow: 
-                    -1px -1px 0 transparent,
-                     0   -1px 0 transparent,
-                     1px -1px 0 transparent,
-                     1px  0   0 transparent,
-                     1px  1px 0 transparent,
-                     0    1px 0 transparent,
-                    -1px  1px 0 transparent,
-                    -1px  0   0 transparent;
+                    -1px -1px 0 #FFF,
+                     0   -1px 0 #FFF,
+                     1px -1px 0 #FFF,
+                     1px  0   0 #FFF,
+                     1px  1px 0 #FFF,
+                     0    1px 0 #FFF,
+                    -1px  1px 0 #FFF,
+                    -1px  0   0 #FFF;
             }}
             
             /* 佈局容器：限制電腦版寬度，手機版保留邊距 */
@@ -689,7 +689,7 @@ def order_success():
             .d-time {{ color: #D97706; font-size: 1.05em; margin-bottom: 8px; }}
             .d-info-row {{ margin-bottom: 6px; font-size: 0.95em; }}
             .d-info-row a {{ color: var(--delivery-text); text-decoration: none; font-weight: bold; }}
-            .d-note {{ font-size: 0.9em; margin-top: 10px; background: transparent; padding: 8px; border-radius: 8px; border: 1px solid var(--delivery-border); }} /* 將原本的 white 改為 transparent */
+            .d-note {{ font-size: 0.9em; margin-top: 10px; background: transparent; padding: 8px; border-radius: 8px; border: 1px solid var(--delivery-border); }}
             
             /* 訂單明細區塊 */
             .details-area {{ text-align: left; margin-bottom: 30px; }}
@@ -729,7 +729,7 @@ def order_success():
                 color: white; text-decoration: none; border-radius: 12px; 
                 font-weight: bold; font-size: 1.1em; margin-top: auto; 
                 transition: transform 0.1s;
-                text-shadow: none;
+                text-shadow: none; /* 按鈕內的白字不需要白邊，保持 none */
             }}
             .home-btn:active {{ transform: scale(0.98); }}
         </style>
