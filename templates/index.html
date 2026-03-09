@@ -28,11 +28,24 @@
             height: 100dvh; 
         }
 
+        /* --- 共用白邊效果 --- */
+        /* 利用 8 個方向的純色無模糊陰影，來製造乾淨的白邊效果 */
+        .text-outline {
+            text-shadow: 
+                -1px -1px 0 #fff,  
+                 1px -1px 0 #fff,
+                -1px  1px 0 #fff,
+                 1px  1px 0 #fff,
+                 0   -1px 0 #fff,
+                 0    1px 0 #fff,
+                -1px  0   0 #fff,
+                 1px  0   0 #fff;
+        }
+
         /* --- 頁首 --- */
         .header-info {
             text-align: center;
             margin-top: 5px;
-            /* 【修改重點】完全透明，移除邊框與陰影 */
             background: transparent;
             padding: 10px;
         }
@@ -40,14 +53,11 @@
             font-size: 1.55em; 
             margin: 0 0 4px 0;
             font-weight: 900;
-            /* 加強文字外發光，確保在全透明背景下能看清楚 */
-            text-shadow: 0 1px 4px rgba(255,255,255,1), 0 0 8px rgba(255,255,255,0.8);
         }
         .sub-title {
             color: #333;
             font-size: 0.95em;
             font-weight: bold;
-            text-shadow: 0 1px 3px rgba(255,255,255,1), 0 0 5px rgba(255,255,255,0.8);
         }
 
         /* --- 主容器：自動垂直置中 --- */
@@ -57,12 +67,11 @@
             margin: auto; 
             display: flex;
             flex-direction: column;
-            gap: 16px; /* 稍微拉開間距，因為移除了卡片框線 */
+            gap: 16px; 
         }
 
         /* --- 點餐區塊 --- */
         .order-section {
-            /* 【修改重點】完全透明，移除毛玻璃、邊框與卡片陰影 */
             background: transparent;
             padding: 5px 14px; 
             text-align: center;
@@ -76,7 +85,6 @@
             align-items: center;
             justify-content: center;
             gap: 6px;
-            text-shadow: 0 1px 4px rgba(255,255,255,1), 0 0 8px rgba(255,255,255,0.8);
         }
         
         .dine-in-title { color: #0056b3; }
@@ -97,8 +105,9 @@
             font-weight: bold;
             border-radius: 12px; 
             color: white;
-            box-shadow: 0 4px 10px rgba(0,0,0,0.25); /* 按鈕稍微加深陰影使其更立體 */
+            box-shadow: 0 4px 10px rgba(0,0,0,0.25);
             transition: transform 0.1s;
+            /* 按鈕內的文字維持微微的深色下陰影，增加立體感 */
             text-shadow: 0 1px 2px rgba(0,0,0,0.3);
         }
         .btn-lang:active { transform: scale(0.97); }
@@ -132,7 +141,6 @@
             text-align: center;
             padding-top: 8px;
             padding-bottom: 5px;
-            /* 【修改重點】完全透明 */
             background: transparent;
             margin-bottom: 5px;
         }
@@ -141,14 +149,12 @@
             font-size: 1.15em; 
             color: #111; 
             font-weight: 900; 
-            text-shadow: 0 1px 4px rgba(255,255,255,1), 0 0 8px rgba(255,255,255,0.8); 
         }
         .footer-info h4 { 
             margin: 2px 0; 
             font-size: 0.9em; 
             font-weight: bold; 
             color: #333; 
-            text-shadow: 0 1px 3px rgba(255,255,255,1), 0 0 5px rgba(255,255,255,0.8); 
         }
 
         .table-hint {
@@ -156,7 +162,6 @@
             color: #333;
             font-weight: bold;
             margin-bottom: 10px;
-            text-shadow: 0 1px 3px rgba(255,255,255,1), 0 0 5px rgba(255,255,255,0.8);
         }
 
         /* 如果是休息中 */
@@ -167,12 +172,11 @@
             font-size: 1.4em;
             font-weight: bold;
             color: #111;
-            text-shadow: 0 1px 5px rgba(255,255,255,1), 0 0 10px rgba(255,255,255,0.8);
         }
     </style>
 </head>
 <body>
-    <div class="header-info">
+    <div class="header-info text-outline">
         <h2>龍江路大鼎豬血湯</h2>
         <div class="sub-title">請選擇用餐方式 / Select Type</div>
     </div>
@@ -184,8 +188,8 @@
             {% set takeout_param = "&table=外帶" + table_num if table_num else "&table=外帶" %}
 
             <div class="order-section">
-                <div class="section-title dine-in-title">🏠 內用 (Dine In)</div>
-                {% if table_num %}<div class="table-hint">目前桌號: {{ table_num }}</div>{% endif %}
+                <div class="section-title dine-in-title text-outline">🏠 內用 (Dine In)</div>
+                {% if table_num %}<div class="table-hint text-outline">目前桌號: {{ table_num }}</div>{% endif %}
                 <div class="lang-grid">
                     <a href="/menu?lang=zh{{ table_param }}" class="btn-lang zh">中文</a>
                     <a href="/menu?lang=en{{ table_param }}" class="btn-lang en">English</a>
@@ -195,8 +199,8 @@
             </div>
 
             <div class="order-section">
-                <div class="section-title takeout-title">👜 外帶 (Takeout)</div>
-                <div class="table-hint">{% if table_num %} 外帶 (桌號: {{ table_num }}) {% else %} Takeout Order {% endif %}</div>
+                <div class="section-title takeout-title text-outline">👜 外帶 (Takeout)</div>
+                <div class="table-hint text-outline">{% if table_num %} 外帶 (桌號: {{ table_num }}) {% else %} Takeout Order {% endif %}</div>
                 <div class="lang-grid">
                     <a href="/menu?lang=zh{{ takeout_param }}" class="btn-lang zh">中文</a>
                     <a href="/menu?lang=en{{ takeout_param }}" class="btn-lang en">English</a>
@@ -207,7 +211,7 @@
 
             <div style="text-align: center; padding: 0 14px;">
                 {% if delivery_enabled %}
-                    <h6 style="margin: 0 0 8px 0; color: #d84315; font-size: 0.95em; background: transparent; display: inline-block; font-weight: 900; text-shadow: 0 1px 3px rgba(255,255,255,1), 0 0 6px rgba(255,255,255,0.8);">滿1000可外送 1.6km以內</h6>
+                    <h6 class="text-outline" style="margin: 0 0 8px 0; color: #d84315; font-size: 0.95em; background: transparent; display: inline-block; font-weight: 900;">滿1000可外送 1.6km以內</h6>
                     <a href="/delivery/setup" class="delivery-btn delivery-internal">🛵 外送服務 (Delivery)</a>
                 {% else %}
                     <a href="https://www.foodpanda.com.tw/restaurant/uf01/hong-xing-xiao-chi-dian" target="_blank" class="delivery-btn delivery-panda">🐼 Foodpanda 外送</a>
@@ -215,11 +219,11 @@
             </div>
 
         {% else %}
-            <div class="closed-notice">😴 本店目前休息中<br><small>Shop Closed</small></div>
+            <div class="closed-notice text-outline">😴 本店目前休息中<br><small>Shop Closed</small></div>
         {% endif %}
     </div>
 
-    <div class="footer-info">
+    <div class="footer-info text-outline">
         <h3>📞 02-2515-2519</h3>
         <h4>📍 台北市中山區龍江路164號</h4>
     </div>
