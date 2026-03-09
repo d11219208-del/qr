@@ -2,7 +2,7 @@
 <html lang="zh-TW">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>餐廳後台管理系統</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/milligram/1.4.1/milligram.min.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.14.0/Sortable.min.js"></script>
@@ -11,9 +11,9 @@
            1. 全局變數與基礎設定
            ========================================== */
         :root { 
-            --primary: #8a2be2; /* 主色調：紫色 */
+            --primary: #8a2be2; 
             --primary-hover: #7324ba;
-            --bg: #f4f6f9; /* 柔和的背景灰 */
+            --bg: #f4f6f9; 
             --card-bg: #ffffff;
             --text-main: #2c3e50;
             --border-color: #e2e8f0;
@@ -34,23 +34,30 @@
             padding: 30px 20px; 
         }
 
+        /* 頂部導覽列 (方便做 RWD 切換) */
+        .top-bar {
+            display: flex; 
+            justify-content: space-between; 
+            align-items: center; 
+            margin-bottom: 20px;
+        }
+
         /* ==========================================
            2. 卡片 (Card) 與排版設計
            ========================================== */
         .card { 
             background: var(--card-bg); 
-            border-radius: 16px; /* 增加圓角 */
+            border-radius: 16px; 
             padding: 30px; 
-            box-shadow: 0 8px 24px rgba(0,0,0,0.04); /* 柔和的陰影 */
+            box-shadow: 0 8px 24px rgba(0,0,0,0.04); 
             margin-bottom: 30px; 
             border: 1px solid rgba(0,0,0,0.02);
             transition: box-shadow 0.3s ease;
         }
         .card:hover {
-            box-shadow: 0 12px 32px rgba(0,0,0,0.08); /* 滑鼠游標懸浮時加深陰影 */
+            box-shadow: 0 12px 32px rgba(0,0,0,0.08); 
         }
 
-        /* 區塊標題 */
         .section-title { 
             border-bottom: 2px solid var(--border-color); 
             padding-bottom: 12px; 
@@ -59,7 +66,7 @@
             font-weight: 700; 
             display: flex;
             align-items: center;
-            gap: 8px; /* 讓 Emoji 和文字有適當間距 */
+            gap: 8px; 
         }
 
         /* ==========================================
@@ -67,16 +74,16 @@
            ========================================== */
         .sticky-header {
             position: sticky;
-            top: 15px; /* 距離頂部留白，營造懸浮感 */
+            top: 15px; 
             z-index: 1000;
             margin-bottom: 25px;
         }
         .sticky-header input { 
             background: rgba(255, 255, 255, 0.95) !important; 
-            backdrop-filter: blur(10px); /* 毛玻璃效果 */
+            backdrop-filter: blur(10px); 
             box-shadow: 0 8px 20px rgba(138, 43, 226, 0.15); 
             border: 2px solid var(--primary);
-            border-radius: 50px; /* 圓角搜尋框 */
+            border-radius: 50px; 
             height: 4.8rem;
             font-size: 1.5rem;
             padding: 0 25px;
@@ -94,7 +101,6 @@
         button:hover, .button:hover { transform: translateY(-1px); }
         .btn-full { width: 100%; }
         
-        /* 狀態按鈕 (營業/休息、上架/下架) */
         .btn-sm { 
             padding: 0 15px; 
             height: 32px; 
@@ -109,7 +115,6 @@
         .status-off { background: #fdedec; color: var(--danger); border-color: #fadbd8; }
         .status-off:hover { background: #fadbd8; }
         
-        /* 系統提示訊息 */
         .alert { 
             padding: 15px 20px; 
             background: #e1f5fe; 
@@ -132,7 +137,6 @@
         .handle { cursor: grab; color: #bdc3c7; font-size: 22px; padding: 0 15px; text-align: center; }
         .handle:active { cursor: grabbing; }
         
-        /* 產品資訊標籤 */
         .prod-name { font-size: 1.2em; font-weight: 700; color: var(--text-main); margin-bottom: 4px; }
         .prod-info { font-size: 0.9em; color: #7f8c8d; margin-top: 4px; }
         .lang-tag { 
@@ -146,7 +150,7 @@
         }
 
         /* ==========================================
-           6. 表單細節與互動 (Details/Summary)
+           6. 表單細節與互動
            ========================================== */
         input, select { border-radius: 6px !important; border: 1px solid #ced4da !important; }
         input:focus, select:focus { border-color: var(--primary) !important; outline: none; }
@@ -171,7 +175,7 @@
             position: fixed; z-index: 9999; left: 0; top: 0;
             width: 100%; height: 100%; overflow: auto;
             background-color: rgba(0,0,0,0.4);
-            backdrop-filter: blur(4px); /* 背景模糊 */
+            backdrop-filter: blur(4px); 
             display: flex; justify-content: center; align-items: center;
         }
         .custom-modal-content {
@@ -181,7 +185,7 @@
             border-radius: 16px; 
             box-shadow: 0 15px 40px rgba(0,0,0,0.2);
             position: relative;
-            animation: modalFadeIn 0.3s ease-out; /* 視窗彈出動畫 */
+            animation: modalFadeIn 0.3s ease-out; 
         }
         @keyframes modalFadeIn {
             from { opacity: 0; transform: translateY(-20px); }
@@ -194,21 +198,93 @@
         .close-btn:hover { color: var(--danger); }
 
         /* ==========================================
-           8. 行動裝置響應式 (RWD)
+           8. 行動裝置響應式 (RWD) 深度優化
            ========================================== */
         @media (max-width: 768px) {
+            /* 縮小容器與卡片邊距，爭取更多螢幕空間 */
+            .container { padding: 15px 10px; }
+            .card { padding: 20px 15px; margin-bottom: 20px; }
+            
+            /* 頂部導覽列改為垂直排列 */
+            .top-bar { flex-direction: column; align-items: flex-start; gap: 15px; }
+            .top-bar h2 { font-size: 2.2rem; }
+            .top-bar .button { width: 100%; text-align: center; }
+
+            /* 確保所有的輸入框與按鈕符合觸控友善大小 */
+            input, select, button, .button { min-height: 44px; }
+            .btn-sm { min-height: 36px; line-height: 36px; padding: 0 20px; }
+
+            /* 搜尋列縮小與重新定位 */
+            .sticky-header { top: 10px; margin-bottom: 15px; }
+            .sticky-header input { height: 4.4rem; font-size: 1.3rem; border-radius: 12px; }
+
+            /* 動作按鈕滿版 (Excel 匯出/匯入/清空等) */
+            .row .column a.button, .row .column button.button { width: 100%; margin-bottom: 10px; }
+            
+            /* --- 菜單列表轉卡片式設計 (Card UI) --- */
             table, thead, tbody, th, td, tr { display: block; }
-            thead tr { position: absolute; top: -9999px; left: -9999px; } /* 隱藏表頭 */
-            tr { margin-bottom: 15px; padding: 15px; border: 1px solid var(--border-color); border-radius: 12px; background: #fff; box-shadow: 0 2px 5px rgba(0,0,0,0.02); }
-            td { border: none; padding: 8px 0; position: relative; }
-            td:last-child { text-align: right; } /* 將操作按鈕靠右 */
-            .handle { display: inline-block; padding: 0 10px 0 0; }
+            thead tr { position: absolute; top: -9999px; left: -9999px; } 
+            
+            tr.product-row { 
+                margin-bottom: 20px; 
+                padding: 0; 
+                border: 1px solid var(--border-color); 
+                border-radius: 12px; 
+                background: #fff; 
+                box-shadow: 0 4px 10px rgba(0,0,0,0.03); 
+                overflow: hidden; /* 確保圓角不被內容蓋住 */
+            }
+            
+            td { border: none; padding: 12px 15px; position: relative; }
+            
+            /* 第 1 欄：拖曳控制區塊轉為頂部橫幅 */
+            td.handle { 
+                background: #f8f9fa; 
+                border-bottom: 1px solid var(--border-color); 
+                padding: 12px 15px; 
+                text-align: center; 
+                color: #95a5a6; 
+                width: 100%;
+                font-size: 18px;
+            }
+            
+            /* 第 2 欄：品項名稱與資訊 */
+            td:nth-child(2) { padding-top: 15px; }
+            
+            /* 第 3、4 欄：價格與狀態按鈕 (水平並排) */
+            td:nth-child(3) { 
+                display: inline-block; 
+                width: 50%; 
+                font-size: 1.4rem;
+                padding-bottom: 15px;
+            }
+            td:nth-child(4) { 
+                display: inline-block; 
+                width: 48%; 
+                text-align: right;
+                padding-bottom: 15px;
+            }
+            
+            /* 第 5 欄：操作按鈕區 (編輯、刪除左右平分滿版) */
+            td:last-child { 
+                display: flex; 
+                gap: 10px; 
+                border-top: 1px solid #f1f1f1; 
+                background: #fafbfc; 
+                padding: 15px;
+            }
+            td:last-child a.button { 
+                flex: 1; 
+                margin: 0; 
+                text-align: center; 
+                padding: 0;
+            }
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+        <div class="top-bar">
             <h2 style="margin: 0; font-weight: 700; color: var(--text-main);">🍴 餐廳系統後台</h2>
             <a href="/kitchen" class="button button-outline" style="border-radius: 20px;">👨‍🍳 廚房看板</a>
         </div>
@@ -372,7 +448,7 @@
                     <tbody id="menu-list">
                         {% for p in prods %}
                         <tr data-id="{{ p[0] }}" class="product-row">
-                            <td class="handle" title="拖曳以排序">☰</td>
+                            <td class="handle" title="拖曳以排序">☰ 拖曳排序</td>
                             <td>
                                 <div class="prod-name">{{ p[1] }} {% if p[7] %}🖼️{% endif %}</div>
                                 <div class="prod-info">
@@ -389,9 +465,9 @@
                                     {{ '上架中' if p[4] else '已下架' }}
                                 </button>
                             </td>
-                            <td style="text-align: center;">
+                            <td>
                                 <a href="/admin/edit_product/{{ p[0] }}" class="button button-clear" style="padding: 0 10px;">✎ 編輯</a>
-                                <a href="/admin/delete_product/{{ p[0] }}" class="button button-clear" style="color:var(--danger); padding: 0 10px;" onclick="return confirm('確定刪除此品項?')">✖</a>
+                                <a href="/admin/delete_product/{{ p[0] }}" class="button button-clear" style="color:var(--danger); padding: 0 10px;" onclick="return confirm('確定刪除此品項?')">✖ 刪除</a>
                             </td>
                         </tr>
                         {% endfor %}
@@ -473,7 +549,7 @@
 
         // 2. AJAX 設定開關 (全店營業 / 外送總開關)
         function toggleConfig(key, btn, textOn, textOff) {
-            btn.style.opacity = '0.5'; // 點擊時半透明示意載入中
+            btn.style.opacity = '0.5'; 
             fetch('/admin/toggle_config', { 
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -487,7 +563,6 @@
                     btn.className = isOn ? 'btn-sm status-on' : 'btn-sm status-off';
                     btn.innerText = isOn ? textOn : textOff;
                     
-                    // 如果切換的是外送開關，同步更新下方「外送規則」表單裡的 Checkbox 狀態
                     if(key === 'enable_delivery') {
                         const cb = document.querySelector('input[name="delivery_enabled"]');
                         if(cb) cb.checked = isOn;
@@ -523,18 +598,16 @@
         document.getElementById('productSearch').addEventListener('input', e => {
             let v = e.target.value.toLowerCase();
             document.querySelectorAll('.product-row').forEach(r => {
-                // 若輸入的文字存在於該列的文字中，則顯示，否則隱藏
                 r.style.display = r.innerText.toLowerCase().includes(v) ? '' : 'none';
             });
         });
 
         // 5. 初始化拖曳排序 (SortableJS)
         Sortable.create(document.getElementById('menu-list'), {
-            handle: '.handle', // 僅允許點擊 ☰ 符號拖曳
+            handle: '.handle', 
             animation: 150,
-            ghostClass: 'sortable-ghost', // 拖曳時的陰影效果（可選）
+            ghostClass: 'sortable-ghost', 
             onEnd: function() {
-                // 拖曳結束後抓取所有列的 data-id 並傳送至後端
                 let order = Array.from(document.querySelectorAll('#menu-list tr')).map(r => r.getAttribute('data-id'));
                 fetch('/admin/reorder_products', {
                     method: 'POST',
@@ -548,12 +621,10 @@
         function openOrderModal() { document.getElementById('orderModal').style.display = 'flex'; }
         function closeOrderModal() { document.getElementById('orderModal').style.display = 'none'; }
         
-        // 點擊 Modal 外部背景時自動關閉
         window.onclick = function(event) {
             if (event.target == document.getElementById('orderModal')) closeOrderModal();
         }
 
-        // 切換日期輸入框的顯示與必填狀態
         function toggleDateInputs(show) {
             var area = document.getElementById('date-picker-area');
             var inputs = area.querySelectorAll('input');
@@ -563,11 +634,10 @@
             } else {
                 area.style.display = 'none';
                 inputs.forEach(i => i.required = false);
-                inputs.forEach(i => i.value = ''); // 清除已選取的日期
+                inputs.forEach(i => i.value = ''); 
             }
         }
 
-        // 提交刪除訂單表單前的雙重確認機制
         function confirmOrderDelete() {
             var mode = document.querySelector('input[name="delete_mode"]:checked').value;
             if (mode === 'all') {
@@ -577,7 +647,6 @@
             return confirm("確定要刪除選定日期範圍內的訂單嗎？\n此操作無法復原。");
         }
 
-        // 清空菜單的雙重確認機制
         function confirmMenuReset() {
             var input = prompt("⚠️ 嚴重警告！\n這將清空「所有」產品資料且無法復原。\n\n若確定要執行，請手動輸入 'DELETE'：");
             return input === 'DELETE';
