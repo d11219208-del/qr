@@ -1,65 +1,202 @@
-
 <!DOCTYPE html>
-<html>
+<html lang="zh-TW">
 <head>
     <title>外送資料填寫</title>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
     <style>
-        body { font-family: 'Microsoft JhengHei', sans-serif; background: #f5f5f5; padding: 20px; text-align: center; }
-        .container { background: white; padding: 30px; border-radius: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); max-width: 400px; margin: 0 auto; }
-        .form-group { margin-bottom: 20px; text-align: left; }
-        label { display: block; margin-bottom: 8px; font-weight: bold; color: #555; }
-        input, select { width: 100%; padding: 12px; border: 2px solid #ddd; border-radius: 8px; font-size: 16px; box-sizing: border-box; background: white; }
-        
-        /* 按鈕樣式 */
-        .btn-submit {
-            width: 100%; padding: 15px;
-            background: #ff5722; color: white;
-            border: none; border-radius: 50px;
-            font-size: 1.2em; cursor: pointer;
-            transition: 0.3s;
-            margin-top: 10px;
+        /* 全局與背景設定 */
+        body { 
+            font-family: 'Segoe UI', 'Microsoft JhengHei', sans-serif; 
+            background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+            min-height: 100vh;
+            margin: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            box-sizing: border-box;
+            color: #333;
         }
-        .btn-submit:disabled { background: #ccc; cursor: not-allowed; }
+
+        /* 主容器卡片 */
+        .container { 
+            background: white; 
+            padding: 40px; 
+            border-radius: 20px; 
+            box-shadow: 0 10px 30px rgba(0,0,0,0.08); 
+            width: 100%;
+            max-width: 420px; 
+            box-sizing: border-box;
+        }
+
+        /* 標題區域 */
+        h2 { 
+            margin-top: 0; 
+            margin-bottom: 8px;
+            color: #2c3e50; 
+            font-size: 1.8em; 
+            text-align: center;
+        }
+        .subtitle { 
+            color: #7f8c8d; 
+            font-size: 0.95em; 
+            margin-top: 0;
+            margin-bottom: 25px; 
+            text-align: center;
+        }
+
+        /* 表單群組 */
+        .form-group { 
+            margin-bottom: 22px; 
+        }
         
+        label { 
+            display: block; 
+            margin-bottom: 8px; 
+            font-weight: 600; 
+            color: #34495e; 
+            font-size: 0.95em;
+        }
+
+        /* 輸入框與下拉選單 */
+        input, select { 
+            width: 100%; 
+            padding: 14px 15px; 
+            border: 1.5px solid #dcdde1; 
+            border-radius: 12px; 
+            font-size: 16px; 
+            box-sizing: border-box; 
+            background: #fdfdfd; 
+            color: #2c3e50;
+            transition: all 0.3s ease; 
+            font-family: inherit;
+        }
+        input::placeholder { color: #bdc3c7; }
+        
+        /* 輸入框 Focus 狀態 */
+        input:focus, select:focus { 
+            outline: none; 
+            border-color: #ff5722; 
+            background: white; 
+            box-shadow: 0 0 0 3px rgba(255, 87, 34, 0.15); 
+        }
+
+        /* 時間選擇區塊 */
+        .datetime-row { 
+            display: flex; 
+            gap: 15px; 
+        }
+        .datetime-col { flex: 1; }
+
+        /* 提示標籤 */
+        .notice-badge {
+            display: inline-block;
+            background: #fff3e0;
+            color: #e65100;
+            padding: 6px 12px;
+            border-radius: 8px;
+            font-size: 0.85em;
+            margin-top: 10px;
+            font-weight: 600;
+        }
+
+        /* 送出按鈕 */
+        .btn-submit {
+            width: 100%; 
+            padding: 16px;
+            background: #ff5722; 
+            color: white;
+            border: none; 
+            border-radius: 50px;
+            font-size: 1.15em; 
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 15px rgba(255, 87, 34, 0.2);
+            margin-top: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 56px; /* 固定高度，避免 loading 時按鈕跳動 */
+        }
+        .btn-submit:hover:not(:disabled) {
+            background: #e64a19;
+            box-shadow: 0 6px 20px rgba(255, 87, 34, 0.3);
+            transform: translateY(-2px);
+        }
+        .btn-submit:active:not(:disabled) {
+            transform: translateY(0);
+        }
+        .btn-submit:disabled { 
+            background: #bdc3c7; 
+            box-shadow: none;
+            cursor: not-allowed; 
+        }
+
         /* 載入中動畫 */
         .loader {
             display: none;
-            border: 4px solid #f3f3f3; border-top: 4px solid #ff5722;
-            border-radius: 50%; width: 20px; height: 20px;
+            border: 3px solid rgba(255,255,255,0.3); 
+            border-top: 3px solid white;
+            border-radius: 50%; 
+            width: 22px; 
+            height: 22px;
             animation: spin 1s linear infinite;
-            margin: 0 auto;
         }
-        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-        
-        .error-msg { color: #d32f2f; margin-top: 10px; display: none; font-weight: bold; }
-        
-        /* 時間選擇區塊樣式微調 */
-        .datetime-row { display: flex; gap: 10px; }
-        .datetime-col { flex: 1; }
+        @keyframes spin { 
+            0% { transform: rotate(0deg); } 
+            100% { transform: rotate(360deg); } 
+        }
+
+        /* 錯誤訊息 */
+        .error-msg { 
+            background: #fdf2f2;
+            color: #c0392b; 
+            padding: 12px;
+            border-radius: 10px;
+            border: 1px solid #fadbd8;
+            margin-top: 15px;
+            margin-bottom: 15px; 
+            display: none; 
+            font-weight: 600;
+            font-size: 0.95em;
+            text-align: center;
+        }
+
+        /* 返回連結 */
+        .back-link {
+            display: block;
+            text-align: center;
+            margin-top: 25px;
+            color: #95a5a6;
+            text-decoration: none;
+            font-size: 0.95em;
+            transition: color 0.3s;
+        }
+        .back-link:hover { color: #34495e; }
     </style>
 </head>
 <body>
 
 <div class="container">
     <h2>🛵 外送服務</h2>
-    <p style="color:#666; font-size:0.9em;">請填寫資訊以計算運費與預約時間</p>
+    <p class="subtitle">請填寫資訊以計算運費與預約時間</p>
 
     <div class="form-group">
-        <label>聯絡人姓名</label>
+        <label for="name">聯絡人姓名</label>
         <input type="text" id="name" placeholder="您的稱呼" required>
     </div>
 
     <div class="form-group">
-        <label>手機號碼</label>
+        <label for="phone">手機號碼</label>
         <input type="tel" id="phone" placeholder="09xx-xxx-xxx" required>
     </div>
 
     <div class="form-group">
         <div class="datetime-row">
             <div class="datetime-col">
-                <label>日期</label>
+                <label for="date-select">日期</label>
                 <select id="date-select" onchange="updateTimeSlots()">
                     {% for d in dates %}
                     <option value="{{ d.value }}">{{ d.label }}</option>
@@ -67,17 +204,17 @@
                 </select>
             </div>
             <div class="datetime-col">
-                <label>時間</label>
+                <label for="time-select">時間</label>
                 <select id="time-select">
                     <option value="">請選擇時間</option>
                 </select>
             </div>
         </div>
-        <small style="color:#888; display:block; margin-top:5px;">* 11:30~13:30 暫停外送服務</small>
+        <div class="notice-badge">🕒 11:30~13:30 暫停外送服務</div>
     </div>
 
     <div class="form-group">
-        <label>完整地址 (含縣市)</label>
+        <label for="address">完整地址 (含縣市)</label>
         <input type="text" id="address" placeholder="例如：台北市中山區..." required>
     </div>
 
@@ -88,8 +225,7 @@
         <div id="loader" class="loader"></div>
     </button>
     
-    <br><br>
-    <a href="/" style="color:#999; text-decoration:none;">← 返回首頁</a>
+    <a href="/" class="back-link">← 返回首頁</a>
 </div>
 
 <script>
@@ -129,9 +265,10 @@
 
     // 4. 送出檢查
     async function checkAndSubmit() {
-        const name = document.getElementById('name').value;
-        const phone = document.getElementById('phone').value;
-        const address = document.getElementById('address').value;
+        // 使用 trim() 避免使用者只輸入空白字元
+        const name = document.getElementById('name').value.trim();
+        const phone = document.getElementById('phone').value.trim();
+        const address = document.getElementById('address').value.trim();
         const date = document.getElementById('date-select').value;
         const time = document.getElementById('time-select').value;
         
@@ -142,11 +279,13 @@
 
         // 驗證
         if(!name || !phone || !address) {
-            alert('請填寫姓名、電話與地址');
+            errorBox.innerText = "⚠️ 請填寫姓名、電話與地址";
+            errorBox.style.display = 'block';
             return;
         }
         if(!date || !time) {
-            alert('請選擇外送日期與時間');
+            errorBox.innerText = "⚠️ 請選擇外送日期與時間";
+            errorBox.style.display = 'block';
             return;
         }
 
@@ -160,7 +299,6 @@
             const response = await fetch('/delivery/check', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                // 這裡加入了 date 和 time
                 body: JSON.stringify({ name, phone, address, date, time })
             });
 
