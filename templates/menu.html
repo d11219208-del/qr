@@ -96,7 +96,7 @@
         
         .takeout-time-box { background: rgba(255, 251, 235, 0.95); padding: 8px 12px; border-radius: 8px; border: 1px solid #fde68a; margin-bottom: 6px; }
 
-        /* =========================================
+       /* =========================================
            3. 黏性導覽列 (隨畫面滑動)
            ========================================= */
         .top-container {
@@ -106,6 +106,8 @@
             background: rgba(255, 255, 255, 0.85); /* 微調導覽列毛玻璃背景 */
             backdrop-filter: blur(8px); 
             box-shadow: var(--shadow-sm);
+            /* 加入這行，清除整個導覽列的文字白邊效果 */
+            text-shadow: none; 
         }
 
         .input-group { margin-bottom: 6px; }
@@ -115,6 +117,8 @@
             background: rgba(255, 255, 255, 0.9); border: 1px solid var(--border-color);
             border-radius: 8px; font-size: 1em; color: var(--text-main); font-weight: bold;
             outline: none;
+            /* 輸入框本身也確保沒有白邊 */
+            text-shadow: none;
         }
         .modern-input:focus { border-color: var(--primary-color); background: var(--surface-color); }
         .modern-input.delivery-mode { background: #eff6ff; border-color: #bfdbfe; color: #1d4ed8; text-align: center; }
@@ -128,9 +132,12 @@
             background: var(--surface-color); border: 1px solid var(--border-color); 
             padding: 6px 14px; border-radius: 16px; font-size: 0.9em; font-weight: bold;
             color: var(--text-muted); cursor: pointer; box-shadow: var(--shadow-sm);
+            /* 分類按鈕也確保沒有白邊 */
+            text-shadow: none;
         }
         .cat-btn.active { background: var(--text-main); color: white; border-color: var(--text-main); }
 
+        
         /* =========================================
            4. 菜單列表與商品卡片
            ========================================= */
@@ -186,14 +193,24 @@
         .cart-bar { 
             background: var(--text-main); border-radius: 16px; padding: 12px 16px; 
             box-shadow: var(--shadow-float); display: flex; flex-direction: column; color: white;
+            /* 清除整個購物車區塊的文字白邊 */
+            text-shadow: none; 
         }
         .cart-summary { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
         .cart-total-text { font-weight: 900; font-size: 1.25em; }
         .cart-buttons { display: flex; gap: 10px; }
         
         /* 修改查看明細按鈕為橘色 */
-        .btn-view-cart { background: #F97316; color: white; border: none; flex: 1; padding: 10px; border-radius: 10px; font-weight: bold; font-size: 1em; }
-        .btn-checkout { background: var(--success-color); color: white; border: none; flex: 1.5; padding: 10px; border-radius: 10px; font-weight: bold; font-size: 1em; }
+        .btn-view-cart { 
+            background: #F97316; color: white; border: none; flex: 1; padding: 10px; border-radius: 10px; font-weight: bold; font-size: 1em; 
+            /* 確保按鈕內文字也無白邊 */
+            text-shadow: none;
+        }
+        .btn-checkout { 
+            background: var(--success-color); color: white; border: none; flex: 1.5; padding: 10px; border-radius: 10px; font-weight: bold; font-size: 1em; 
+            /* 確保按鈕內文字也無白邊 */
+            text-shadow: none;
+        }
 
         /* =========================================
            6. 彈出視窗
