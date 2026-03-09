@@ -15,59 +15,64 @@
             font-family: 'Microsoft JhengHei', -apple-system, sans-serif;
             display: flex;
             flex-direction: column;
-            justify-content: space-between; /* 讓頭尾分散到最上下兩端 */
+            justify-content: space-between;
             
-            /* 【修改重點】設定背景圖片，並加上一層半透明白色遮罩讓文字保持清晰 */
-            background: linear-gradient(rgba(255, 255, 255, 0.4), rgba(255, 255, 255, 0.4)), 
-                        url('https://i.ibb.co/sJFBdMfs/1622093786-81a879fc1f1b41afed71696a0e45d95f.png') no-repeat center center fixed;
-            background-size: cover; /* 讓圖片依比例撐滿螢幕 */
+            /* 【修改重點 1】移除白色遮罩，讓商標圖片 100% 清晰顯示 */
+            background: url('https://i.ibb.co/sJFBdMfs/1622093786-81a879fc1f1b41afed71696a0e45d95f.png') no-repeat center center fixed;
+            background-size: cover; 
 
             padding: 10px 15px; 
             box-sizing: border-box;
             color: #333;
-            height: 100vh; /* 舊版瀏覽器備案 */
-            height: 100dvh; /* 動態視口高度：完美避開手機網址列的干擾 */
+            height: 100vh; 
+            height: 100dvh; 
         }
 
         /* --- 頁首 --- */
         .header-info {
             text-align: center;
             margin-top: 5px;
-            /* 增加一點毛玻璃效果/半透明底色，讓店名更突出 */
-            background: rgba(255, 255, 255, 0.85);
+            /* 【修改重點 2】改為高透明度玻璃效果 */
+            background: rgba(255, 255, 255, 0.35);
             padding: 10px;
             border-radius: 12px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
-            backdrop-filter: blur(5px);
+            box-shadow: 0 4px 15px rgba(0,0,0,0.05);
+            border: 1px solid rgba(255, 255, 255, 0.5);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
         }
         h2 {
             font-size: 1.55em; 
             margin: 0 0 4px 0;
             font-weight: 900;
+            text-shadow: 0 1px 2px rgba(255,255,255,0.8); /* 增加文字外發光確保可讀性 */
         }
         .sub-title {
-            color: #666;
+            color: #444;
             font-size: 0.95em;
+            font-weight: bold;
         }
 
         /* --- 主容器：自動垂直置中 --- */
         .main-container {
             width: 100%;
             max-width: 500px;
-            /* margin: auto 是精髓！它會自動吸收上下多餘的空白，讓這個區塊完美置中 */
             margin: auto; 
             display: flex;
             flex-direction: column;
-            gap: 12px; /* 區塊之間的間距，微調至最舒適的視覺比例 */
+            gap: 12px; 
         }
 
         /* --- 點餐區塊 --- */
         .order-section {
-            background: #fff;
+            /* 【修改重點 3】原本的純白背景改為半透明玻璃效果 */
+            background: rgba(255, 255, 255, 0.35);
             border-radius: 16px;
-            padding: 14px; /* 稍微增加一點內距讓視覺不擁擠 */
-            box-shadow: 0 4px 15px rgba(0,0,0,0.08); /* 稍微加深陰影讓卡片浮出來 */
-            border: 1px solid rgba(255,255,255,0.5);
+            padding: 14px; 
+            box-shadow: 0 8px 20px rgba(0,0,0,0.1); 
+            border: 1px solid rgba(255, 255, 255, 0.6);
+            backdrop-filter: blur(15px);
+            -webkit-backdrop-filter: blur(15px);
             text-align: center;
         }
         
@@ -79,16 +84,17 @@
             align-items: center;
             justify-content: center;
             gap: 6px;
+            text-shadow: 0 1px 3px rgba(255,255,255,0.9);
         }
         
-        .dine-in-title { color: #007bff; }
-        .takeout-title { color: #e91e63; }
+        .dine-in-title { color: #0056b3; }
+        .takeout-title { color: #c2185b; }
 
         /* --- 語言按鈕網格 --- */
         .lang-grid {
             display: grid;
             grid-template-columns: 1fr 1fr;
-            gap: 10px; /* 按鈕間距微微拉開 */
+            gap: 10px; 
         }
 
         .btn-lang {
@@ -97,10 +103,11 @@
             text-decoration: none;
             font-size: 1.15em; 
             font-weight: bold;
-            border-radius: 12px; /* 圓角稍微柔和 */
+            border-radius: 12px; 
             color: white;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            box-shadow: 0 4px 10px rgba(0,0,0,0.15);
             transition: transform 0.1s;
+            text-shadow: 0 1px 2px rgba(0,0,0,0.2);
         }
         .btn-lang:active { transform: scale(0.97); }
 
@@ -122,7 +129,8 @@
             color: white;
             border-radius: 50px;
             margin-top: 5px;
-            box-shadow: 0 4px 10px rgba(0,0,0,0.15);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+            text-shadow: 0 1px 2px rgba(0,0,0,0.2);
         }
         .delivery-internal { background: linear-gradient(135deg, #ff5722, #d84315); }
         .delivery-panda { background: linear-gradient(135deg, #D70F64, #C20D5A); }
@@ -132,32 +140,37 @@
             text-align: center;
             padding-top: 8px;
             padding-bottom: 5px;
-            /* 增加半透明背景 */
-            background: rgba(255, 255, 255, 0.85);
+            /* 【修改重點 4】頁尾也套用玻璃效果 */
+            background: rgba(255, 255, 255, 0.35);
             border-radius: 12px;
             margin-bottom: 5px;
-            box-shadow: 0 -2px 10px rgba(0,0,0,0.05);
-            backdrop-filter: blur(5px);
+            box-shadow: 0 -4px 15px rgba(0,0,0,0.05);
+            border: 1px solid rgba(255, 255, 255, 0.5);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
         }
-        .footer-info h3 { margin: 2px 0; font-size: 1.15em; color: #333; }
-        .footer-info h4 { margin: 2px 0; font-size: 0.85em; font-weight: normal; color: #777; }
+        .footer-info h3 { margin: 2px 0; font-size: 1.15em; color: #222; font-weight: 800; text-shadow: 0 1px 2px rgba(255,255,255,0.8); }
+        .footer-info h4 { margin: 2px 0; font-size: 0.85em; font-weight: bold; color: #444; text-shadow: 0 1px 2px rgba(255,255,255,0.8); }
 
         .table-hint {
             font-size: 0.8em;
-            color: #888;
+            color: #555;
+            font-weight: bold;
             margin-bottom: 8px;
         }
 
         /* 如果是休息中 */
         .closed-notice {
-            background: rgba(248, 249, 250, 0.95);
+            background: rgba(255, 255, 255, 0.4);
             padding: 30px;
             border-radius: 15px;
             text-align: center;
             font-size: 1.3em;
             font-weight: bold;
-            border: 1px solid #ddd;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+            border: 1px solid rgba(255,255,255,0.6);
+            box-shadow: 0 8px 20px rgba(0,0,0,0.1);
+            backdrop-filter: blur(15px);
+            -webkit-backdrop-filter: blur(15px);
         }
     </style>
 </head>
@@ -197,7 +210,7 @@
 
             <div style="text-align: center;">
                 {% if delivery_enabled %}
-                    <h6 style="margin: 0 0 5px 0; color: #d84315; font-size: 0.9em; background: rgba(255,255,255,0.8); display: inline-block; padding: 2px 8px; border-radius: 4px;">滿1000可外送 1.6km以內</h6>
+                    <h6 style="margin: 0 0 5px 0; color: #d84315; font-size: 0.9em; background: rgba(255,255,255,0.6); backdrop-filter: blur(5px); -webkit-backdrop-filter: blur(5px); display: inline-block; padding: 4px 10px; border-radius: 8px; font-weight: bold; border: 1px solid rgba(255,255,255,0.5);">滿1000可外送 1.6km以內</h6>
                     <a href="/delivery/setup" class="delivery-btn delivery-internal">🛵 外送服務 (Delivery)</a>
                 {% else %}
                     <a href="https://www.foodpanda.com.tw/restaurant/uf01/hong-xing-xiao-chi-dian" target="_blank" class="delivery-btn delivery-panda">🐼 Foodpanda 外送</a>
