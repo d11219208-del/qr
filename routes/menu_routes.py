@@ -3,7 +3,7 @@ from flask import Blueprint, render_template, request, jsonify, redirect, url_fo
 from database import get_db_connection
 from translations import load_translations
 from datetime import timedelta, datetime
-import json
+import json 
 import traceback
 
 menu_bp = Blueprint('menu', __name__)
