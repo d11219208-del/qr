@@ -14,6 +14,18 @@
             --delivery-color: #ff5722;
         }
         body { font-family: "Microsoft JhengHei", sans-serif; background: #f0f2f5; margin: 0; padding: 15px; color: var(--main-text); }
+
+        /* 背景圖片設定 (使用偽元素避免 opacity 影響到文字與卡片) */
+        body::before {
+            content: "";
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: url('https://i.ibb.co/20MXKCFk/1622093786-81a879fc1f1b41afed71696a0e45d95f.png') no-repeat center center;
+            /*background-size: cover;  滿版並裁切*/ 
+            background-size: contain; /*縮放至完整*/ 
+            opacity: 0.6; 
+            z-index: -1; 
+        }
         
         header { 
             display: flex; justify-content: space-between; align-items: center; 
@@ -393,3 +405,4 @@
 
 </body>
 </html>
+
