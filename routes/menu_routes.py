@@ -616,7 +616,8 @@ def order_success():
                 position: fixed;
                 top: 0; left: 0; right: 0; bottom: 0;
                 background: url('https://i.ibb.co/20MXKCFk/1622093786-81a879fc1f1b41afed71696a0e45d95f.png') no-repeat center center;
-                background-size: cover; 
+                /*background-size: cover;  滿版並裁切*/ 
+                background-size: contain; /*縮放至完整*/ 
                 /* 【核心】設定背景圖片透明度 (0.8 表示 80% 可見，即 20% 透明) */
                 opacity: 0.6; 
                 z-index: -1; /* 放在所有內容的最下方 */
