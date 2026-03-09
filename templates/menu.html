@@ -439,6 +439,26 @@
         if(!picker.value) picker.value = localISOTime;
     }
 
+    // 監聽取餐時間變更，限制只能在 10:30 AM ~ 20:30 PM 之間
+    if(document.getElementById('takeout_time')) {
+        document.getElementById('takeout_time').addEventListener('change', function() {
+            if (!this.value) return; 
+
+            const selectedDate = new Date(this.value);
+            const hours = selectedDate.getHours();
+            const minutes = selectedDate.getMinutes();
+            
+            const timeInMinutes = hours * 60 + minutes;
+            const minTime = 10 * 60 + 30; // 10:30 AM
+            const maxTime = 20 * 60 + 30; // 20:30 PM
+            
+            if (timeInMinutes < minTime || timeInMinutes > maxTime) {
+                alert('取餐時間僅限 10:30 AM 至 08:30 PM 之間，請重新選擇！');
+                this.value = ''; // 清空不合法的輸入
+            }
+        });
+    }
+
     function saveCache() { 
         if(!EDIT_OID) localStorage.setItem('cart_cache', JSON.stringify(C)); 
     }
@@ -680,7 +700,6 @@
             
             // 1. 取得畫面上方介面輸入的「時間」與「手機號碼」
             const timeVal = document.getElementById('takeout_time').value;
-            // 【修復】宣告並取得手機號碼的值
             const phoneVal = document.getElementById('phone').value; 
             
             // 2. 必填驗證
@@ -688,12 +707,21 @@
                 alert("⚠️ 請選擇取餐時間");
                 return;
             }
+
+            // 【增加】結帳送出時再次檢查時間，避免預設時間不在營業範圍內
+            const selectedDate = new Date(timeVal);
+            const timeInMinutes = selectedDate.getHours() * 60 + selectedDate.getMinutes();
+            if (timeInMinutes < (10 * 60 + 30) || timeInMinutes > (20 * 60 + 30)) {
+                alert("⚠️ 取餐時間僅限 10:30 AM 至 08:30 PM 之間，請重新選擇！");
+                return;
+            }
+
             if(!phoneVal || phoneVal.trim() === '') {
                 alert("⚠️ 請輸入聯絡手機號碼");
                 return;
             }
             
-            // 3. 【關鍵對接】將使用者輸入的資料，塞入隱藏的表單欄位準備送出
+            // 3. 將使用者輸入的資料，塞入隱藏的表單欄位準備送出
             document.getElementById('scheduled_for_input').value = timeVal.replace('T', ' ');
             document.getElementById('phone_input').value = phoneVal.trim();
             
@@ -713,7 +741,7 @@
             document.getElementById('cart_input').value = JSON.stringify(C);
             // 清除暫存
             localStorage.removeItem('cart_cache');
-            // 送出表單 (這時會包含剛剛動態填寫的 customer_phone 與 scheduled_for)
+            // 送出表單
             document.getElementById('order-form').submit();
         }
     }
