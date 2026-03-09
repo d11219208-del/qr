@@ -40,7 +40,8 @@
             
             /* 背景圖片設定 */
             background: url('https://i.ibb.co/20MXKCFk/1622093786-81a879fc1f1b41afed71696a0e45d95f.png') no-repeat center center;
-            background-size: cover; 
+            /*background-size: cover;  滿版並裁切*/ 
+            background-size: contain; /*縮放至完整*/ 
             
             /* 【核心】設定背景圖片透明度 (0.2 表示 20% 可見，即 80% 透明) */
             opacity: 0.6; 
@@ -249,5 +250,6 @@
     </div>
 </body>
 </html>
+
 
 
