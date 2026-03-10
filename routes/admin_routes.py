@@ -75,7 +75,7 @@ def logout():
 # ==========================================
 # 核心路由：後台主面板
 # ==========================================
-@admin_bp.route('/', methods=['GET', 'POST'])
+@admin_bp.route('/admin_panel', methods=['GET', 'POST'])
 @login_required          # 🛡️ 防護 1：必須登入
 @role_required('admin')  # 🛡️ 防護 2：必須是 admin 才能進後台
 def admin_panel():
