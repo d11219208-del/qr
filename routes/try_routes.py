@@ -51,6 +51,14 @@ COLUMN_MAP = {
     'settings': {
         'key': '設定鍵名 (如: shop_open)',
         'value': '設定值'
+    },
+    # === 💡 新增：Users (使用者/管理員表) ===
+    'users': {
+        'id': '使用者 ID',
+        'username': '帳號名稱',
+        'password_hash': '密碼雜湊值 (加密後)',
+        'role': '角色權限 (admin/staff)',
+        'created_at': '建立時間'
     }
 }
 
@@ -117,7 +125,7 @@ def show_db_structure():
     
     return render_template('try.html', db_info=db_info)
 
-# --- 新增：接收前端修改請求的 API ---
+# --- 接收前端修改請求的 API ---
 @try_bp.route('/try/update', methods=['POST'])
 def update_db_data():
     """
