@@ -21,7 +21,7 @@ admin_bp = Blueprint('admin', __name__)
 # 🛡️ 登入與登出系統
 # ==========================================
 
-@admin_bp.route('/admin/login', methods=['GET', 'POST'])
+@admin_bp.route('/login', methods=['GET', 'POST'])
 def login():
     """處理管理員登入"""
     # 1. 如果是 POST，代表使用者送出帳號密碼
@@ -75,7 +75,7 @@ def logout():
 # ==========================================
 # 核心路由：後台主面板
 # ==========================================
-@admin_bp.route('/admin_panel', methods=['GET', 'POST'])
+@admin_bp.route('/', methods=['GET', 'POST'])
 @login_required          # 🛡️ 防護 1：必須登入
 @role_required('admin')  # 🛡️ 防護 2：必須是 admin 才能進後台
 def admin_panel():
