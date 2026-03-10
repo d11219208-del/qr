@@ -8,42 +8,75 @@ import traceback
 from datetime import datetime, timedelta
 from database import get_db_connection
 
-# === 🛡️ 新增：引入 Flask 與 functools 用於製作權限防護罩 ===
+# === 🛡️ 引入 Flask 與 functools 用於製作權限防護罩 ===
 from flask import session, redirect, url_for, request, jsonify
 from functools import wraps
 
 # ==========================================
-# 0. 🛡️ 權限防護罩 (Decorator)
+# 0. 🛡️ 多重權限防護罩系統 (Decorators)
 # ==========================================
+
 def login_required(f):
     """
-    通用權限防護罩。
-    只要在任何路由函式上方加上 @login_required，
-    該路由就會檢查使用者是否已登入。未登入者會被踢回登入頁或收到 401 錯誤。
+    【通用登入防護罩 - 智慧版】
+    只要加上 @login_required，就會檢查是否登入。
+    會根據使用者當下訪問的藍圖 (Blueprint)，自動導向對應的登入頁面！
     """
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        # 檢查 session 裡有沒有 'user_id' (代表是否拿著有效通行證)
         if 'user_id' not in session:
-            # 如果是前端透過 JS (Fetch/AJAX) 打 API，通常路徑會以 /api/ 開頭，或帶有 JSON 請求
+            # 1. 處理前端 JS (Fetch/AJAX) 打 API 的狀況
             if request.is_json or request.path.startswith('/api/'):
                 return jsonify({'success': False, 'error': 'Unauthorized: 請先登入'}), 401
             
-            # 如果是一般網頁瀏覽，就把他踢回登入畫面
-            # 注意：這裡假設你的登入路由名稱是 'try_debug.login'
-            return redirect(url_for('try_debug.login')) 
+            # 2. 智慧導向：根據現在的 Blueprint 名稱決定踢去哪裡
+            bp = request.blueprint or ''
             
+            if bp == 'admin':
+                return redirect(url_for('admin.login'))
+            elif bp == 'kitchen':
+                # 假設你的廚房端有自己的 login，名稱為 kitchen.login
+                # 如果沒有，可以先統一導向 admin.login
+                return redirect(url_for('kitchen.login'))
+            elif bp == 'try' or bp == 'try_debug':
+                # 假設你的測試/資料庫端 login
+                return redirect(url_for('admin.login')) 
+            else:
+                # 預設的最後防線
+                return redirect(url_for('admin.login'))
+                
         return f(*args, **kwargs)
     return decorated_function
+
+
+def role_required(*allowed_roles):
+    """
+    【進階角色防護罩】
+    用法範例： @role_required('admin') 或 @role_required('admin', 'staff')
+    除了檢查有沒有登入，還會檢查「身分」對不對！
+    """
+    def decorator(f):
+        @wraps(f)
+        def decorated_function(*args, **kwargs):
+            # 1. 先確認有沒有登入
+            if 'user_id' not in session:
+                return redirect(url_for('admin.login'))
+            
+            # 2. 確認角色是否在允許的名單內
+            user_role = session.get('role', '')
+            if user_role not in allowed_roles:
+                return "<h3>❌ 權限不足：您的帳號沒有權限訪問此頁面！</h3> <a href='javascript:history.back()'>回上一頁</a>", 403
+                
+            return f(*args, **kwargs)
+        return decorated_function
+    return decorator
 
 
 # ==========================================
 # 1. Email 報告發送核心 (User-Agent 修正版)
 # ==========================================
 def send_daily_report(app, manual_config=None, is_test=False):
-    """
-    發送日結報告。
-    """
+    """發送日結報告"""
     conn = None
     cur = None
     
@@ -132,7 +165,7 @@ def send_daily_report(app, manual_config=None, is_test=False):
             ctx.check_hostname = False
             ctx.verify_mode = ssl.CERT_NONE
 
-            # 【重要修正】加入 User-Agent 偽裝成瀏覽器
+            # 加入 User-Agent 偽裝成瀏覽器
             headers = {
                 "Authorization": f"Bearer {api_key}", 
                 "Content-Type": "application/json",
@@ -192,7 +225,6 @@ def run_maintenance_tasks(app):
     while True:
         try:
             now_obj = datetime.now()
-            # 【修正】定義 now_str 供下方 Print 使用
             now_str = now_obj.strftime("%H:%M:%S")
 
             # --- A. 自動發信檢查 ---
@@ -209,11 +241,10 @@ def run_maintenance_tasks(app):
             if now_obj >= next_ping_time:
                 # 1. Ping 網站
                 try:
-                    # 這裡請確保網址是您正確的 Render 網址
                     urllib.request.urlopen("https://qr-mbdv.onrender.com/", timeout=5)
                     print(f"[{now_str}] ✅ Web Ping 成功")
                 except Exception: 
-                    pass # 失敗不報錯，保持安靜
+                    pass 
                 
                 # 2. Ping 資料庫 (維持連線)
                 try:
