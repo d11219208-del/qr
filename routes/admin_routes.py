@@ -19,7 +19,7 @@ admin_bp = Blueprint('admin', __name__)
 # 🛡️ 登入與登出系統
 # ==========================================
 
-@try_bp.route('/try/login', methods=['GET', 'POST'])
+@admin_bp.route('/admin/login', methods=['GET', 'POST'])
 def login():
     """處理管理員登入"""
     # 1. 如果是 POST，代表使用者送出帳號密碼
