@@ -11,7 +11,12 @@
         .input-group { margin-bottom: 15px; }
         .input-group label { display: block; margin-bottom: 5px; color: #333; }
         .input-group input { width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
-        .btn { width: 100%; padding: 10px; background-color: #e53935; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; }
+        
+        /* --- 💡 新增：顯示密碼勾選框專屬的排版樣式 --- */
+        .show-password-wrapper { display: flex !important; align-items: center; gap: 5px; font-size: 14px; color: #555; margin-top: 8px; cursor: pointer; font-weight: normal; }
+        .show-password-wrapper input[type="checkbox"] { width: auto !important; margin: 0; cursor: pointer; }
+        
+        .btn { width: 100%; padding: 10px; background-color: #e53935; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; margin-top: 10px; }
         .btn:hover { background-color: #c62828; }
         .error { color: red; text-align: center; margin-bottom: 15px; font-size: 14px; }
     </style>
@@ -33,10 +38,27 @@
         <div class="input-group">
             <label for="password">密碼</label>
             <input type="password" id="password" name="password" required>
+            
+            <label class="show-password-wrapper">
+                <input type="checkbox" onclick="togglePassword()"> 顯示密碼
+            </label>
         </div>
         <button type="submit" class="btn">登入</button>
     </form>
 </div>
+
+<script>
+    function togglePassword() {
+        // 抓取 id 為 password 的輸入框
+        var pwField = document.getElementById("password");
+        // 如果目前是隱藏(password)就改成顯示(text)，反之亦然
+        if (pwField.type === "password") {
+            pwField.type = "text";
+        } else {
+            pwField.type = "password";
+        }
+    }
+</script>
 
 </body>
 </html>
