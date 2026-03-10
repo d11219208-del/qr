@@ -4,6 +4,8 @@ import json
 import threading
 import traceback
 import pandas as pd
+import bcrypt  # 💡 新增：引入 bcrypt 用來驗證密碼
+from utils import login_required  # 🛡️ 引入我們在 utils.py 寫好的防護罩
 from flask import Blueprint, render_template, request, redirect, url_for, jsonify, send_file, current_app
 
 # 從資料庫模組匯入連線函式 (PostgreSQL)
@@ -14,9 +16,65 @@ from utils import send_daily_report
 admin_bp = Blueprint('admin', __name__)
 
 # ==========================================
+# 🛡️ 登入與登出系統
+# ==========================================
+
+@try_bp.route('/try/login', methods=['GET', 'POST'])
+def login():
+    """處理管理員登入"""
+    # 1. 如果是 POST，代表使用者送出帳號密碼
+    if request.method == 'POST':
+        username = request.form.get('username')
+        password = request.form.get('password')
+
+        if not username or not password:
+            return render_template('login.html', error="請輸入帳號和密碼")
+
+        conn = get_db_connection()
+        cur = conn.cursor()
+        try:
+            # 尋找資料庫中是否有此帳號
+            cur.execute("SELECT id, password_hash, role FROM users WHERE username = %s", (username,))
+            user = cur.fetchone()
+            
+            if user:
+                user_id, hashed_pw, role = user
+                
+                # 🛡️ 關鍵：使用 bcrypt 比對密碼
+                if bcrypt.checkpw(password.encode('utf-8'), hashed_pw.encode('utf-8')):
+                    # 比對成功！核發通行證 (Session)
+                    session['user_id'] = user_id
+                    session['username'] = username
+                    session['role'] = role
+                    
+                    # 登入成功，導向資料庫檢視頁面
+                    return redirect(url_for('try_debug.show_db_structure'))
+                else:
+                    return render_template('login.html', error="密碼錯誤")
+            else:
+                return render_template('login.html', error="找不到此帳號")
+                
+        except Exception as e:
+            print(f"Login Error: {e}")
+            return render_template('login.html', error="系統發生錯誤，請稍後再試")
+        finally:
+            cur.close()
+            conn.close()
+            
+    # 2. 如果是 GET，顯示登入網頁
+    return render_template('login.html')
+
+@try_bp.route('/try/logout')
+def logout():
+    """處理登出"""
+    session.clear() # 清除通行證
+    return redirect(url_for('try_debug.login'))
+
+# ==========================================
 # 核心路由：後台主面板
 # ==========================================
 @admin_bp.route('/', methods=['GET', 'POST'])
+@login_required  # 🛡️ 加入防護罩：沒登入的人會被導向 /try/login
 def admin_panel():
     conn = get_db_connection()
     cur = conn.cursor()
@@ -154,6 +212,7 @@ def admin_panel():
 # 這裡負責寫入：最低消費、基本運費、最大距離、每公里加價
 # ==========================================
 @admin_bp.route('/settings/delivery', methods=['POST'])
+@login_required  # 🛡️ 加入防護罩：沒登入的人會被導向 /login
 def update_delivery_settings():
     conn = get_db_connection()
     cur = conn.cursor()
@@ -253,6 +312,7 @@ def toggle_config():
 # 編輯產品 (獨立頁面)
 # ==========================================
 @admin_bp.route('/edit_product/<int:pid>', methods=['GET','POST'])
+@login_required  # 🛡️ 加入防護罩：沒登入的人會被導向 /login
 def edit_product(pid):
     conn = get_db_connection()
     cur = conn.cursor()
@@ -373,6 +433,7 @@ def edit_product(pid):
 # ==========================================
 
 @admin_bp.route('/export_menu')
+@login_required  # 🛡️ 加入防護罩：沒登入的人會被導向 /login
 def export_menu():
     try:
         conn = get_db_connection()
@@ -472,6 +533,7 @@ def import_menu():
         return redirect(url_for('admin.admin_panel', msg=f"❌ 匯入失敗: {e}"))
 
 @admin_bp.route('/reset_menu')
+@login_required  # 🛡️ 加入防護罩：沒登入的人會被導向 /login
 def reset_menu():
     conn = get_db_connection(); cur = conn.cursor()
     # 清空產品表並重置 ID 計數 (PostgreSQL)
@@ -480,6 +542,7 @@ def reset_menu():
     return redirect(url_for('admin.admin_panel', msg="🗑️ 菜單已清空"))
 
 @admin_bp.route('/reset_orders', methods=['POST'])
+@login_required  # 🛡️ 加入防護罩：沒登入的人會被導向 /login
 def reset_orders():
     conn = get_db_connection()
     cur = conn.cursor()
@@ -530,6 +593,7 @@ def reset_orders():
     return redirect(url_for('admin.admin_panel', msg=msg))
 
 @admin_bp.route('/toggle_product/<int:pid>', methods=['POST'])
+@login_required  # 🛡️ 加入防護罩：沒登入的人會被導向 /login
 def toggle_product(pid):
     conn = get_db_connection()
     try:
