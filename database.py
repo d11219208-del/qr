@@ -98,7 +98,7 @@ def init_db():
 
 
         # === 💡 關鍵修正：砍掉舊的 users 表格，確保能夠建立最新帶有 password_hash 的版本 ===
-        cur.execute("DROP TABLE IF EXISTS users CASCADE;")
+        #cur.execute("DROP TABLE IF EXISTS users CASCADE;")
         
         # 建立使用者資料表 (users)
         cur.execute('''
@@ -189,3 +189,4 @@ def init_db():
 if __name__ == "__main__":
     # 當直接執行此 .py 檔案時，啟動初始化程序
     init_db()
+
