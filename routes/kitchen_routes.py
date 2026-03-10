@@ -2,6 +2,10 @@ from flask import Blueprint, render_template, request, jsonify, render_template_
 import json
 import base64  
 import traceback  
+import bcrypt  # 💡 新增：引入 bcrypt 用來驗證密碼
+
+# 🛡️ 引入我們在 utils.py 寫好的雙重防護罩
+from utils import login_required, role_required
 from datetime import datetime, timedelta
 from database import get_db_connection
 
@@ -43,15 +47,72 @@ def get_tw_time_range(target_date_str=None, end_date_str=None):
         return now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(hours=8), \
                now.replace(hour=23, minute=59, second=59, microsecond=999999) - timedelta(hours=8)
 
+# ==========================================
+# 🛡️ 登入與登出系統
+# ==========================================
+
+@kitchen_bp.route('/kitchen/login', methods=['GET', 'POST'])
+def login():
+    """處理管理員登入"""
+    # 1. 如果是 POST，代表使用者送出帳號密碼
+    if request.method == 'POST':
+        username = request.form.get('username')
+        password = request.form.get('password')
+
+        if not username or not password:
+            return render_template('login.html', error="請輸入帳號和密碼")
+
+        conn = get_db_connection()
+        cur = conn.cursor()
+        try:
+            # 尋找資料庫中是否有此帳號
+            cur.execute("SELECT id, password_hash, role FROM users WHERE username = %s", (username,))
+            user = cur.fetchone()
+            
+            if user:
+                user_id, hashed_pw, role = user
+                
+                # 🛡️ 關鍵：使用 bcrypt 比對密碼
+                if bcrypt.checkpw(password.encode('utf-8'), hashed_pw.encode('utf-8')):
+                    # 比對成功！核發通行證 (Session)
+                    session['user_id'] = user_id
+                    session['username'] = username
+                    session['role'] = role
+                    
+                    # 💡 修正：登入成功，導向後台主面板
+                    return redirect(url_for('admin.admin_panel'))
+                else:
+                    return render_template('login.html', error="密碼錯誤")
+            else:
+                return render_template('login.html', error="找不到此帳號")
+                
+        except Exception as e:
+            print(f"Login Error: {e}")
+            return render_template('login.html', error="系統發生錯誤，請稍後再試")
+        finally:
+            cur.close()
+            conn.close()
+            
+    # 2. 如果是 GET，顯示登入網頁
+    return render_template('login.html')
+
+@kitchen_bp.route('/kitchen/logout')
+def logout():
+    """處理登出"""
+    session.clear() # 清除通行證
+    return redirect(url_for('kitchen.login'))
+
 
 # --- 1. 廚房看板主頁 ---
 @kitchen_bp.route('/')
+@login_required          # 🛡️ 防護 1：必須登入
 def kitchen_panel():
     return render_template('kitchen.html')
 
 
 # --- 2. 檢查新訂單 API ---
 @kitchen_bp.route('/check_new_orders')
+@login_required          # 🛡️ 防護 1：必須登入
 def check_new_orders():
     try:
         # 【關鍵修改 1】：接收前端傳來的最後一次看過的序號 (預設為 0)
@@ -524,6 +585,7 @@ def print_order(oid):
         
 # --- 4. 狀態變更 (完成/作廢) ---
 @kitchen_bp.route('/complete/<int:oid>')
+@login_required          # 🛡️ 防護 1：必須登入
 def complete_order(oid):
     try:
         c=get_db_connection(); cur=c.cursor()
@@ -550,6 +612,8 @@ def cancel_order(oid):
 
 # --- 5. 銷售排名 API ---
 @kitchen_bp.route('/sales_ranking')
+@login_required          # 🛡️ 防護 1：必須登入
+@role_required('admin')  # 🛡️ 防護 2：必須是 admin 才能進後台
 def sales_ranking():
     start_time_str = request.args.get('start_time')
     end_time_str = request.args.get('end_time')
@@ -583,6 +647,8 @@ def sales_ranking():
 
 # --- 6. 日結報表 (HTML) - 補完部分 ---
 @kitchen_bp.route('/report')
+@login_required          # 🛡️ 防護 1：必須登入
+@role_required('admin')  # 🛡️ 防護 2：必須是 admin 才能進後台
 def daily_report():
     # --- 1. 時間處理 (台灣時區 UTC+8) ---
     now_tw = datetime.utcnow() + timedelta(hours=8)
@@ -906,4 +972,5 @@ def daily_report():
     </body>
     </html>
     """
+
 
