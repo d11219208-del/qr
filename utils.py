@@ -8,6 +8,35 @@ import traceback
 from datetime import datetime, timedelta
 from database import get_db_connection
 
+# === 🛡️ 新增：引入 Flask 與 functools 用於製作權限防護罩 ===
+from flask import session, redirect, url_for, request, jsonify
+from functools import wraps
+
+# ==========================================
+# 0. 🛡️ 權限防護罩 (Decorator)
+# ==========================================
+def login_required(f):
+    """
+    通用權限防護罩。
+    只要在任何路由函式上方加上 @login_required，
+    該路由就會檢查使用者是否已登入。未登入者會被踢回登入頁或收到 401 錯誤。
+    """
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        # 檢查 session 裡有沒有 'user_id' (代表是否拿著有效通行證)
+        if 'user_id' not in session:
+            # 如果是前端透過 JS (Fetch/AJAX) 打 API，通常路徑會以 /api/ 開頭，或帶有 JSON 請求
+            if request.is_json or request.path.startswith('/api/'):
+                return jsonify({'success': False, 'error': 'Unauthorized: 請先登入'}), 401
+            
+            # 如果是一般網頁瀏覽，就把他踢回登入畫面
+            # 注意：這裡假設你的登入路由名稱是 'try_debug.login'
+            return redirect(url_for('try_debug.login')) 
+            
+        return f(*args, **kwargs)
+    return decorated_function
+
+
 # ==========================================
 # 1. Email 報告發送核心 (User-Agent 修正版)
 # ==========================================
