@@ -79,17 +79,6 @@ def init_db():
         # 3. 建立系統設定表 (settings)
         cur.execute('''CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);''')
 
-        # === 💡 新增：建立使用者資料表 (users) ===
-        cur.execute('''
-            CREATE TABLE IF NOT EXISTS users (
-                id SERIAL PRIMARY KEY,            -- 使用者 ID
-                username VARCHAR(50) UNIQUE NOT NULL, -- 帳號名稱 (必須唯一)
-                password_hash TEXT NOT NULL,      -- 密碼的雜湊值 (絕對不存明文)
-                role VARCHAR(20) DEFAULT 'admin', -- 角色權限 (例如: admin, staff)
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP -- 建立時間
-            );
-        ''')
-        
         # 4. 插入預設設定 (新增了 shop_open 與其他外送參數)
         default_settings = [
             ('sender_email', 'onboarding@resend.dev'), # 預設發信人郵件
@@ -107,7 +96,22 @@ def init_db():
             # 這樣可以確保新增加的設定 (如 shop_open) 會被寫入，而已存在的設定不會被覆蓋
             cur.execute("INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT DO NOTHING", (k, v))
 
-        # === 💡 新增：建立一個預設的 Admin 帳號 (如果還沒有的話) ===
+
+        # === 💡 關鍵修正：砍掉舊的 users 表格，確保能夠建立最新帶有 password_hash 的版本 ===
+        cur.execute("DROP TABLE IF EXISTS users CASCADE;")
+        
+        # 建立使用者資料表 (users)
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS users (
+                id SERIAL PRIMARY KEY,            -- 使用者 ID
+                username VARCHAR(50) UNIQUE NOT NULL, -- 帳號名稱 (必須唯一)
+                password_hash TEXT NOT NULL,      -- 密碼的雜湊值 (絕對不存明文)
+                role VARCHAR(20) DEFAULT 'admin', -- 角色權限 (例如: admin, staff)
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP -- 建立時間
+            );
+        ''')
+
+        # 建立一個預設的 Admin 帳號 (因為上面我們 DROP TABLE 了，所以這裡一定會重新建立)
         cur.execute("SELECT COUNT(*) FROM users")
         user_count = cur.fetchone()[0]
         
