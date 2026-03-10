@@ -1,6 +1,7 @@
 import os  # 匯入作業系統模組，用於讀取環境變數
 import psycopg2  # 匯入 PostgreSQL 資料庫驅動模組
 from urllib.parse import urlparse  # 匯入網址解析工具
+import bcrypt # 匯入 bcrypt 模組用於密碼雜湊 (需先安裝: pip install bcrypt)
 
 # --- 資料庫基礎連線 --- 
 def get_db_connection():
@@ -77,6 +78,17 @@ def init_db():
         
         # 3. 建立系統設定表 (settings)
         cur.execute('''CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);''')
+
+        # === 💡 新增：建立使用者資料表 (users) ===
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS users (
+                id SERIAL PRIMARY KEY,            -- 使用者 ID
+                username VARCHAR(50) UNIQUE NOT NULL, -- 帳號名稱 (必須唯一)
+                password_hash TEXT NOT NULL,      -- 密碼的雜湊值 (絕對不存明文)
+                role VARCHAR(20) DEFAULT 'admin', -- 角色權限 (例如: admin, staff)
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP -- 建立時間
+            );
+        ''')
         
         # 4. 插入預設設定 (新增了 shop_open 與其他外送參數)
         default_settings = [
@@ -94,6 +106,27 @@ def init_db():
             # 插入設定值，如果 Key 已經存在則跳過 (ON CONFLICT DO NOTHING)
             # 這樣可以確保新增加的設定 (如 shop_open) 會被寫入，而已存在的設定不會被覆蓋
             cur.execute("INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT DO NOTHING", (k, v))
+
+        # === 💡 新增：建立一個預設的 Admin 帳號 (如果還沒有的話) ===
+        cur.execute("SELECT COUNT(*) FROM users")
+        user_count = cur.fetchone()[0]
+        
+        if user_count == 0:
+            print("👤 尚未建立任何使用者，正在建立預設的 Admin 帳號...")
+            default_username = "admin"
+            default_password = "password123" # ⚠️ 請在登入後台後立即更改此密碼！
+            
+            # 使用 bcrypt 對密碼進行雜湊處理
+            # 必須將字串轉為 bytes (encode('utf-8'))
+            salt = bcrypt.gensalt()
+            hashed_password = bcrypt.hashpw(default_password.encode('utf-8'), salt).decode('utf-8')
+            
+            cur.execute(
+                "INSERT INTO users (username, password_hash, role) VALUES (%s, %s, %s)",
+                (default_username, hashed_password, 'admin')
+            )
+            print(f"✅ 預設 Admin 帳號建立完成。帳號: {default_username} / 密碼: {default_password}")
+
 
         # 5. 【關鍵】欄位自動補全 (Migration)
         # 此段確保如果資料表已經存在，但缺少新開發的欄位時，會自動新增欄位
@@ -134,7 +167,7 @@ def init_db():
                 if 'duplicate' not in str(e).lower() and 'exists' not in str(e).lower():
                     print(f"⚠️ Warning during migration: {e}")
 
-        print("✅ 資料庫初始化檢查完成 (含 order_type, delivery_info, products 多語系欄位)")
+        print("✅ 資料庫初始化檢查完成 (含 order_type, delivery_info, products 多語系欄位, 及 users 表格)")
         return True
 
     except Exception as e:
@@ -152,4 +185,3 @@ def init_db():
 if __name__ == "__main__":
     # 當直接執行此 .py 檔案時，啟動初始化程序
     init_db()
-
