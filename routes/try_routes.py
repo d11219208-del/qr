@@ -1,6 +1,8 @@
-from flask import Blueprint, render_template, request, jsonify
+from flask import Blueprint, render_template, request, jsonify, session, redirect, url_for
 from database import get_db_connection
 import psycopg2
+import bcrypt  # 💡 新增：引入 bcrypt 用來驗證密碼
+from utils import login_required  # 🛡️ 引入我們在 utils.py 寫好的防護罩
 
 try_bp = Blueprint('try_debug', __name__)
 
@@ -52,7 +54,7 @@ COLUMN_MAP = {
         'key': '設定鍵名 (如: shop_open)',
         'value': '設定值'
     },
-    # === 💡 新增：Users (使用者/管理員表) ===
+    # === Users (使用者/管理員表) ===
     'users': {
         'id': '使用者 ID',
         'username': '帳號名稱',
@@ -62,7 +64,67 @@ COLUMN_MAP = {
     }
 }
 
+# ==========================================
+# 🛡️ 登入與登出系統
+# ==========================================
+
+@try_bp.route('/try/login', methods=['GET', 'POST'])
+def login():
+    """處理管理員登入"""
+    # 1. 如果是 POST，代表使用者送出帳號密碼
+    if request.method == 'POST':
+        username = request.form.get('username')
+        password = request.form.get('password')
+
+        if not username or not password:
+            return render_template('login.html', error="請輸入帳號和密碼")
+
+        conn = get_db_connection()
+        cur = conn.cursor()
+        try:
+            # 尋找資料庫中是否有此帳號
+            cur.execute("SELECT id, password_hash, role FROM users WHERE username = %s", (username,))
+            user = cur.fetchone()
+            
+            if user:
+                user_id, hashed_pw, role = user
+                
+                # 🛡️ 關鍵：使用 bcrypt 比對密碼
+                if bcrypt.checkpw(password.encode('utf-8'), hashed_pw.encode('utf-8')):
+                    # 比對成功！核發通行證 (Session)
+                    session['user_id'] = user_id
+                    session['username'] = username
+                    session['role'] = role
+                    
+                    # 登入成功，導向資料庫檢視頁面
+                    return redirect(url_for('try_debug.show_db_structure'))
+                else:
+                    return render_template('login.html', error="密碼錯誤")
+            else:
+                return render_template('login.html', error="找不到此帳號")
+                
+        except Exception as e:
+            print(f"Login Error: {e}")
+            return render_template('login.html', error="系統發生錯誤，請稍後再試")
+        finally:
+            cur.close()
+            conn.close()
+            
+    # 2. 如果是 GET，顯示登入網頁
+    return render_template('login.html')
+
+@try_bp.route('/try/logout')
+def logout():
+    """處理登出"""
+    session.clear() # 清除通行證
+    return redirect(url_for('try_debug.login'))
+
+# ==========================================
+# 🔒 受保護的路由 (需要登入才能操作)
+# ==========================================
+
 @try_bp.route('/try')
+@login_required  # 🛡️ 加入防護罩：沒登入的人會被導向 /try/login
 def show_db_structure():
     conn = get_db_connection()
     cur = conn.cursor()
@@ -106,27 +168,26 @@ def show_db_structure():
             })
         
         # 3. 判斷該表的 Primary Key (PK)
-        # 一般表通常是 id，但 settings 表是 key
         pk_col = 'key' if table == 'settings' else 'id'
 
-        # 4. 抓取該表的所有資料 (以 PK 倒序，方便看到最新資料)
-        # 注意：這裡加上 pk_col 排序，確保資料順序穩定
+        # 4. 抓取該表的所有資料
         cur.execute(f"SELECT * FROM {table} ORDER BY {pk_col} DESC LIMIT 50")
         sample_rows = cur.fetchall()
         
         db_info[table] = {
             'schema': columns_info,
             'data': sample_rows,
-            'pk_col': pk_col  # 【重要】傳送 PK 欄位名稱給前端，前端更新資料時需要用
+            'pk_col': pk_col 
         }
 
     cur.close()
     conn.close()
     
-    return render_template('try.html', db_info=db_info)
+    # 將當前登入者名稱傳給前端 (可顯示於網頁右上角)
+    return render_template('try.html', db_info=db_info, current_user=session.get('username'))
 
-# --- 接收前端修改請求的 API ---
 @try_bp.route('/try/update', methods=['POST'])
+@login_required  # 🛡️ 加入防護罩：未登入者無法打這支 API 修改資料庫
 def update_db_data():
     """
     接收 JSON 格式: { table, pk_col, pk_val, column, value }
@@ -139,26 +200,18 @@ def update_db_data():
     column = data.get('column')
     new_value = data.get('value')
 
-    # 簡單的安全檢查 (避免缺少參數)
     if not table or not column or not pk_val:
         return jsonify({'success': False, 'error': 'Missing parameters'})
 
     conn = get_db_connection()
     cur = conn.cursor()
     try:
-        # 使用參數化查詢防止 SQL Injection (針對 value 與 pk_val)
-        # table 與 column 名稱因為無法參數化，但來源是我們自己的代碼邏輯，相對可控
         query = f"UPDATE {table} SET {column} = %s WHERE {pk_col} = %s"
-        
-        # 如果是空字串，某些數值欄位可能需要轉為 None (或保留空字串視欄位型態而定)
-        # 這裡簡化處理：直接傳送 new_value，由 PostgreSQL 判斷型態
-        # 若輸入格式錯誤 (如在 int 欄位輸入 'abc')，會進入 except 區塊
         cur.execute(query, (new_value, pk_val))
         conn.commit()
-        
         return jsonify({'success': True})
     except Exception as e:
-        conn.rollback() # 發生錯誤時回滾
+        conn.rollback() 
         print(f"Update Error: {e}")
         return jsonify({'success': False, 'error': str(e)})
     finally:
