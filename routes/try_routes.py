@@ -264,16 +264,19 @@ def add_user():
     # 如果是直接進入網址 (GET)，顯示一個簡單的新增表單
     # 這裡直接回傳 HTML 字串，就不用再辛苦去 templates 建新檔案了！
     html_form = """
-    <!DOCTYPE html>
+<!DOCTYPE html>
     <html lang="zh-TW">
     <head>
         <meta charset="UTF-8">
         <title>新增帳號</title>
         <style>
             body { font-family: sans-serif; padding: 40px; background-color: #f4f4f9; }
-            .container { background: white; padding: 20px 30px; border-radius: 8px; max-width: 400px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-            input, select { width: 100%; padding: 8px; margin: 8px 0 20px 0; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;}
-            button { background-color: #28a745; color: white; border: none; padding: 10px 15px; border-radius: 4px; cursor: pointer; width: 100%; font-size: 16px;}
+            .container { background: white; padding: 20px 30px; border-radius: 8px; max-width: 400px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); margin: 0 auto; }
+            input[type="text"], input[type="password"], select { width: 100%; padding: 8px; margin: 8px 0; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;}
+            .password-container { margin-bottom: 20px; }
+            .show-password-wrapper { display: flex; align-items: center; gap: 5px; font-size: 14px; color: #555; margin-top: 5px; cursor: pointer; }
+            .show-password-wrapper input[type="checkbox"] { width: auto; margin: 0; cursor: pointer; }
+            button { background-color: #28a745; color: white; border: none; padding: 10px 15px; border-radius: 4px; cursor: pointer; width: 100%; font-size: 16px; margin-top: 10px;}
             button:hover { background-color: #218838; }
             a { display: block; margin-top: 15px; text-align: center; color: #007bff; text-decoration: none; }
         </style>
@@ -285,8 +288,13 @@ def add_user():
                 <label>帳號名稱：</label>
                 <input type="text" name="username" placeholder="請輸入新帳號" required>
                 
-                <label>設定密碼：</label>
-                <input type="password" name="password" placeholder="請輸入密碼" required>
+                <div class="password-container">
+                    <label>設定密碼：</label>
+                    <input type="password" id="pwInput" name="password" placeholder="請輸入密碼" required>
+                    <label class="show-password-wrapper">
+                        <input type="checkbox" onclick="togglePassword()"> 顯示密碼
+                    </label>
+                </div>
                 
                 <label>角色權限：</label>
                 <select name="role">
@@ -298,6 +306,17 @@ def add_user():
             </form>
             <a href="/try">返回資料庫後台</a>
         </div>
+
+        <script>
+            function togglePassword() {
+                var pwField = document.getElementById("pwInput");
+                if (pwField.type === "password") {
+                    pwField.type = "text"; // 變成明文
+                } else {
+                    pwField.type = "password"; // 變回星號
+                }
+            }
+        </script>
     </body>
     </html>
     """
