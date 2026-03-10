@@ -1,8 +1,10 @@
+# routes/try_routes.py
 from flask import Blueprint, render_template, request, jsonify, session, redirect, url_for
 from database import get_db_connection
 import psycopg2
-import bcrypt  # 💡 新增：引入 bcrypt 用來驗證密碼
-from utils import login_required  # 🛡️ 引入我們在 utils.py 寫好的防護罩
+import bcrypt
+# 🛡️ 引入我們在 utils.py 寫好的雙重防護罩
+from utils import login_required, role_required  
 
 try_bp = Blueprint('try_debug', __name__)
 
@@ -70,8 +72,7 @@ COLUMN_MAP = {
 
 @try_bp.route('/try/login', methods=['GET', 'POST'])
 def login():
-    """處理管理員登入"""
-    # 1. 如果是 POST，代表使用者送出帳號密碼
+    """處理管理員/員工登入"""
     if request.method == 'POST':
         username = request.form.get('username')
         password = request.form.get('password')
@@ -110,7 +111,7 @@ def login():
             cur.close()
             conn.close()
             
-    # 2. 如果是 GET，顯示登入網頁
+    # 如果是 GET，顯示登入網頁
     return render_template('login.html')
 
 @try_bp.route('/try/logout')
@@ -120,11 +121,12 @@ def logout():
     return redirect(url_for('try_debug.login'))
 
 # ==========================================
-# 🔒 受保護的路由 (需要登入才能操作)
+# 🔒 受保護的路由 (需要登入且必須是 Admin 才能操作)
 # ==========================================
 
 @try_bp.route('/try')
-@login_required  # 🛡️ 加入防護罩：沒登入的人會被導向 /try/login
+@login_required 
+@role_required('admin')  # 🛡️ 危險動作：只有管理員能看原始資料庫結構
 def show_db_structure():
     conn = get_db_connection()
     cur = conn.cursor()
@@ -187,7 +189,8 @@ def show_db_structure():
     return render_template('try.html', db_info=db_info, current_user=session.get('username'))
 
 @try_bp.route('/try/update', methods=['POST'])
-@login_required  # 🛡️ 加入防護罩：未登入者無法打這支 API 修改資料庫
+@login_required 
+@role_required('admin')  # 🛡️ 危險動作：只有管理員能直接修改資料庫欄位
 def update_db_data():
     """
     接收 JSON 格式: { table, pk_col, pk_val, column, value }
@@ -223,7 +226,8 @@ def update_db_data():
 # ==========================================
 
 @try_bp.route('/try/add_user', methods=['GET', 'POST'])
-@login_required  # 🛡️ 一樣要有防護罩，只有已經登入的 admin 才能新增別人
+@login_required 
+@role_required('admin')  # 🛡️ 危險動作：只有管理員能新增其他員工或管理員
 def add_user():
     # 如果是填完表單送出 (POST)
     if request.method == 'POST':
@@ -235,7 +239,6 @@ def add_user():
             return "帳號和密碼不能為空！ <a href='/try/add_user'>回上一頁</a>"
 
         # 💡 核心步驟：將新密碼進行 bcrypt 加密
-        import bcrypt
         salt = bcrypt.gensalt()
         hashed_pw = bcrypt.hashpw(new_password.encode('utf-8'), salt).decode('utf-8')
 
@@ -262,7 +265,6 @@ def add_user():
             conn.close()
 
     # 如果是直接進入網址 (GET)，顯示一個簡單的新增表單
-    # 這裡直接回傳 HTML 字串，就不用再辛苦去 templates 建新檔案了！
     html_form = """
 <!DOCTYPE html>
     <html lang="zh-TW">
