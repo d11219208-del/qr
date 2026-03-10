@@ -64,7 +64,7 @@ def login():
     # 2. 如果是 GET，顯示登入網頁
     return render_template('login.html')
 
-@try_bp.route('/try/logout')
+@admin_bp.route('/try/logout')
 def logout():
     """處理登出"""
     session.clear() # 清除通行證
