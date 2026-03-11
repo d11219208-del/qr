@@ -1,4 +1,4 @@
-from flask import Blueprint, render_template, request, jsonify, render_template_string
+from flask import Blueprint, render_template, request, jsonify, render_template_string, redirect, url_for, session
 import json
 import base64  
 import traceback  
@@ -51,9 +51,9 @@ def get_tw_time_range(target_date_str=None, end_date_str=None):
 # 🛡️ 登入與登出系統
 # ==========================================
 
-@kitchen_bp.route('/kitchen/login', methods=['GET', 'POST'])
+@kitchen_bp.route('/login', methods=['GET', 'POST'])
 def login():
-    """處理管理員登入"""
+    """處理登入"""
     # 1. 如果是 POST，代表使用者送出帳號密碼
     if request.method == 'POST':
         username = request.form.get('username')
@@ -78,9 +78,11 @@ def login():
                     session['user_id'] = user_id
                     session['username'] = username
                     session['role'] = role
-                    
-                    # 💡 修正：登入成功，導向後台主面板
-                    return redirect(url_for('admin.admin_panel'))
+                
+                    if role == 'admin':
+                        return redirect(url_for('admin.admin_panel'))
+                    else:
+                        return redirect(url_for('kitchen.kitchen_panel'))
                 else:
                     return render_template('login.html', error="密碼錯誤")
             else:
@@ -96,7 +98,7 @@ def login():
     # 2. 如果是 GET，顯示登入網頁
     return render_template('login.html')
 
-@kitchen_bp.route('/kitchen/logout')
+@kitchen_bp.route('/logout')
 def logout():
     """處理登出"""
     session.clear() # 清除通行證
@@ -972,5 +974,6 @@ def daily_report():
     </body>
     </html>
     """
+
 
 
