@@ -51,10 +51,13 @@ def get_tw_time_range(target_date_str=None, end_date_str=None):
 # 🛡️ 登入與登出系統
 # ==========================================
 
+# ==========================================
+# 🛡️ 登入與登出系統
+# ==========================================
+
 @kitchen_bp.route('/login', methods=['GET', 'POST'])
 def login():
     """處理登入"""
-    # 1. 如果是 POST，代表使用者送出帳號密碼
     if request.method == 'POST':
         username = request.form.get('username')
         password = request.form.get('password')
@@ -65,24 +68,20 @@ def login():
         conn = get_db_connection()
         cur = conn.cursor()
         try:
-            # 尋找資料庫中是否有此帳號
             cur.execute("SELECT id, password_hash, role FROM users WHERE username = %s", (username,))
             user = cur.fetchone()
             
             if user:
                 user_id, hashed_pw, role = user
                 
-                # 🛡️ 關鍵：使用 bcrypt 比對密碼
                 if bcrypt.checkpw(password.encode('utf-8'), hashed_pw.encode('utf-8')):
-                    # 比對成功！核發通行證 (Session)
                     session['user_id'] = user_id
                     session['username'] = username
                     session['role'] = role
-                
-                    if role == 'admin':
-                        return redirect(url_for('admin.admin_panel'))
-                    else:
-                        return redirect(url_for('kitchen.kitchen_panel'))
+                    
+                    # 💡 修正：把「判斷是否為 admin」的囉嗦邏輯拿掉！
+                    # 只要是在廚房登入成功，通通導向廚房看板！
+                    return redirect(url_for('kitchen.kitchen_panel'))
                 else:
                     return render_template('login.html', error="密碼錯誤")
             else:
@@ -95,7 +94,6 @@ def login():
             cur.close()
             conn.close()
             
-    # 2. 如果是 GET，顯示登入網頁
     return render_template('login.html')
 
 @kitchen_bp.route('/logout')
@@ -974,6 +972,7 @@ def daily_report():
     </body>
     </html>
     """
+
 
 
 
