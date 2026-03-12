@@ -67,10 +67,11 @@ COLUMN_MAP = {
 }
 
 # ==========================================
-# 🛡️ 登入與登出系統
+# 🛡️ 登入與登出系統 (測試與除錯專用)
 # ==========================================
 
-@try_bp.route('/try/login', methods=['GET', 'POST'])
+# 💡 修正 1：網址改為 '/login'，避免疊字
+@try_bp.route('/login', methods=['GET', 'POST'])
 def login():
     """處理管理員/員工登入"""
     if request.method == 'POST':
@@ -114,7 +115,8 @@ def login():
     # 如果是 GET，顯示登入網頁
     return render_template('login.html')
 
-@try_bp.route('/try/logout')
+# 💡 修正 2：網址改為 '/logout'，避免疊字
+@try_bp.route('/logout')
 def logout():
     """處理登出"""
     session.clear() # 清除通行證
