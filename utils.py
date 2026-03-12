@@ -35,12 +35,10 @@ def login_required(f):
             if bp == 'admin':
                 return redirect(url_for('admin.login'))
             elif bp == 'kitchen':
-                # 假設你的廚房端有自己的 login，名稱為 kitchen.login
-                # 如果沒有，可以先統一導向 admin.login
                 return redirect(url_for('kitchen.login'))
             elif bp == 'try' or bp == 'try_debug':
-                # 假設你的測試/資料庫端 login
-                return redirect(url_for('admin.login')) 
+                # 💡 修正 1：準確導向 try 專屬的登入頁面
+                return redirect(url_for('try_debug.login')) 
             else:
                 # 預設的最後防線
                 return redirect(url_for('admin.login'))
@@ -58,9 +56,15 @@ def role_required(*allowed_roles):
     def decorator(f):
         @wraps(f)
         def decorated_function(*args, **kwargs):
-            # 1. 先確認有沒有登入
+            # 1. 先確認有沒有登入 (💡 修正 2：這裡也加入智慧導向，避免寫死)
             if 'user_id' not in session:
-                return redirect(url_for('admin.login'))
+                bp = request.blueprint or ''
+                if bp == 'kitchen':
+                    return redirect(url_for('kitchen.login'))
+                elif bp == 'try' or bp == 'try_debug':
+                    return redirect(url_for('try_debug.login'))
+                else:
+                    return redirect(url_for('admin.login'))
             
             # 2. 確認角色是否在允許的名單內
             user_role = session.get('role', '')
@@ -70,7 +74,6 @@ def role_required(*allowed_roles):
             return f(*args, **kwargs)
         return decorated_function
     return decorator
-
 
 # ==========================================
 # 1. Email 報告發送核心 (User-Agent 修正版)
@@ -265,3 +268,4 @@ def run_maintenance_tasks(app):
 def start_background_tasks(app):
     t = threading.Thread(target=run_maintenance_tasks, args=(app,), daemon=True)
     t.start()
+
