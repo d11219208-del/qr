@@ -11,53 +11,35 @@ from database import get_db_connection
 # === 🛡️ 引入 Flask 與 functools 用於製作權限防護罩 ===
 from flask import session, redirect, url_for, request, jsonify
 from functools import wraps
-from werkzeug.routing import BuildError  # 💡 新增：處理沒有寫對應 logout 路由的情況
+from werkzeug.routing import BuildError  # 💡 處理沒有寫對應 logout 路由的情況
 
 # ==========================================
 # 0. 🛡️ 多重權限防護罩系統 (Decorators)
 # ==========================================
 
 def login_required(f):
-    """
-    【通用登入防護罩 - 智慧版】
-    只要加上 @login_required，就會檢查是否登入。
-    會根據使用者當下訪問的藍圖 (Blueprint)，自動導向對應的登入頁面！
-    """
     @wraps(f)
     def decorated_function(*args, **kwargs):
         if 'user_id' not in session:
-            # 1. 處理前端 JS (Fetch/AJAX) 打 API 的狀況
             if request.is_json or request.path.startswith('/api/'):
                 return jsonify({'success': False, 'error': 'Unauthorized: 請先登入'}), 401
             
-            # 2. 智慧導向：根據現在的 Blueprint 名稱決定踢去哪裡
             bp = request.blueprint or ''
-            
             if bp == 'admin':
                 return redirect(url_for('admin.login'))
             elif bp == 'kitchen':
                 return redirect(url_for('kitchen.login'))
             elif bp == 'try' or bp == 'try_debug':
-                # 💡 修正 1：準確導向 try 專屬的登入頁面
                 return redirect(url_for('try_debug.login')) 
             else:
-                # 預設的最後防線
                 return redirect(url_for('admin.login'))
-                
         return f(*args, **kwargs)
     return decorated_function
 
-
 def role_required(*allowed_roles):
-    """
-    【進階角色防護罩】
-    用法範例： @role_required('admin') 或 @role_required('admin', 'staff')
-    除了檢查有沒有登入，還會檢查「身分」對不對！
-    """
     def decorator(f):
         @wraps(f)
         def decorated_function(*args, **kwargs):
-            # 1. 先確認有沒有登入 (💡 修正 2：這裡也加入智慧導向，避免寫死)
             if 'user_id' not in session:
                 bp = request.blueprint or ''
                 if bp == 'kitchen':
@@ -67,7 +49,6 @@ def role_required(*allowed_roles):
                 else:
                     return redirect(url_for('admin.login'))
             
-            # 2. 確認角色是否在允許的名單內
             user_role = session.get('role', '')
             if user_role not in allowed_roles:
                 return "<h3>❌ 權限不足：您的帳號沒有權限訪問此頁面！</h3> <a href='javascript:history.back()'>回上一頁</a>", 403
@@ -89,7 +70,6 @@ def send_daily_report(app, manual_config=None, is_test=False):
             conn = get_db_connection()
             cur = conn.cursor()
             
-            # 決定設定來源
             if manual_config:
                 config = manual_config
             else:
@@ -104,7 +84,6 @@ def send_daily_report(app, manual_config=None, is_test=False):
                 print("❌ 未設定 Email 或 API Key，取消發送")
                 return "❌ 設定不完整"
 
-            # 準備時間與內容
             utc_now = datetime.utcnow()
             tw_now = utc_now + timedelta(hours=8)
             today_str = tw_now.strftime('%Y-%m-%d')
@@ -113,14 +92,12 @@ def send_daily_report(app, manual_config=None, is_test=False):
                 subject = f"【測試】Resend API 設定確認 ({today_str})"
                 email_content = f"✅ Resend API 連線成功！\n\n寄件者: {sender_email}\n收件者: {to_email}\n此為測試信件。"
             else:
-                # 抓取正式數據
                 tw_start = tw_now.replace(hour=0, minute=0, second=0, microsecond=0)
                 tw_end = tw_now.replace(hour=23, minute=59, second=59, microsecond=999999)
                 utc_start = tw_start - timedelta(hours=8)
                 utc_end = tw_end - timedelta(hours=8)
                 time_filter = f"created_at >= '{utc_start}' AND created_at <= '{utc_end}'"
 
-                # 統計數據
                 cur.execute(f"SELECT COUNT(*), SUM(total_price) FROM orders WHERE {time_filter} AND status != 'Cancelled'")
                 v_res = cur.fetchone()
                 v_count, v_total = (v_res[0] or 0), (v_res[1] or 0)
@@ -129,7 +106,6 @@ def send_daily_report(app, manual_config=None, is_test=False):
                 x_res = cur.fetchone()
                 x_count, x_total = (x_res[0] or 0), (x_res[1] or 0)
 
-                # 品項統計
                 cur.execute(f"SELECT content_json FROM orders WHERE {time_filter} AND status != 'Cancelled'")
                 rows = cur.fetchall()
                 stats = {}
@@ -148,16 +124,8 @@ def send_daily_report(app, manual_config=None, is_test=False):
                 item_text = "\n".join([f"• {k}: {v}" for k, v in sorted_stats]) if sorted_stats else "(無銷量)"
 
                 subject = f"【日結單】{today_str} 營業報告"
-                email_content = f"""
-🍴 餐廳日結 ({today_str})
-------------------------
-✅ 有效: {v_count} 筆 (${int(v_total):,})
-{item_text}
-------------------------
-❌ 作廢: {x_count} 筆 (${int(x_total):,})
-"""
+                email_content = f"🍴 餐廳日結 ({today_str})\n------------------------\n✅ 有效: {v_count} 筆 (${int(v_total):,})\n{item_text}\n------------------------\n❌ 作廢: {x_count} 筆 (${int(x_total):,})"
 
-            # 發送請求
             payload = {
                 "from": sender_email,
                 "to": [to_email],
@@ -169,7 +137,6 @@ def send_daily_report(app, manual_config=None, is_test=False):
             ctx.check_hostname = False
             ctx.verify_mode = ssl.CERT_NONE
 
-            # 加入 User-Agent 偽裝成瀏覽器
             headers = {
                 "Authorization": f"Bearer {api_key}", 
                 "Content-Type": "application/json",
@@ -183,40 +150,19 @@ def send_daily_report(app, manual_config=None, is_test=False):
                 method='POST'
             )
             
-            print(f"📡 正在連線 Resend API (From: {sender_email} -> To: {to_email}) ...")
-            
             with urllib.request.urlopen(req, context=ctx, timeout=10) as res:
                 print(f"✅ Email 發送成功: {res.status}")
                 return "✅ 發送成功"
 
-        except urllib.error.HTTPError as e:
-            try:
-                error_body = e.read().decode('utf-8')
-            except:
-                error_body = "無法讀取錯誤內容"
-
-            print(f"❌ Resend API 拒絕連線 (HTTP {e.code}): {error_body}")
-            
-            if e.code == 403 and "1010" in error_body:
-                 return "❌ 發送失敗: 被 Cloudflare 防火牆阻擋 (User-Agent)"
-
-            try:
-                err_json = json.loads(error_body)
-                msg = err_json.get('message', error_body)
-                return f"❌ 發送失敗: {msg}"
-            except:
-                return f"❌ 發送失敗 (HTTP {e.code})"
-
         except Exception as e:
-            traceback.print_exc()
-            return f"❌ 程式錯誤: {str(e)}"
-        
+            print(f"❌ Email 任務出錯: {e}")
+            return f"❌ 錯誤: {str(e)}"
         finally:
             if cur: cur.close()
             if conn: conn.close()
 
 # ==========================================
-# 2. 背景維護工作 (修正 Print 顯示)
+# 2. 背景維護工作 (Aiven DB 連線優化版)
 # ==========================================
 def run_maintenance_tasks(app):
     print("⏳ 背景任務等待啟動中 (Wait 30s)...")
@@ -241,29 +187,31 @@ def run_maintenance_tasks(app):
                 send_daily_report(app)
                 last_sent_time = current_hm
 
-            # --- B. 防休眠 Ping ---
+            # --- B. 防休眠 Ping (Web + Aiven DB) ---
             if now_obj >= next_ping_time:
                 # 1. Ping 網站
                 try:
                     urllib.request.urlopen("https://qr-mbdv.onrender.com", timeout=5)
                     print(f"[{now_str}] ✅ Web Ping 成功")
                 except Exception: 
-                    pass 
+                    print(f"[{now_str}] ⚠️ Web Ping 失敗: {e}")
                 
-                # 2. Ping 資料庫 (維持連線)
+                # 2. Ping Aiven 資料庫 (發送真實指令維持連線)
                 try:
                     conn = get_db_connection()
+                    with conn.cursor() as cur:
+                        cur.execute("SELECT 1;") # Aiven 需要實際 Query 才能保活
+                        cur.fetchone()
                     conn.close()
-                    print(f"[{now_str}] 💓 DB Heartbeat 成功")
-                except Exception: 
-                    pass
+                    print(f"[{now_str}] 💓 Aiven DB Heartbeat 成功 (SELECT 1)")
+                except Exception as e: 
+                    print(f"[{now_str}] ⚠️ DB Heartbeat 失敗: {e}")
                 
-                # 設定下次 Ping 的時間 (5分鐘後)
                 next_ping_time = now_obj + timedelta(seconds=300)
 
-            time.sleep(60)
+            time.sleep(30) # 縮短掃描間隔，確保不漏掉 target_times
         except Exception as e:
-            print(f"⚠️ 背景任務錯誤: {e}")
+            print(f"⚠️ 背景任務主要迴圈錯誤: {e}")
             time.sleep(60)
 
 def start_background_tasks(app):
@@ -274,29 +222,19 @@ def start_background_tasks(app):
 # 3. 👤 自動注入登入資訊 (Context Processor)
 # ==========================================
 def inject_user_info():
-    """
-    上下文處理器：自動將當前登入者名稱、角色與對應的登出網址，注入到所有 HTML 模板中。
-    """
-    # 1. 取得當前登入的帳號與角色 (如果沒登入就是 None)
     current_username = session.get('username')
-    current_role = session.get('role', '未知角色') # 💡 新增：取得角色，若無則顯示 '未知角色'
-    
-    # 2. 自動判斷現在使用者在哪個藍圖 (admin, kitchen, 或是 try_debug)
+    current_role = session.get('role', '未知角色')
     current_bp = request.blueprint
     
-    # 3. 自動生成對應的登出網址
     logout_url = None
     if current_username and current_bp:
         try:
-            # 嘗試生成該藍圖專屬的登出網址，例如 'admin.logout' 或 'try_debug.logout'
             logout_url = url_for(f'{current_bp}.logout')
         except BuildError:
-            # 如果該區塊剛好沒有寫 logout 路由，預設給個首頁或 #
             logout_url = '#'
 
-    # 回傳的字典，裡面的 Key 就是可以在 HTML 裡直接使用的變數名稱
     return {
         'current_username': current_username,
-        'current_role': current_role,  # 💡 新增：將 current_role 傳遞給前端 HTML
+        'current_role': current_role,
         'logout_url': logout_url
     }
