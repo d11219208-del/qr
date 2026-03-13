@@ -11,6 +11,7 @@ from database import get_db_connection
 # === 🛡️ 引入 Flask 與 functools 用於製作權限防護罩 ===
 from flask import session, redirect, url_for, request, jsonify
 from functools import wraps
+from werkzeug.routing import BuildError  # 💡 新增：處理沒有寫對應 logout 路由的情況
 
 # ==========================================
 # 0. 🛡️ 多重權限防護罩系統 (Decorators)
@@ -244,7 +245,7 @@ def run_maintenance_tasks(app):
             if now_obj >= next_ping_time:
                 # 1. Ping 網站
                 try:
-                    urllib.request.urlopen("https://qr-mbdv.onrender.com/", timeout=5)
+                    urllib.request.urlopen("https://qr-mbdv.onrender.com", timeout=5)
                     print(f"[{now_str}] ✅ Web Ping 成功")
                 except Exception: 
                     pass 
@@ -269,3 +270,33 @@ def start_background_tasks(app):
     t = threading.Thread(target=run_maintenance_tasks, args=(app,), daemon=True)
     t.start()
 
+# ==========================================
+# 3. 👤 自動注入登入資訊 (Context Processor)
+# ==========================================
+def inject_user_info():
+    """
+    上下文處理器：自動將當前登入者名稱、角色與對應的登出網址，注入到所有 HTML 模板中。
+    """
+    # 1. 取得當前登入的帳號與角色 (如果沒登入就是 None)
+    current_username = session.get('username')
+    current_role = session.get('role', '未知角色') # 💡 新增：取得角色，若無則顯示 '未知角色'
+    
+    # 2. 自動判斷現在使用者在哪個藍圖 (admin, kitchen, 或是 try_debug)
+    current_bp = request.blueprint
+    
+    # 3. 自動生成對應的登出網址
+    logout_url = None
+    if current_username and current_bp:
+        try:
+            # 嘗試生成該藍圖專屬的登出網址，例如 'admin.logout' 或 'try_debug.logout'
+            logout_url = url_for(f'{current_bp}.logout')
+        except BuildError:
+            # 如果該區塊剛好沒有寫 logout 路由，預設給個首頁或 #
+            logout_url = '#'
+
+    # 回傳的字典，裡面的 Key 就是可以在 HTML 裡直接使用的變數名稱
+    return {
+        'current_username': current_username,
+        'current_role': current_role,  # 💡 新增：將 current_role 傳遞給前端 HTML
+        'logout_url': logout_url
+    }

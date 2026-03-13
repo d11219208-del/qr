@@ -70,7 +70,6 @@ COLUMN_MAP = {
 # 🛡️ 登入與登出系統 (測試與除錯專用)
 # ==========================================
 
-# 💡 修正 1：網址改為 '/login'，避免疊字
 @try_bp.route('/login', methods=['GET', 'POST'])
 def login():
     """處理管理員/員工登入"""
@@ -115,7 +114,6 @@ def login():
     # 如果是 GET，顯示登入網頁
     return render_template('login.html')
 
-# 💡 修正 2：網址改為 '/logout'，避免疊字
 @try_bp.route('/logout')
 def logout():
     """處理登出"""
@@ -126,7 +124,8 @@ def logout():
 # 🔒 受保護的路由 (需要登入且必須是 Admin 才能操作)
 # ==========================================
 
-@try_bp.route('/try')
+# 💡 修正：改成 '/'，這樣搭配 app.py 的前綴就會是 '/try' (同時解決 404 問題)
+@try_bp.route('/')
 @login_required 
 @role_required('admin')  # 🛡️ 危險動作：只有管理員能看原始資料庫結構
 def show_db_structure():
@@ -190,7 +189,8 @@ def show_db_structure():
     # 將當前登入者名稱傳給前端 (可顯示於網頁右上角)
     return render_template('try.html', db_info=db_info, current_user=session.get('username'))
 
-@try_bp.route('/try/update', methods=['POST'])
+# 💡 修正：拿掉 '/try'，避免變成 '/try/try/update'
+@try_bp.route('/update', methods=['POST'])
 @login_required 
 @role_required('admin')  # 🛡️ 危險動作：只有管理員能直接修改資料庫欄位
 def update_db_data():
@@ -227,7 +227,8 @@ def update_db_data():
 # 🆕 新增使用者帳號專屬網頁
 # ==========================================
 
-@try_bp.route('/try/add_user', methods=['GET', 'POST'])
+# 💡 修正：拿掉 '/try'，避免變成 '/try/try/add_user'
+@try_bp.route('/add_user', methods=['GET', 'POST'])
 @login_required 
 @role_required('admin')  # 🛡️ 危險動作：只有管理員能新增其他員工或管理員
 def add_user():

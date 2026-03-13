@@ -132,10 +132,19 @@
     </div>
 
     <div class="nav-links">
-        <button onclick="testAudioAndRefresh()" class="btn" style="background:#eee;">🔄 刷新 / 測試音效</button>
-        <button onclick="openSalesModal()" class="btn" style="background:var(--accent-orange); color:white;">📈 銷售排行</button>
-        <a href="/kitchen/report" target="_blank" class="btn" style="background:#673ab7; color:white; text-decoration:none;">📊 營收報表</a>
-        <a href="/admin" target="_blank" class="btn" style="background:#333; color:white; text-decoration:none;">⚙️ 管理後台</a>
+    <button onclick="testAudioAndRefresh()" class="btn" style="background:#eee;">🔄 刷新 / 測試音效</button>
+    <button onclick="openSalesModal()" class="btn" style="background:var(--accent-orange); color:white;">📈 銷售排行</button>
+    <a href="/kitchen/report" target="_blank" class="btn" style="background:#673ab7; color:white; text-decoration:none;">📊 營收報表</a>
+    <a href="/admin" target="_blank" class="btn" style="background:#333; color:white; text-decoration:none;">⚙️ 管理後台</a>
+    
+    <div style="display: flex; align-items: center; gap: 10px; background: #f8f9fa; padding: 2px 12px; border-radius: 50px; border: 1px solid #ddd; margin-left: 5px;">
+        <span style="color: #333; font-weight: bold; font-size: 14px;">
+            <span style="color: #666; font-size: 12px; font-weight: normal;">[{{ current_role }}]</span> {{ current_username }}
+        </span>
+        <a href="{{ logout_url }}" style="background-color: #dc3545; color: white; text-decoration: none; padding: 3px 10px; border-radius: 12px; font-size: 12px; font-weight: bold; transition: 0.3s;" onmouseover="this.style.backgroundColor='#c82333'" onmouseout="this.style.backgroundColor='#dc3545'">
+            登出
+        </a>
+    </div>
     </div>
 </header>
 
@@ -405,4 +414,3 @@
 
 </body>
 </html>
-

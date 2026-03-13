@@ -8,7 +8,8 @@ from routes import menu_bp, kitchen_bp, admin_bp, delivery_bp
 # --- 新增引用：引用剛剛建立的 try_routes (資料庫檢視功能) ---
 from routes.try_routes import try_bp 
 
-from utils import start_background_tasks
+# 💡 修改引入：把我們剛剛在 utils.py 寫好的 inject_user_info 一起引進來
+from utils import start_background_tasks, inject_user_info
 
 def create_app():
     app = Flask(__name__)
@@ -34,10 +35,17 @@ def create_app():
     app.register_blueprint(admin_bp, url_prefix='/admin')
 
     # 外送服務 (路徑 /delivery)
-    app.register_blueprint(delivery_bp, url_prefix='/delivery') 
+    app.register_blueprint(delivery_bp, url_prefix='/delivery')
 
+    # --- 新增註冊：資料庫檢視頁面 (路徑 /try) ---
     # 這讓我們可以透過網址 /try 來查看資料庫欄位
     app.register_blueprint(try_bp, url_prefix='/try')
+
+    # ==========================================
+    # 💡 新增註冊：上下文處理器 (Context Processor)
+    # 這樣一來，所有的 HTML 網頁就都能直接讀取到 current_username 和 logout_url 了！
+    # ==========================================
+    app.context_processor(inject_user_info)
 
     # 3. 啟動背景任務 (排程發信、防休眠 Ping)
     start_background_tasks(app)
@@ -49,5 +57,3 @@ app = create_app()
 if __name__ == '__main__':
     # 這裡的設定適合 Render 部署與本地測試
     app.run(host='0.0.0.0', port=10000, debug=False)
-
-
