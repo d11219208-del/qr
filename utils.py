@@ -42,18 +42,17 @@ def role_required(*allowed_roles):
     return decorator
 
 # ==========================================
-# 1. Email 報告發送核心 (參數優先版)
+# 1. Email 報告發送核心 (新增作廢明細版)
 # ==========================================
 def send_daily_report(app, manual_config=None, is_test=False, operator_name=None, operator_role=None):
     """
     發送日結報表。
-    :param operator_name: 手動傳入的操作者姓名，若無則嘗試從 session 抓取，再無則顯示系統發送。
     """
     conn, cur = None, None
     
     with app.app_context():
         try:
-            # 💡 判定值班人員：優先順序 (參數 > Session > 系統)
+            # 💡 判定值班人員
             final_name = operator_name
             final_role = operator_role
 
@@ -96,20 +95,18 @@ def send_daily_report(app, manual_config=None, is_test=False, operator_name=None
                     f"收件者: {to_email}"
                 )
             else:
-                # 取得今日有效與作廢資料
+                # 時間過濾器
                 tw_start = tw_now.replace(hour=0, minute=0, second=0, microsecond=0)
                 utc_start = tw_start - timedelta(hours=8)
                 utc_end = utc_start + timedelta(hours=24)
-                
                 time_filter = "created_at >= %s AND created_at < %s"
                 params = (utc_start, utc_end)
 
-                # 有效訂單
+                # --- 1. 有效訂單統計 ---
                 cur.execute(f"SELECT COUNT(*), SUM(total_price) FROM orders WHERE {time_filter} AND status != 'Cancelled'", params)
                 v_res = cur.fetchone()
                 v_count, v_total = (v_res[0] or 0), (float(v_res[1] or 0))
 
-                # 品項統計 (有效)
                 cur.execute(f"SELECT content_json FROM orders WHERE {time_filter} AND status != 'Cancelled'", params)
                 v_stats = {}
                 for r in cur.fetchall():
@@ -120,14 +117,26 @@ def send_daily_report(app, manual_config=None, is_test=False, operator_name=None
                             n = i.get('name_zh', i.get('name', '未知'))
                             v_stats[n] = v_stats.get(n, 0) + int(i.get('qty', 0))
                     except: continue
+                v_text = "\n".join([f"• {k}: {v}" for k, v in sorted(v_stats.items(), key=lambda x:x[1], reverse=True)]) or "(無銷量)"
 
-                # 作廢訂單
+                # --- 2. 作廢訂單統計 (新增明細邏輯) ---
                 cur.execute(f"SELECT COUNT(*), SUM(total_price) FROM orders WHERE {time_filter} AND status = 'Cancelled'", params)
                 x_res = cur.fetchone()
                 x_count, x_total = (x_res[0] or 0), (float(x_res[1] or 0))
 
-                v_text = "\n".join([f"• {k}: {v}" for k, v in sorted(v_stats.items(), key=lambda x:x[1], reverse=True)]) or "(無銷量)"
-                
+                cur.execute(f"SELECT content_json FROM orders WHERE {time_filter} AND status = 'Cancelled'", params)
+                x_stats = {}
+                for r in cur.fetchall():
+                    try:
+                        items = json.loads(r[0]) if isinstance(r[0], str) else r[0]
+                        if isinstance(items, dict): items = [items]
+                        for i in items:
+                            n = i.get('name_zh', i.get('name', '未知'))
+                            x_stats[n] = x_stats.get(n, 0) + int(i.get('qty', 0))
+                    except: continue
+                x_text = "\n".join([f"• {k}: {v}" for k, v in sorted(x_stats.items(), key=lambda x:x[1], reverse=True)]) or "(無作廢品項)"
+
+                # --- 3. 組合內容 ---
                 subject = f"【日結單】{today_str} 營業報告"
                 email_content = (
                     f"👤 值班人員: {final_name} ({final_role})\n"
@@ -137,6 +146,7 @@ def send_daily_report(app, manual_config=None, is_test=False, operator_name=None
                     f"{v_text}\n"
                     f"------------------------\n"
                     f"❌ 作廢: {x_count} 筆 (${int(x_total):,})\n"
+                    f"{x_text}\n"
                     f"------------------------\n"
                     f"💰 實收總計: ${int(v_total):,}"
                 )
@@ -219,4 +229,5 @@ def inject_user_info():
         'current_role': session.get('role', '未知角色'),
         'logout_url': logout_url
     }
+
 
