@@ -24,7 +24,6 @@ admin_bp = Blueprint('admin', __name__)
 @admin_bp.route('/login', methods=['GET', 'POST'])
 def login():
     """處理管理員登入"""
-    # 1. 如果是 POST，代表使用者送出帳號密碼
     if request.method == 'POST':
         username = request.form.get('username')
         password = request.form.get('password')
@@ -35,21 +34,15 @@ def login():
         conn = get_db_connection()
         cur = conn.cursor()
         try:
-            # 尋找資料庫中是否有此帳號
             cur.execute("SELECT id, password_hash, role FROM users WHERE username = %s", (username,))
             user = cur.fetchone()
             
             if user:
                 user_id, hashed_pw, role = user
-                
-                # 🛡️ 關鍵：使用 bcrypt 比對密碼
                 if bcrypt.checkpw(password.encode('utf-8'), hashed_pw.encode('utf-8')):
-                    # 比對成功！核發通行證 (Session)
                     session['user_id'] = user_id
                     session['username'] = username
                     session['role'] = role
-                    
-                    # 💡 修正：登入成功，導向後台主面板
                     return redirect(url_for('admin.admin_panel'))
                 else:
                     return render_template('login.html', error="密碼錯誤")
@@ -63,21 +56,20 @@ def login():
             cur.close()
             conn.close()
             
-    # 2. 如果是 GET，顯示登入網頁
     return render_template('login.html')
 
 @admin_bp.route('/logout')
 def logout():
     """處理登出"""
-    session.clear() # 清除通行證
+    session.clear() 
     return redirect(url_for('admin.login'))
 
 # ==========================================
 # 核心路由：後台主面板
 # ==========================================
 @admin_bp.route('/', methods=['GET', 'POST'])
-@login_required          # 🛡️ 防護 1：必須登入
-@role_required('admin')  # 🛡️ 防護 2：必須是 admin 才能進後台
+@login_required          
+@role_required('admin')  
 def admin_panel():
     conn = get_db_connection()
     cur = conn.cursor()
@@ -86,18 +78,15 @@ def admin_panel():
     if request.method == 'POST':
         action = request.form.get('action')
         
-        # --- 功能 1: 儲存一般設定 & 測試連線 (合併處理) ---
+        # --- 功能 1: 儲存一般設定 & 測試連線 ---
         if action == 'save_settings' or action == 'test_email':
             try:
-                # 1. 取得表單資料
                 new_config = {
                     'report_email': request.form.get('report_email'),
                     'resend_api_key': request.form.get('resend_api_key'),
-                    # 如果未填寫 Sender，預設使用 Resend 測試帳號
                     'sender_email': request.form.get('sender_email') or 'onboarding@resend.dev'
                 }
 
-                # 2. 寫入資料庫 (PostgreSQL Upsert)
                 for k, v in new_config.items():
                     cur.execute("""
                         INSERT INTO settings (key, value) 
@@ -106,13 +95,19 @@ def admin_panel():
                     """, (k, v))
                 conn.commit()
                 
-                # 3. 判斷是否執行測試
                 should_test = (request.form.get('test_connection') == 'on') or (action == 'test_email')
 
                 if should_test:
                     try:
                         app_obj = current_app._get_current_object()
-                        result_msg = send_daily_report(app_obj, manual_config=new_config, is_test=True)
+                        # 測試信同樣傳入目前人員資訊
+                        result_msg = send_daily_report(
+                            app_obj, 
+                            manual_config=new_config, 
+                            is_test=True,
+                            operator_name=session.get('username'),
+                            operator_role=session.get('role')
+                        )
                         
                         if "✅" in result_msg:
                             msg = f"✅ 設定已儲存 / {result_msg}"
@@ -133,13 +128,30 @@ def admin_panel():
             
             return redirect(url_for('admin.admin_panel', msg=msg))
 
-        # --- 功能 2: 手動觸發日結報表 (背景執行) ---
+        # --- 功能 2: 手動觸發日結報表 (修正後的人員邏輯) ---
         elif action == 'send_report_now':
             try:
                 app_obj = current_app._get_current_object()
-                threading.Thread(target=send_daily_report, args=(app_obj,), kwargs={'is_test': False}).start()
-                msg = "🚀 報表正在背景發送中，請稍候檢查信箱"
+                
+                # 💡 關鍵修正：在啟動 Thread 之前，先從當前的 Request 中抓取 Session 姓名
+                # 這樣背景執行緒 (Thread) 就能直接拿到名字，不需要再去翻 Session
+                current_user = session.get('username', '未知管理員')
+                current_role = session.get('role', 'admin')
+
+                # 將姓名與角色透過 kwargs 傳入 send_daily_report
+                threading.Thread(
+                    target=send_daily_report, 
+                    args=(app_obj,), 
+                    kwargs={
+                        'is_test': False, 
+                        'operator_name': current_user, 
+                        'operator_role': current_role
+                    }
+                ).start()
+                
+                msg = f"🚀 報表正在背景發送中 (發送者: {current_user})，請稍候檢查信箱"
             except Exception as e:
+                traceback.print_exc()
                 msg = f"❌ 無法啟動背景任務: {e}"
             
             cur.close(); conn.close()
@@ -148,7 +160,6 @@ def admin_panel():
         # --- 功能 3: 新增產品 ---
         elif action == 'add_product':
             try:
-                # 包含所有多語系欄位
                 cur.execute("""
                     INSERT INTO products (
                         name, price, category, print_category, image_url, sort_order,
@@ -174,22 +185,18 @@ def admin_panel():
 
     # --- GET: 讀取資料顯示頁面 ---
     try:
-        # 讀取設定檔
         cur.execute("SELECT key, value FROM settings")
         settings_rows = cur.fetchall()
-        config = {row[0]: row[1] for row in settings_rows} # 轉為 Dictionary
+        config = {row[0]: row[1] for row in settings_rows} 
         
-        # 轉換資料型態，確保模板中的 if 判斷正確
         toggle_keys = ['shop_open', 'enable_delivery', 'delivery_enabled']
         for key in toggle_keys:
-            val = config.get(key, '0') # 預設為 '0'
+            val = config.get(key, '0') 
             config[key] = 1 if val == '1' else 0
 
-        # 確保 enable_delivery 與 delivery_enabled 狀態一致
         if 'enable_delivery' not in config:
             config['enable_delivery'] = config.get('delivery_enabled', 0)
         
-        # 外送參數預設值
         config.setdefault('delivery_min_price', '0')
         config.setdefault('delivery_fee_base', '0')
         config.setdefault('delivery_max_km', '5')
@@ -209,11 +216,11 @@ def admin_panel():
 
 
 # ==========================================
-# [關鍵] 外送詳細設定 (表單提交)
+# 外送詳細設定 (表單提交)
 # ==========================================
 @admin_bp.route('/settings/delivery', methods=['POST'])
 @login_required
-@role_required('admin')  # 🛡️ 只有管理員可以修改外送費
+@role_required('admin')  
 def update_delivery_settings():
     conn = get_db_connection()
     cur = conn.cursor()
@@ -252,8 +259,8 @@ def update_delivery_settings():
 # 通用設定切換路由 (AJAX) - 開關店、開關外送
 # ==========================================
 @admin_bp.route('/toggle_config', methods=['POST'])
-@login_required          # 🛡️ 補上登入驗證
-@role_required('admin')  # 🛡️ 只有管理員可以開關店
+@login_required          
+@role_required('admin')  
 def toggle_config():
     conn = get_db_connection()
     cur = conn.cursor()
@@ -298,7 +305,7 @@ def toggle_config():
 # ==========================================
 @admin_bp.route('/edit_product/<int:pid>', methods=['GET','POST'])
 @login_required
-@role_required('admin')  # 🛡️ 只有管理員可以編輯產品
+@role_required('admin')  
 def edit_product(pid):
     conn = get_db_connection()
     cur = conn.cursor()
@@ -416,7 +423,7 @@ def edit_product(pid):
 
 @admin_bp.route('/export_menu')
 @login_required
-@role_required('admin')  # 🛡️ 只有管理員可以匯出資料
+@role_required('admin')  
 def export_menu():
     try:
         conn = get_db_connection()
@@ -438,8 +445,8 @@ def export_menu():
          return redirect(url_for('admin.admin_panel', msg=f"❌ 匯出失敗: {e}"))
 
 @admin_bp.route('/import_menu', methods=['POST'])
-@login_required          # 🛡️ 補上登入驗證
-@role_required('admin')  # 🛡️ 危險動作：覆寫菜單
+@login_required          
+@role_required('admin')  
 def import_menu():
     try:
         file = request.files.get('menu_file')
@@ -498,7 +505,7 @@ def import_menu():
 
 @admin_bp.route('/reset_menu')
 @login_required
-@role_required('admin')  # 🛡️ 危險動作：清空菜單
+@role_required('admin')  
 def reset_menu():
     conn = get_db_connection(); cur = conn.cursor()
     cur.execute("TRUNCATE TABLE products RESTART IDENTITY CASCADE")
@@ -507,7 +514,7 @@ def reset_menu():
 
 @admin_bp.route('/reset_orders', methods=['POST'])
 @login_required
-@role_required('admin')  # 🛡️ 危險動作：清空訂單
+@role_required('admin')  
 def reset_orders():
     conn = get_db_connection()
     cur = conn.cursor()
@@ -553,7 +560,7 @@ def reset_orders():
 
 @admin_bp.route('/toggle_product/<int:pid>', methods=['POST'])
 @login_required
-@role_required('admin')  # 🛡️ 只有管理員可以下架商品
+@role_required('admin')  
 def toggle_product(pid):
     conn = get_db_connection()
     try:
@@ -575,8 +582,8 @@ def toggle_product(pid):
         if 'conn' in locals(): conn.close()
 
 @admin_bp.route('/delete_product/<int:pid>')
-@login_required          # 🛡️ 補上登入驗證
-@role_required('admin')  # 🛡️ 危險動作：刪除商品
+@login_required          
+@role_required('admin')  
 def delete_product(pid):
     conn = get_db_connection(); cur = conn.cursor()
     cur.execute("DELETE FROM products WHERE id = %s", (pid,))
@@ -584,8 +591,8 @@ def delete_product(pid):
     return redirect(url_for('admin.admin_panel', msg="🗑️ 產品已刪除"))
 
 @admin_bp.route('/reorder_products', methods=['POST'])
-@login_required          # 🛡️ 補上登入驗證
-@role_required('admin')  # 🛡️ 只有管理員可以調整排序
+@login_required          
+@role_required('admin')  
 def reorder_products():
     data = request.json
     conn = get_db_connection(); cur = conn.cursor()
