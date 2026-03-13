@@ -174,40 +174,56 @@ def send_daily_report(app, manual_config=None, is_test=False, operator_name=None
             if conn: conn.close()
 
 # ==========================================
-# 2. 背景任務
+# 2. 背景維護工作 (Aiven DB 連線優化版)
 # ==========================================
 def run_maintenance_tasks(app):
-    time.sleep(10)
-    print("🚀 背景維護執行緒啟動")
+    print("⏳ 背景任務等待啟動中 (Wait 30s)...")
+    time.sleep(30)
+    print("🚀 背景維護執行緒已正式啟動")
+    
     last_sent_time = ""
     next_ping_time = datetime.now()
 
     while True:
         try:
             now_obj = datetime.now()
+            now_str = now_obj.strftime("%H:%M:%S")
+
+            # --- A. 自動發信檢查 ---
             tw_time = datetime.utcnow() + timedelta(hours=8)
             current_hm = tw_time.strftime("%H:%M")
+            target_times = ["13:00", "18:00", "20:30"]
             
-            # 檢查發信時間點
-            if current_hm in ["13:00", "18:00", "20:30", "15:15"] and current_hm != last_sent_time:
-                print(f"⏰ 到達發信時間 {current_hm}，啟動任務...")
+            if current_hm in target_times and current_hm != last_sent_time:
+                print(f"[{current_hm}] ⏰ 執行自動發信...")
                 send_daily_report(app)
                 last_sent_time = current_hm
 
-            # 每 5 分鐘保活
+            # --- B. 防休眠 Ping (Web + Aiven DB) ---
             if now_obj >= next_ping_time:
+                # 1. Ping 網站
                 try:
-                    urllib.request.urlopen("https://ding-dong-tipi.onrender.com", timeout=5)
+                    urllib.request.urlopen("https://qr-mbdv.onrender.com", timeout=5)
+                    print(f"[{now_str}] ✅ Web Ping 成功")
+                except Exception: 
+                    print(f"[{now_str}] ⚠️ Web Ping 失敗: {e}")
+                
+                # 2. Ping Aiven 資料庫 (發送真實指令維持連線)
+                try:
                     conn = get_db_connection()
                     with conn.cursor() as cur:
-                        cur.execute("SELECT 1;")
+                        cur.execute("SELECT 1;") # Aiven 需要實際 Query 才能保活
+                        cur.fetchone()
                     conn.close()
-                except: pass
+                    print(f"[{now_str}] 💓 Aiven DB Heartbeat 成功 (SELECT 1)")
+                except Exception as e: 
+                    print(f"[{now_str}] ⚠️ DB Heartbeat 失敗: {e}")
+                
                 next_ping_time = now_obj + timedelta(seconds=300)
 
-            time.sleep(30)
+            time.sleep(30) # 縮短掃描間隔，確保不漏掉 target_times
         except Exception as e:
-            print(f"⚠️ 背景迴圈異常: {e}")
+            print(f"⚠️ 背景任務主要迴圈錯誤: {e}")
             time.sleep(60)
 
 def start_background_tasks(app):
@@ -215,7 +231,7 @@ def start_background_tasks(app):
     t.start()
 
 # ==========================================
-# 3. Context Processor
+# 3. 👤 自動注入登入資訊 (Context Processor)
 # ==========================================
 def inject_user_info():
     current_username = session.get('username')
@@ -229,6 +245,7 @@ def inject_user_info():
         'current_role': session.get('role', '未知角色'),
         'logout_url': logout_url
     }
+
 
 
 
