@@ -189,7 +189,7 @@ def run_maintenance_tasks(app):
             current_hm = tw_time.strftime("%H:%M")
             
             # 檢查發信時間點
-            if current_hm in ["13:00", "18:00", "20:30", "14:40"] and current_hm != last_sent_time:
+            if current_hm in ["13:00", "18:00", "20:30", "15:15"] and current_hm != last_sent_time:
                 print(f"⏰ 到達發信時間 {current_hm}，啟動任務...")
                 send_daily_report(app)
                 last_sent_time = current_hm
@@ -229,6 +229,7 @@ def inject_user_info():
         'current_role': session.get('role', '未知角色'),
         'logout_url': logout_url
     }
+
 
 
 
