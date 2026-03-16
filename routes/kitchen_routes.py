@@ -1,6 +1,7 @@
 from flask import Blueprint, render_template, request, jsonify, render_template_string, redirect, url_for, session
 import json
 import base64  
+import psycopg2.extras
 import traceback  
 import bcrypt  # 💡 新增：引入 bcrypt 用來驗證密碼
 #引入綠界發票api
@@ -591,8 +592,8 @@ def print_order(oid):
 def complete_order(oid):
     try:
         c = get_db_connection()
-        # 使用 DictCursor 方便透過 key 存取 (例如 order['tax_id'])
-        cur = c.cursor(dictionary=True) 
+        # 🛠️ 修正這裡：使用 psycopg2 的 RealDictCursor 取代 dictionary=True
+        cur = c.cursor(cursor_factory=psycopg2.extras.RealDictCursor) 
 
         # 1. 取得訂單詳細資訊
         cur.execute("SELECT * FROM orders WHERE id=%s", (oid,))
@@ -643,7 +644,8 @@ def complete_order(oid):
 def cancel_order(oid):
     try:
         c = get_db_connection()
-        cur = c.cursor(dictionary=True)
+        # 🛠️ 修正這裡：使用 psycopg2 的 RealDictCursor 取代 dictionary=True
+        cur = c.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
         # 1. 先取得訂單資訊
         cur.execute("SELECT * FROM orders WHERE id=%s", (oid,))
