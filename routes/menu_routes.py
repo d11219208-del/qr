@@ -107,9 +107,11 @@ def process_order_submission(request, order_type_override=None):
         # --- C. 處理編輯模式：抓取舊訂單資料作為後備 (Backfill) ---
         db_old_data = {}
         if old_order_id:
+            # 🟢 修改點 1：讀取舊訂單資料時，一併讀取發票資訊 (tax_id, carrier_type, carrier_num)
             cur.execute("""
                 SELECT lang, order_type, delivery_info, delivery_fee, 
-                       customer_name, customer_phone, customer_address, scheduled_for, table_number
+                       customer_name, customer_phone, customer_address, scheduled_for, table_number,
+                       tax_id, carrier_type, carrier_num
                 FROM orders WHERE id=%s
             """, (old_order_id,))
             row = cur.fetchone()
@@ -124,9 +126,17 @@ def process_order_submission(request, order_type_override=None):
                     'customer_phone': row[5],
                     'customer_address': row[6],
                     'scheduled_for': row[7],
-                    'table_number': row[8]
+                    'table_number': row[8],
+                    'tax_id': row[9],
+                    'carrier_type': row[10],
+                    'carrier_num': row[11]
                 }
                 final_lang = db_old_data['lang'] # 保持語系一致
+
+        # 🟢 修改點 2：接收前端傳來的發票與載具資訊 (優先取表單，若無則取舊訂單)
+        tax_id = request.form.get('tax_id') or db_old_data.get('tax_id') or ''
+        carrier_type = request.form.get('carrier_type') or db_old_data.get('carrier_type') or ''
+        carrier_num = request.form.get('carrier_num') or db_old_data.get('carrier_num') or ''
 
         # --- D. 處理外送與客戶資訊 (優先級：Form > Session > DB Old Order) ---
         sess_data = session.get('delivery_data', {})
@@ -232,27 +242,31 @@ def process_order_submission(request, order_type_override=None):
         # --- F. 寫入資料庫 (使用 LOCK 防止流水號衝突) ---
         cur.execute("LOCK TABLE orders IN SHARE ROW EXCLUSIVE MODE")
 
+        # 🟢 修改點 3：在 INSERT INTO 語法中加入 tax_id, carrier_type, carrier_num 欄位與變數
         cur.execute("""
             INSERT INTO orders (
                 table_number, items, total_price, lang, 
                 daily_seq, 
                 content_json, need_receipt, created_at,
                 order_type, delivery_info, delivery_fee,
-                customer_name, customer_phone, customer_address, scheduled_for
+                customer_name, customer_phone, customer_address, scheduled_for,
+                tax_id, carrier_type, carrier_num
             )
             VALUES (
                 %s, %s, %s, %s, 
                 (SELECT COALESCE(MAX(daily_seq), 0) + 1 FROM orders WHERE created_at >= CURRENT_DATE), 
                 %s, %s, NOW(),
                 %s, %s, %s,
-                %s, %s, %s, %s
+                %s, %s, %s, %s,
+                %s, %s, %s
             )
             RETURNING id, daily_seq
         """, (
             table_number, items_str, total_price, final_lang, 
             cart_json, need_receipt, 
             order_type, delivery_info_json_str, delivery_fee,
-            customer_name, customer_phone, customer_address, scheduled_for
+            customer_name, customer_phone, customer_address, scheduled_for,
+            tax_id, carrier_type, carrier_num
         ))
 
         res = cur.fetchone()
@@ -397,11 +411,12 @@ def order_success():
     # ==========================================
     # 1. 讀取訂單詳細資料
     # ==========================================
+    # 🟢 修改點 4：讀取資料庫時，加入 tax_id, carrier_type, carrier_num 欄位
     cur.execute("""
         SELECT daily_seq, content_json, total_price, created_at, 
                order_type, delivery_info, delivery_fee,
                customer_name, customer_phone, customer_address, scheduled_for,
-               table_number
+               table_number, tax_id, carrier_type, carrier_num
         FROM orders WHERE id=%s
     """, (oid,))
     row = cur.fetchone()
@@ -438,7 +453,8 @@ def order_success():
     # ==========================================
     # 3. 解構訂單資料與邏輯判斷
     # ==========================================
-    seq, json_str, total, created_at, order_type, delivery_info_json, delivery_fee, c_name, c_phone, c_addr, c_time, table_num_db = row
+    # 🟢 修改點 5：解構變數時加上發票相關的變數
+    seq, json_str, total, created_at, order_type, delivery_info_json, delivery_fee, c_name, c_phone, c_addr, c_time, table_num_db, tax_id, carrier_type, carrier_num = row
     
     # 判斷是否為外送 (根據 type 欄位或 table_number 是否為 '外送')
     type_is_delivery = (str(order_type or '').strip().lower() == 'delivery')
@@ -495,7 +511,7 @@ def order_success():
         return opt_str
 
     # ==========================================
-    # 5. 生成動態 HTML 內容 (商品列表、外送資訊)
+    # 5. 生成動態 HTML 內容 (商品列表、外送、發票資訊)
     # ==========================================
     items = json.loads(json_str) if json_str else []
     items_html = ""
@@ -565,6 +581,19 @@ def order_success():
     else:
         status_msg = t.get('pay_at_counter', '請至櫃檯結帳')
         wait_msg = t.get('kitchen_prep', 'Kitchen is preparing your meal.<br>廚房正在為您準備餐點。')
+
+    # 🟢 修改點 6：建立發票資訊的 HTML 區塊 (如果客人有填寫發票資訊才顯示)
+    invoice_html = ""
+    if tax_id or carrier_type:
+        c_type_name = "綠界會員載具" if carrier_type == '1' else ("自然人憑證" if carrier_type == '2' else ("手機條碼" if carrier_type == '3' else "無"))
+        invoice_html = f"""
+        <div class="delivery-box" style="background: #F3F4F6; border-color: #D1D5DB; color: #374151;">
+            <h4 style="color: #374151; border-bottom-color: #D1D5DB;">🧾 發票資訊 / Invoice Info</h4>
+            {f'<div class="d-info-row"><b>統一編號:</b> {tax_id}</div>' if tax_id else ''}
+            {f'<div class="d-info-row"><b>載具類別:</b> {c_type_name}</div>' if carrier_type else ''}
+            {f'<div class="d-info-row"><b>載具條碼:</b> {carrier_num}</div>' if carrier_num else ''}
+        </div>
+        """
 
     # 時間轉換 (加 8 小時轉為台灣時間)
     tw_time = created_at + timedelta(hours=8)
@@ -755,6 +784,8 @@ def order_success():
                 </div>
 
                 {delivery_html}
+                
+                {invoice_html}
 
                 <div class="details-area">
                     <h3 class="details-title">🧾 {t.get('order_details', '訂單明細')}</h3>
