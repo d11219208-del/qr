@@ -322,18 +322,132 @@
     </div>
     {% endif %}
 
-    <div class="invoice-section" style="padding: 12px; margin: 10px 12px; background: #f8fafc; border-radius: 8px; border: 1px solid #e2e8f0;">
+   <div class="invoice-section" style="padding: 12px; margin: 10px 12px; background: #f8fafc; border-radius: 8px; border: 1px solid #e2e8f0;">
         <div style="font-weight: bold; margin-bottom: 4px; color: #334155;">🧾 發票資訊 (Invoice)</div>
         <div style="font-size: 0.85em; color: #64748b; margin-bottom: 10px;">未填寫統編將自動為您開立「個人發票」</div>
         
         <span class="input-label" style="color:#334155; display:block; margin-bottom:4px; font-size: 0.9em;">統一編號 (Tax ID - 選填)</span>
         <input type="text" id="tax_id" class="modern-input" placeholder="請輸入 8 碼數字" maxlength="8" 
-               style="background:white; border-color:#cbd5e1; padding:8px 10px; width: 100%; box-sizing: border-box;" 
+               style="background:white; border-color:#cbd5e1; padding:8px 10px; width: 100%; box-sizing: border-box; margin-bottom: 10px;" 
                onblur="validateTaxId()">
-        <div id="tax_id_error" style="color: #ef4444; font-size: 0.85em; margin-top: 6px; display: none;">
+        <div id="tax_id_error" style="color: #ef4444; font-size: 0.85em; margin-top: -6px; margin-bottom: 10px; display: none;">
             ❌ 統編格式錯誤或無效，請重新確認 (Invalid Tax ID)
         </div>
+
+        <span class="input-label" style="color:#334155; display:block; margin-bottom:4px; font-size: 0.9em;">發票載具 (Carrier - 選填)</span>
+        <select id="carrier_type" class="modern-input" style="background:white; border-color:#cbd5e1; padding:8px 10px; width: 100%; box-sizing: border-box; margin-bottom: 10px;" onchange="toggleCarrierInput()">
+            <option value="">不使用載具 (印出紙本/預設)</option>
+            <option value="3">手機條碼 (Mobile Barcode)</option>
+            <option value="2">自然人憑證 (Citizen Digital Cert.)</option>
+            </select>
+
+        <div id="carrier_num_container" style="display: none;">
+            <span class="input-label" style="color:#334155; display:block; margin-bottom:4px; font-size: 0.9em;">載具號碼 (Carrier Number)</span>
+            <input type="text" id="carrier_num" class="modern-input" placeholder="例如: /AB12345" 
+                   style="background:white; border-color:#cbd5e1; padding:8px 10px; width: 100%; box-sizing: border-box;"
+                   onblur="validateCarrierNum()" oninput="this.value = this.value.toUpperCase()">
+            <div id="carrier_error" style="color: #ef4444; font-size: 0.85em; margin-top: 6px; display: none;">
+                ❌ 載具格式錯誤 (Invalid Carrier Number)
+            </div>
+        </div>
     </div>
+
+    <script>
+        // 統編驗證 (保留你原有的邏輯)
+        function validateTaxId() {
+            const input = document.getElementById('tax_id');
+            const errorDiv = document.getElementById('tax_id_error');
+            const taxId = input.value.trim();
+            
+            if (taxId === '') {
+                input.style.borderColor = '#cbd5e1';
+                errorDiv.style.display = 'none';
+                return true;
+            }
+
+            const regex = /^\d{8}$/;
+            if (!regex.test(taxId)) {
+                showError(input, errorDiv);
+                return false;
+            }
+
+            const multiplier = [1, 2, 1, 2, 1, 2, 4, 1];
+            let sum = 0;
+            for (let i = 0; i < 8; i++) {
+                let product = parseInt(taxId.charAt(i), 10) * multiplier[i];
+                sum += Math.floor(product / 10) + (product % 10);
+            }
+
+            let isValid = (sum % 10 === 0) || (taxId.charAt(6) === '7' && (sum + 1) % 10 === 0);
+
+            if (!isValid) {
+                showError(input, errorDiv);
+                return false;
+            } else {
+                input.style.borderColor = '#10b981'; 
+                errorDiv.style.display = 'none';
+                return true;
+            }
+        }
+
+        // 切換顯示載具輸入框
+        function toggleCarrierInput() {
+            const type = document.getElementById('carrier_type').value;
+            const container = document.getElementById('carrier_num_container');
+            const input = document.getElementById('carrier_num');
+            const errorDiv = document.getElementById('carrier_error');
+
+            if (type !== '') {
+                container.style.display = 'block';
+                // 切換時更改 placeholder 提示
+                input.placeholder = type === '3' ? "例如: /AB12345" : "例如: AB12345678901234";
+            } else {
+                container.style.display = 'none';
+                input.value = ''; // 清空號碼
+                input.style.borderColor = '#cbd5e1';
+                errorDiv.style.display = 'none';
+            }
+        }
+
+        // 載具格式驗證
+        function validateCarrierNum() {
+            const type = document.getElementById('carrier_type').value;
+            const input = document.getElementById('carrier_num');
+            const errorDiv = document.getElementById('carrier_error');
+            const num = input.value.trim();
+
+            if (num === '' || type === '') {
+                 input.style.borderColor = '#cbd5e1';
+                 errorDiv.style.display = 'none';
+                 return true;
+            }
+
+            let isValid = true;
+            if (type === '3') {
+                // 手機條碼: 第一碼為 /，後接7碼大寫英文、數字或特殊符號(+ - .)
+                const regex = /^\/[0-9A-Z.+\-]{7}$/;
+                isValid = regex.test(num);
+            } else if (type === '2') {
+                // 自然人憑證: 2碼大寫英文 + 14碼數字
+                const regex = /^[A-Z]{2}\d{14}$/;
+                isValid = regex.test(num);
+            }
+
+            if (!isValid) {
+                showError(input, errorDiv);
+                return false;
+            } else {
+                input.style.borderColor = '#10b981';
+                errorDiv.style.display = 'none';
+                return true;
+            }
+        }
+
+        function showError(input, errorDiv) {
+            input.style.borderColor = '#ef4444';
+            errorDiv.style.display = 'block';
+        }
+    </script>
 
     <script>
         function validateTaxId() {
