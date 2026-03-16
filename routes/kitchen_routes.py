@@ -3,7 +3,8 @@ import json
 import base64  
 import traceback  
 import bcrypt  # 💡 新增：引入 bcrypt 用來驗證密碼
-
+#引入綠界發票api
+from utils.ecpay_invoice import issue_ecpay_invoice, invalid_ecpay_invoice
 # 🛡️ 引入我們在 utils.py 寫好的雙重防護罩
 from utils import login_required, role_required
 from datetime import datetime, timedelta
@@ -584,32 +585,111 @@ def print_order(oid):
 
         
 # --- 4. 狀態變更 (完成/作廢) ---
+
 @kitchen_bp.route('/complete/<int:oid>')
 @login_required          # 🛡️ 防護 1：必須登入
 def complete_order(oid):
     try:
-        c=get_db_connection(); cur=c.cursor()
-        cur.execute("UPDATE orders SET status='Completed' WHERE id=%s",(oid,))
-        c.commit(); c.close(); 
+        c = get_db_connection()
+        # 使用 DictCursor 方便透過 key 存取 (例如 order['tax_id'])
+        cur = c.cursor(dictionary=True) 
+
+        # 1. 取得訂單詳細資訊
+        cur.execute("SELECT * FROM orders WHERE id=%s", (oid,))
+        order = cur.fetchone()
+
+        if not order:
+            return "Order not found", 404
+
+        # 2. 更新訂單狀態為 Completed
+        cur.execute("UPDATE orders SET status='Completed' WHERE id=%s", (oid,))
+        c.commit()
+
+        # 3. 觸發綠界開立發票 (僅限發票尚未開立的情況)
+        if order.get('invoice_status') in ['Not Issued', None]:
+            try:
+                # 傳入訂單資料 (此時 order 字典內已包含 tax_id, carrier_type 等欄位)
+                invoice_res = issue_ecpay_invoice(order)
+                
+                if invoice_res.get('success'):
+                    # 取得綠界回傳的發票號碼
+                    invoice_no = invoice_res.get('invoice_no')
+                    print(f"[{get_current_time_str()}] 🧾 發票開立成功: {invoice_no}")
+                    
+                    # 📝 將發票號碼存回資料庫，並將狀態改為 'Issued'
+                    cur.execute("""
+                        UPDATE orders 
+                        SET invoice_number=%s, invoice_status='Issued' 
+                        WHERE id=%s
+                    """, (invoice_no, oid))
+                    c.commit()
+                else:
+                    print(f"[{get_current_time_str()}] ⚠️ 發票開立失敗: {invoice_res.get('message')}")
+                    
+            except Exception as invoice_e:
+                print(f"[{get_current_time_str()}] ❌ 發票系統例外錯誤: {invoice_e}")
+
+        c.close() 
         print(f"[{get_current_time_str()}] ✅ 訂單完成: ID {oid}")
         return "OK"
+
     except Exception as e:
         print(f"Error completing order: {e}")
         return "Error", 500
 
+
 @kitchen_bp.route('/cancel/<int:oid>')
+@login_required
 def cancel_order(oid):
     try:
-        c=get_db_connection(); cur=c.cursor()
-        cur.execute("UPDATE orders SET status='Cancelled' WHERE id=%s",(oid,))
-        c.commit(); c.close(); 
+        c = get_db_connection()
+        cur = c.cursor(dictionary=True)
+
+        # 1. 先取得訂單資訊
+        cur.execute("SELECT * FROM orders WHERE id=%s", (oid,))
+        order = cur.fetchone()
+
+        if not order:
+            return "Order not found", 404
+
+        # 2. 更新訂單狀態為 Cancelled
+        cur.execute("UPDATE orders SET status='Cancelled' WHERE id=%s", (oid,))
+        c.commit()
+
+        # 3. 觸發綠界發票作廢
+        invoice_no = order.get('invoice_number') 
+        invoice_status = order.get('invoice_status')
+        
+        # 只有在「有發票號碼」且「發票狀態為已開立(Issued)」時才呼叫作廢 API
+        if invoice_no and invoice_status == 'Issued':
+            try:
+                void_res = invalid_ecpay_invoice(invoice_no, f"訂單 {oid} 取消作廢")
+                
+                if void_res.get('success'):
+                    print(f"[{get_current_time_str()}] 🗑️ 發票作廢成功: {invoice_no}")
+                    
+                    # 📝 更新資料庫的發票狀態為 'Void' (已作廢)
+                    cur.execute("""
+                        UPDATE orders 
+                        SET invoice_status='Void' 
+                        WHERE id=%s
+                    """, (oid,))
+                    c.commit()
+                else:
+                    print(f"[{get_current_time_str()}] ⚠️ 發票作廢失敗: {void_res.get('message')}")
+                    
+            except Exception as void_e:
+                print(f"[{get_current_time_str()}] ❌ 發票作廢系統例外錯誤: {void_e}")
+
+        c.close() 
         print(f"[{get_current_time_str()}] 🗑️ 訂單作廢: ID {oid}")
         return "OK"
+
     except Exception as e:
         print(f"Error cancelling order: {e}")
         return "Error", 500
 
-
+        
 # --- 5. 銷售排名 API ---
 @kitchen_bp.route('/sales_ranking')
 @login_required          # 🛡️ 防護 1：必須登入
@@ -972,6 +1052,7 @@ def daily_report():
     </body>
     </html>
     """
+
 
 
 
