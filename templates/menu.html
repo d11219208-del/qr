@@ -322,6 +322,73 @@
     </div>
     {% endif %}
 
+    <div class="invoice-section" style="padding: 12px; margin: 10px 12px; background: #f8fafc; border-radius: 8px; border: 1px solid #e2e8f0;">
+        <div style="font-weight: bold; margin-bottom: 4px; color: #334155;">🧾 發票資訊 (Invoice)</div>
+        <div style="font-size: 0.85em; color: #64748b; margin-bottom: 10px;">未填寫統編將自動為您開立「個人發票」</div>
+        
+        <span class="input-label" style="color:#334155; display:block; margin-bottom:4px; font-size: 0.9em;">統一編號 (Tax ID - 選填)</span>
+        <input type="text" id="tax_id" class="modern-input" placeholder="請輸入 8 碼數字" maxlength="8" 
+               style="background:white; border-color:#cbd5e1; padding:8px 10px; width: 100%; box-sizing: border-box;" 
+               onblur="validateTaxId()">
+        <div id="tax_id_error" style="color: #ef4444; font-size: 0.85em; margin-top: 6px; display: none;">
+            ❌ 統編格式錯誤或無效，請重新確認 (Invalid Tax ID)
+        </div>
+    </div>
+
+    <script>
+        function validateTaxId() {
+            const input = document.getElementById('tax_id');
+            const errorDiv = document.getElementById('tax_id_error');
+            const taxId = input.value.trim();
+            
+            // 1. 如果為空，視為個人發票，重置樣式並通過
+            if (taxId === '') {
+                input.style.borderColor = '#cbd5e1';
+                errorDiv.style.display = 'none';
+                return true;
+            }
+
+            // 2. 檢查是否為 8 碼純數字
+            const regex = /^\d{8}$/;
+            if (!regex.test(taxId)) {
+                showTaxError(input, errorDiv);
+                return false;
+            }
+
+            // 3. 執行台灣統一編號 Checksum 驗證演算法
+            const multiplier = [1, 2, 1, 2, 1, 2, 4, 1];
+            let sum = 0;
+
+            for (let i = 0; i < 8; i++) {
+                let product = parseInt(taxId.charAt(i), 10) * multiplier[i];
+                sum += Math.floor(product / 10) + (product % 10);
+            }
+
+            let isValid = false;
+            if (sum % 10 === 0) {
+                isValid = true;
+            } else if (taxId.charAt(6) === '7' && (sum + 1) % 10 === 0) {
+                // 如果第7碼是7，且 sum+1 的個位數為0也算合法
+                isValid = true;
+            }
+
+            // 4. 驗證結果處理
+            if (!isValid) {
+                showTaxError(input, errorDiv);
+                return false;
+            } else {
+                input.style.borderColor = '#10b981'; // 驗證成功顯示綠色邊框
+                errorDiv.style.display = 'none';
+                return true;
+            }
+        }
+
+        function showTaxError(input, errorDiv) {
+            input.style.borderColor = '#ef4444'; // 驗證失敗顯示紅色邊框
+            errorDiv.style.display = 'block';
+        }
+    </script>
+
     <div id="list"></div>
 
     <form id="order-form" method="POST" action="/menu">
