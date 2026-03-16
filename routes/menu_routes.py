@@ -3,7 +3,7 @@ from flask import Blueprint, render_template, request, jsonify, redirect, url_fo
 from database import get_db_connection
 from translations import load_translations
 from datetime import timedelta, datetime
-import json 
+import json
 import traceback
 
 menu_bp = Blueprint('menu', __name__)
@@ -107,7 +107,7 @@ def process_order_submission(request, order_type_override=None):
         # --- C. 處理編輯模式：抓取舊訂單資料作為後備 (Backfill) ---
         db_old_data = {}
         if old_order_id:
-            # 🟢 修改點 1：讀取舊訂單資料時，一併讀取發票資訊 (tax_id, carrier_type, carrier_num)
+            # 讀取舊訂單資料時，一併讀取發票資訊
             cur.execute("""
                 SELECT lang, order_type, delivery_info, delivery_fee, 
                        customer_name, customer_phone, customer_address, scheduled_for, table_number,
@@ -116,7 +116,6 @@ def process_order_submission(request, order_type_override=None):
             """, (old_order_id,))
             row = cur.fetchone()
             if row:
-                # 將舊資料轉為字典方便後續呼叫
                 db_old_data = {
                     'lang': row[0],
                     'order_type': row[1],
@@ -131,9 +130,9 @@ def process_order_submission(request, order_type_override=None):
                     'carrier_type': row[10],
                     'carrier_num': row[11]
                 }
-                final_lang = db_old_data['lang'] # 保持語系一致
+                final_lang = db_old_data['lang']
 
-        # 🟢 修改點 2：接收前端傳來的發票與載具資訊 (優先取表單，若無則取舊訂單)
+        # 接收前端傳來的發票與載具資訊 (優先取表單，若無則取舊訂單)
         tax_id = request.form.get('tax_id') or db_old_data.get('tax_id') or ''
         carrier_type = request.form.get('carrier_type') or db_old_data.get('carrier_type') or ''
         carrier_num = request.form.get('carrier_num') or db_old_data.get('carrier_num') or ''
@@ -169,7 +168,7 @@ def process_order_submission(request, order_type_override=None):
         if should_process_as_delivery:
             order_type = 'delivery'
             
-            # 運費計算 (Form > Session > DB Old Order)
+            # 運費計算
             sess_fee = sess_info.get('shipping_fee')
             form_fee = request.form.get('delivery_fee')
             
@@ -182,8 +181,6 @@ def process_order_submission(request, order_type_override=None):
             else:
                 delivery_fee = 0
 
-            # 建立外送資訊 JSON
-            # 如果是編輯且沒有新 Session 資料，則嘗試解析舊的 delivery_info JSON
             old_delivery_info = {}
             if db_old_data.get('delivery_info'):
                 try:
@@ -203,13 +200,11 @@ def process_order_submission(request, order_type_override=None):
             delivery_info_json_str = json.dumps(delivery_info_dict, ensure_ascii=False)
             table_number = "外送"
         else:
-            # 內用 / 外帶
             delivery_fee = 0
             if raw_table_number and raw_table_number.strip():
                 table_number = raw_table_number
                 order_type = 'dine_in'
             elif db_old_data.get('table_number') and db_old_data['table_number'] not in ["外送", "外帶"]:
-                # 如果是編輯中且沒填桌號，沿用舊桌號
                 table_number = db_old_data['table_number']
                 order_type = 'dine_in'
             else:
@@ -239,10 +234,10 @@ def process_order_submission(request, order_type_override=None):
         items_str = " + ".join(display_list)
         total_price += delivery_fee
 
-        # --- F. 寫入資料庫 (使用 LOCK 防止流水號衝突) ---
+        # --- F. 寫入資料庫 ---
         cur.execute("LOCK TABLE orders IN SHARE ROW EXCLUSIVE MODE")
 
-        # 🟢 修改點 3：在 INSERT INTO 語法中加入 tax_id, carrier_type, carrier_num 欄位與變數
+        # 寫入包含 tax_id, carrier_type, carrier_num 的資料
         cur.execute("""
             INSERT INTO orders (
                 table_number, items, total_price, lang, 
@@ -272,13 +267,11 @@ def process_order_submission(request, order_type_override=None):
         res = cur.fetchone()
         oid = res[0]
         
-        # 如果是修改舊單，將舊單標記為取消
         if old_order_id:
             cur.execute("UPDATE orders SET status='Cancelled' WHERE id=%s", (old_order_id,))
         
         conn.commit()
         
-        # 如果是修改訂單的 pop-up 視窗
         if old_order_id: 
             return f"<script>localStorage.removeItem('cart_cache'); alert('訂單已更新'); if(window.opener) window.opener.location.reload(); window.close();</script>"
         
@@ -303,18 +296,15 @@ def process_order_submission(request, order_type_override=None):
 def index():
     table_num = request.args.get('table', '')
     
-    # 讀取設定：判斷是否營業、是否開啟外送
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute("SELECT key, value FROM settings WHERE key IN ('shop_open', 'delivery_enabled')")
     settings = dict(cur.fetchall())
     conn.close()
     
-    # 預設為 '1' (開啟)
     shop_open = settings.get('shop_open', '1') == '1'
     delivery_enabled = settings.get('delivery_enabled', '1') == '1'
 
-    # 【更新】強制清除所有 Session，徹底避免舊資料與狀態混亂
     session.clear()
     
     return render_template('index.html', 
@@ -326,12 +316,9 @@ def index():
 # --- 內用/外帶 路由 ---
 @menu_bp.route('/menu', methods=['GET', 'POST'])
 def menu():
-    # 提交訂單
     if request.method == 'POST':
-        # 這裡傳入 'dine_in'，會觸發上述 process_order_submission 的修正邏輯
         return process_order_submission(request, order_type_override='dine_in')
 
-    # 顯示菜單
     display_lang = request.args.get('lang', 'zh')
     t_all = load_translations()
     t = t_all.get(display_lang, t_all['zh'])
@@ -341,7 +328,6 @@ def menu():
     preload_cart = "null" 
     order_lang = display_lang 
 
-    # 如果是編輯訂單模式
     if edit_oid:
         conn = get_db_connection()
         cur = conn.cursor()
@@ -366,14 +352,11 @@ def menu():
 # --- 外送 專用路由 ---
 @menu_bp.route('/delivery', methods=['GET', 'POST'])
 def delivery_menu():
-    # 提交訂單
     if request.method == 'POST':
         return process_order_submission(request, order_type_override='delivery')
     
     settings, products = get_menu_data()
     
-    # 【關鍵檢查】如果後台關閉了外送功能，將使用者導回首頁
-    # 檢查 settings 中的 'delivery_enabled'
     if settings.get('delivery_enabled', '1') != '1':
         return redirect(url_for('menu.index'))
 
@@ -381,7 +364,6 @@ def delivery_menu():
     t_all = load_translations()
     t = t_all.get(display_lang, t_all['zh'])
     
-    # 讀取 Session 中的資料 (由外送檢查頁面寫入)，確保傳給 HTML 回填表單
     session_delivery = session.get('delivery_data', {})
     
     return render_template('menu.html', 
@@ -396,12 +378,9 @@ def delivery_menu():
 # --- 下單成功頁面 ---
 @menu_bp.route('/success')
 def order_success():
-    # 取得 URL 參數
     oid = request.args.get('order_id')
     lang = request.args.get('lang', 'zh')
     
-    # 載入翻譯檔，預設使用中文
-    # (假設環境中已有 load_translations() 函式)
     translations = load_translations()
     t = translations.get(lang, translations['zh'])
     
@@ -409,9 +388,8 @@ def order_success():
     cur = conn.cursor()
     
     # ==========================================
-    # 1. 讀取訂單詳細資料
+    # 1. 讀取訂單詳細資料 (加入發票欄位)
     # ==========================================
-    # 🟢 修改點 4：讀取資料庫時，加入 tax_id, carrier_type, carrier_num 欄位
     cur.execute("""
         SELECT daily_seq, content_json, total_price, created_at, 
                order_type, delivery_info, delivery_fee,
@@ -422,7 +400,7 @@ def order_success():
     row = cur.fetchone()
     
     # ==========================================
-    # 2. 讀取所有產品的客製化選項 (建立動態翻譯字典)
+    # 2. 讀取所有產品的客製化選項
     # ==========================================
     cur.execute("""
         SELECT name, custom_options, custom_options_en, custom_options_jp, custom_options_kr 
@@ -432,7 +410,6 @@ def order_success():
     for p_row in cur.fetchall():
         p_name = p_row[0]
         
-        # 輔助函式：切分逗號字串，過濾空白
         def split_opts(opt_str):
             if not opt_str: return []
             return [o.strip() for o in opt_str.split(',') if o.strip()]
@@ -447,21 +424,15 @@ def order_success():
     cur.close()
     conn.close()
     
-    # 若找不到訂單則返回 404
     if not row: return "Order Not Found", 404
     
-    # ==========================================
-    # 3. 解構訂單資料與邏輯判斷
-    # ==========================================
-    # 🟢 修改點 5：解構變數時加上發票相關的變數
+    # 解構變數包含發票資訊
     seq, json_str, total, created_at, order_type, delivery_info_json, delivery_fee, c_name, c_phone, c_addr, c_time, table_num_db, tax_id, carrier_type, carrier_num = row
     
-    # 判斷是否為外送 (根據 type 欄位或 table_number 是否為 '外送')
     type_is_delivery = (str(order_type or '').strip().lower() == 'delivery')
     table_is_delivery = (str(table_num_db or '').strip() == '外送')
     is_delivery = type_is_delivery or table_is_delivery
     
-    # 解析外送資訊 JSON
     delivery_info_dict = {}
     if delivery_info_json:
         try:
@@ -469,13 +440,11 @@ def order_success():
         except:
             delivery_info_dict = {}
 
-    # 優先使用實體欄位資料，若無則降級讀取 JSON 內的資料
     d_name = c_name if c_name else delivery_info_dict.get('name', 'N/A')
     d_phone = c_phone if c_phone else delivery_info_dict.get('phone', 'N/A')
     d_addr = c_addr if c_addr else delivery_info_dict.get('address', 'N/A')
     d_note = delivery_info_dict.get('note', '')
     
-    # 處理預約時間顯示
     d_scheduled = ""
     if c_time:
         d_scheduled = str(c_time)
@@ -483,49 +452,32 @@ def order_success():
         d_scheduled = str(delivery_info_dict.get('scheduled_for'))
         
     if d_scheduled and len(d_scheduled) > 16:
-        d_scheduled = d_scheduled[:16] # 截斷秒數，只顯示到分
+        d_scheduled = d_scheduled[:16]
 
-    # ==========================================
-    # 4. 選項動態翻譯函式
-    # ==========================================
+    # 選項動態翻譯函式
     def translate_option(p_name, opt_str, target_lang):
-        # 若商品不在字典中，回傳原字串
         if p_name not in product_map:
             return opt_str
-        
         p_data = product_map[p_name]
         found_idx = -1
-        
-        # 尋找該選項在哪個語言列表中的索引位置
         for l in ['zh', 'en', 'jp', 'kr']:
             if opt_str in p_data[l]:
                 found_idx = p_data[l].index(opt_str)
                 break
-        
-        # 若有找到，嘗試去目標語言列表對應位置取值
         if found_idx != -1:
             target_list = p_data.get(target_lang, [])
             if found_idx < len(target_list):
                 return target_list[found_idx]
-                
         return opt_str
 
-    # ==========================================
-    # 5. 生成動態 HTML 內容 (商品列表、外送、發票資訊)
-    # ==========================================
     items = json.loads(json_str) if json_str else []
     items_html = ""
     
     for i in items:
-        # 計算單品總價
         row_total = int(float(i['unit_price'])) * int(float(i['qty']))
-        
-        # 取得基準的中文商品名稱 (用作查字典的 Key)
         name_zh = i.get('name_zh', i.get('name', 'Product'))
-        # 顯示用的商品名稱 (依據客人的語言)
         d_name_prod = i.get(f'name_{lang}', name_zh)
         
-        # 抓取選項並動態翻譯
         raw_ops = i.get(f'options_{lang}') or i.get('options_zh') or i.get('options') or []
         if isinstance(raw_ops, str):
             raw_ops = [raw_ops]
@@ -534,10 +486,8 @@ def order_success():
         for opt in raw_ops:
             translated_ops.append(translate_option(name_zh, str(opt).strip(), lang))
             
-        # 選項 HTML 組合
         opt_str = f"<div class='item-options'>└ {', '.join(translated_ops)}</div>" if translated_ops else ""
         
-        # 單個商品項目的 HTML
         items_html += f"""
         <div class="item-row">
             <div class="item-info">
@@ -548,13 +498,9 @@ def order_success():
         </div>
         """
     
-    # 初始化外送相關變數
     delivery_html = ""
     fee_row_html = ""
-    status_msg = ""
-    wait_msg = ""
 
-    # 判斷是否顯示外送資訊
     if is_delivery:
         fee_label = "Delivery Fee" if lang == 'en' else "運費"
         fee_row_html = f"""
@@ -563,9 +509,7 @@ def order_success():
             <div>${delivery_fee}</div>
         </div>
         """
-        
         time_display = f"<div class='d-time'><b>📅 預約時間:</b> {d_scheduled}</div>" if d_scheduled else ""
-
         delivery_html = f"""
         <div class="delivery-box">
             <h4>🛵 外送資訊 / Delivery Info</h4>
@@ -582,31 +526,25 @@ def order_success():
         status_msg = t.get('pay_at_counter', '請至櫃檯結帳')
         wait_msg = t.get('kitchen_prep', 'Kitchen is preparing your meal.<br>廚房正在為您準備餐點。')
 
-    # 🟢 修改點 6：建立發票資訊的 HTML 區塊 (如果客人有填寫發票資訊才顯示)
+    # 建立發票資訊的 HTML 區塊
     invoice_html = ""
     if tax_id or carrier_type:
         c_type_name = "綠界會員載具" if carrier_type == '1' else ("自然人憑證" if carrier_type == '2' else ("手機條碼" if carrier_type == '3' else "無"))
         invoice_html = f"""
         <div class="delivery-box" style="background: #F3F4F6; border-color: #D1D5DB; color: #374151;">
-            <h4 style="color: #374151; border-bottom-color: #D1D5DB;">🧾 發票資訊 / Invoice Info</h4>
+            <h4 style="color: #374151; border-bottom-color: #D1D5DB; margin-bottom: 8px;">🧾 發票資訊 / Invoice Info</h4>
             {f'<div class="d-info-row"><b>統一編號:</b> {tax_id}</div>' if tax_id else ''}
             {f'<div class="d-info-row"><b>載具類別:</b> {c_type_name}</div>' if carrier_type else ''}
             {f'<div class="d-info-row"><b>載具條碼:</b> {carrier_num}</div>' if carrier_num else ''}
         </div>
         """
 
-    # 時間轉換 (加 8 小時轉為台灣時間)
     tw_time = created_at + timedelta(hours=8)
     time_str = tw_time.strftime('%Y-%m-%d %H:%M:%S')
 
-    # 返回按鈕連結
     back_link = url_for('menu.index', lang=lang)
     back_text = "Back to Menu / 返回菜單"
 
-  # ==========================================
-    # 6. 回傳最終組合的 HTML (使用 CSS 變數與乾淨的類別命名)
-    # ==========================================
-    # 注意：f-string 內的 CSS 若用到大括號，需寫成雙大括號 {{ }}
     return f"""
     <!DOCTYPE html>
     <html lang="{lang}">
@@ -615,10 +553,9 @@ def order_success():
         <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
         <title>Order Success</title>
         <style>
-            /* 顏色變數設定 */
             :root {{
                 --bg-color: #F7F9FA;
-                --card-bg: transparent; /* 卡片背景保持透明 */
+                --card-bg: transparent; 
                 --text-main: #1F2937;
                 --text-muted: #6B7280;
                 --success: #10B981;
@@ -631,7 +568,6 @@ def order_success():
                 --delivery-text: #1E3A8A;
             }}
             
-            /* 全局基礎設定 */
             body {{ 
                 margin: 0; padding: 0; 
                 font-family: 'Inter', '-apple-system', 'BlinkMacSystemFont', 'Microsoft JhengHei', sans-serif; 
@@ -639,20 +575,16 @@ def order_success():
                 -webkit-font-smoothing: antialiased;
             }}
 
-            /* 背景圖片設定 (使用偽元素避免 opacity 影響到文字與卡片) */
             body::before {{
                 content: "";
                 position: fixed;
                 top: 0; left: 0; right: 0; bottom: 0;
                 background: url('https://i.ibb.co/20MXKCFk/1622093786-81a879fc1f1b41afed71696a0e45d95f.png') no-repeat center center;
-                /*background-size: cover;  滿版並裁切*/ 
-                background-size: contain; /*縮放至完整*/ 
-                /* 【核心】設定背景圖片透明度 (0.8 表示 80% 可見，即 20% 透明) */
+                background-size: contain; 
                 opacity: 0.6; 
-                z-index: -1; /* 放在所有內容的最下方 */
+                z-index: -1; 
             }}
 
-            /* 銳利邊框文字效果 (將 transparent 改回 #FFF 恢復白邊) */
             .text-outline {{
                 text-shadow: 
                     -1px -1px 0 #FFF,
@@ -665,7 +597,6 @@ def order_success():
                     -1px  0   0 #FFF;
             }}
             
-            /* 佈局容器：限制電腦版寬度，手機版保留邊距 */
             .container {{ 
                 min-height: 100vh; 
                 display: flex; flex-direction: column; 
@@ -673,7 +604,6 @@ def order_success():
                 max-width: 600px; margin: 0 auto; 
             }}
             
-            /* 主卡片樣式 */
             .card {{ 
                 background: var(--card-bg); 
                 flex-grow: 1; border-radius: 20px; 
@@ -682,7 +612,6 @@ def order_success():
                 display: flex; flex-direction: column; 
             }}
             
-            /* 頂部成功狀態區 */
             .header-sec {{ margin-bottom: 24px; }}
             .success-icon {{ 
                 width: 64px; height: 64px; 
@@ -693,7 +622,6 @@ def order_success():
             }}
             .status-title {{ margin: 0; font-size: 1.6em; font-weight: 900; color: var(--text-main); }}
             
-            /* 取餐單號區塊 */
             .seq-box {{ 
                 background: #FFF1F2; border-radius: 16px; 
                 padding: 24px 16px; margin-bottom: 24px; 
@@ -701,7 +629,6 @@ def order_success():
             .seq-label {{ font-size: 0.9em; color: var(--primary); font-weight: bold; letter-spacing: 1px; margin-bottom: 8px; }}
             .seq-number {{ font-size: 4.5em; font-weight: 900; color: var(--primary); line-height: 1; }}
             
-            /* 提示訊息區塊 */
             .notice-box {{ 
                 background: var(--warning-bg); padding: 16px; 
                 border-radius: 12px; margin-bottom: 24px; text-align: left; 
@@ -709,7 +636,6 @@ def order_success():
             .notice-title {{ font-weight: 900; color: var(--warning-text); font-size: 1.1em; margin-bottom: 4px; }}
             .notice-desc {{ color: var(--warning-text); font-size: 0.95em; line-height: 1.5; }}
             
-            /* 外送資訊區塊 */
             .delivery-box {{ 
                 background: var(--delivery-bg); border: 1px solid var(--delivery-border); 
                 padding: 16px; border-radius: 12px; margin-bottom: 24px; 
@@ -721,7 +647,6 @@ def order_success():
             .d-info-row a {{ color: var(--delivery-text); text-decoration: none; font-weight: bold; }}
             .d-note {{ font-size: 0.9em; margin-top: 10px; background: transparent; padding: 8px; border-radius: 8px; border: 1px solid var(--delivery-border); }}
             
-            /* 訂單明細區塊 */
             .details-area {{ text-align: left; margin-bottom: 30px; }}
             .details-title {{ 
                 font-size: 1.1em; font-weight: 900; color: var(--text-main); 
@@ -740,7 +665,6 @@ def order_success():
             .item-options {{ color: var(--text-muted); font-size: 0.85em; margin-top: 4px; }}
             .item-price {{ font-weight: bold; font-size: 1.1em; white-space: nowrap; color: var(--text-main); }}
             
-            /* 費用小計與總計 */
             .fee-row {{ 
                 display: flex; justify-content: space-between; align-items: center; 
                 padding: 16px 0 0 0; color: #3B82F6; font-weight: bold; font-size: 1.05em; 
@@ -752,14 +676,13 @@ def order_success():
             .total-label {{ font-size: 1.2em; font-weight: bold; }}
             .total-price {{ font-size: 1.8em; font-weight: 900; color: var(--primary); }}
             
-            /* 底部時間與按鈕 */
             .order-time {{ color: var(--text-muted); font-size: 0.85em; margin: 24px 0; text-align: center; }}
             .home-btn {{ 
                 display: block; padding: 16px; background: var(--text-main); 
                 color: white; text-decoration: none; border-radius: 12px; 
                 font-weight: bold; font-size: 1.1em; margin-top: auto; 
                 transition: transform 0.1s;
-                text-shadow: none; /* 按鈕內的白字不需要白邊，保持 none */
+                text-shadow: none; 
             }}
             .home-btn:active {{ transform: scale(0.98); }}
         </style>
