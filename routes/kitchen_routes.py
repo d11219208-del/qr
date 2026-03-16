@@ -4,7 +4,7 @@ import base64
 import traceback  
 import bcrypt  # 💡 新增：引入 bcrypt 用來驗證密碼
 #引入綠界發票api
-from utils.ecpay_invoice import issue_ecpay_invoice, invalid_ecpay_invoice
+from ecpay_invoice import issue_ecpay_invoice, invalid_ecpay_invoice
 # 🛡️ 引入我們在 utils.py 寫好的雙重防護罩
 from utils import login_required, role_required
 from datetime import datetime, timedelta
@@ -1052,6 +1052,7 @@ def daily_report():
     </body>
     </html>
     """
+
 
 
 
