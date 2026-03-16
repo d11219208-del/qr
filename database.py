@@ -62,7 +62,7 @@ def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, -- 建立時間
                 daily_seq INTEGER DEFAULT 0,      -- 當日流水號
                 content_json TEXT,                -- 以 JSON 格式存儲的訂單明細
-                need_receipt BOOLEAN DEFAULT FALSE, -- 是否需要收據/統編
+                need_receipt BOOLEAN DEFAULT FALSE, -- 是否需要收據
                 lang VARCHAR(10) DEFAULT 'zh',    -- 下單時使用的語系
                 
                 -- 外送相關欄位
@@ -72,7 +72,14 @@ def init_db():
                 customer_phone TEXT,              -- 客戶電話
                 customer_address TEXT,            -- 客戶地址
                 scheduled_for TEXT,               -- 預約送達時間
-                delivery_fee INTEGER DEFAULT 0    -- 外送費
+                delivery_fee INTEGER DEFAULT 0,   -- 外送費
+
+                -- 👇 新增：綠界電子發票相關欄位
+                invoice_number VARCHAR(50),       -- 發票號碼 (例: AB12345678)
+                invoice_status VARCHAR(20) DEFAULT 'Not Issued', -- 發票狀態 (Not Issued: 未開立, Issued: 已開立, Void: 已作廢)
+                tax_id VARCHAR(10),               -- 統一編號 (買方統編)
+                carrier_type VARCHAR(1),          -- 載具類別 (1: 綠界, 2: 自然人憑證, 3: 手機條碼)
+                carrier_num VARCHAR(50)           -- 載具隱碼 (例: /AB12345)
             );
         ''')
         
@@ -146,6 +153,13 @@ def init_db():
             "ALTER TABLE orders ADD COLUMN IF NOT EXISTS scheduled_for TEXT;",
             "ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_fee INTEGER DEFAULT 0;",
             
+            # 👇 新增：綠界發票欄位自動補全
+            "ALTER TABLE orders ADD COLUMN IF NOT EXISTS invoice_number VARCHAR(50);",
+            "ALTER TABLE orders ADD COLUMN IF NOT EXISTS invoice_status VARCHAR(20) DEFAULT 'Not Issued';",
+            "ALTER TABLE orders ADD COLUMN IF NOT EXISTS tax_id VARCHAR(10);",
+            "ALTER TABLE orders ADD COLUMN IF NOT EXISTS carrier_type VARCHAR(1);",
+            "ALTER TABLE orders ADD COLUMN IF NOT EXISTS carrier_num VARCHAR(50);",
+
             # --- Products 表格補全 (防止舊資料庫缺少多語系欄位) ---
             "ALTER TABLE products ADD COLUMN IF NOT EXISTS sort_order INTEGER DEFAULT 100;",
             "ALTER TABLE products ADD COLUMN IF NOT EXISTS print_category VARCHAR(20) DEFAULT 'Noodle';",
@@ -171,7 +185,7 @@ def init_db():
                 if 'duplicate' not in str(e).lower() and 'exists' not in str(e).lower():
                     print(f"⚠️ Warning during migration: {e}")
 
-        print("✅ 資料庫初始化檢查完成 (含 order_type, delivery_info, products 多語系欄位, 及 users 表格)")
+        print("✅ 資料庫初始化檢查完成 (含 order_type, delivery_info, 發票欄位, products 多語系欄位, 及 users 表格)")
         return True
 
     except Exception as e:
@@ -189,4 +203,3 @@ def init_db():
 if __name__ == "__main__":
     # 當直接執行此 .py 檔案時，啟動初始化程序
     init_db()
-
