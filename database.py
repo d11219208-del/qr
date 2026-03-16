@@ -1,202 +1,206 @@
-# ecpay_invoice.py
-import os
-import time
-import json
-import urllib.parse
-import requests
-import base64
-from Crypto.Cipher import AES
-from Crypto.Util.Padding import pad, unpad
-from dotenv import load_dotenv
 
-load_dotenv()
+import os  # 匯入作業系統模組，用於讀取環境變數
+import psycopg2  # 匯入 PostgreSQL 資料庫驅動模組
+from urllib.parse import urlparse  # 匯入網址解析工具
+import bcrypt # 匯入 bcrypt 模組用於密碼雜湊 (需先安裝: pip install bcrypt)
 
-# 讀取環境變數 (加上測試環境的預設值防呆)
-MERCHANT_ID = os.environ.get("ECPAY_INVOICE_MERCHANT_ID", "2000132")
-HASH_KEY = os.environ.get("ECPAY_INVOICE_HASH_KEY", "ejCk326UnaZWKisg")
-HASH_IV = os.environ.get("ECPAY_INVOICE_HASH_IV", "q9jcZX8Ib9LM8wYk")
+# --- 資料庫基礎連線 --- 
+def get_db_connection():
+    """建立並回傳資料庫連線物件"""
+    # 從作業系統環境變數中取得 DATABASE_URL（包含資料庫主機、帳密等資訊）
+    db_uri = os.environ.get("DATABASE_URL")
+    if not db_uri:
+        # 如果找不到連線資訊，拋出錯誤訊息
+        raise ValueError("錯誤：找不到環境變數 DATABASE_URL")
+    # 使用 psycopg2 套件建立與 PostgreSQL 的連線
+    return psycopg2.connect(db_uri)
 
-# 開立發票 URL (新版 B2C API 路徑)
-ISSUE_URL = os.environ.get("ECPAY_INVOICE_URL", "https://einvoice-stage.ecpay.com.tw/B2CInvoice/Issue")
-# 作廢發票 URL (新版 B2C API 路徑)
-INVALID_URL = os.environ.get("ECPAY_INVOICE_INVALID_URL", "https://einvoice-stage.ecpay.com.tw/B2CInvoice/Invalid")
-
-def aes_encrypt(data_dict, key, iv):
+# --- 資料庫初始化 ---
+def init_db():
     """
-    綠界新版電子發票專用的 AES 加密
-    1. 將 Dict 轉為 JSON 字串
-    2. 進行 URL Encode (綠界特殊規則)
-    3. 進行 AES CBC 加密
-    4. 轉為 Base64
+    建立所有必要的資料表與預設設定。
+    回傳 True 表示成功，False 表示失敗。
     """
-    # 1. 轉 JSON
-    json_str = json.dumps(data_dict, ensure_ascii=False, separators=(',', ':'))
-    
-    # 2. URL Encode (仿照 C# HttpUtility.UrlEncode)
-    url_encoded = urllib.parse.quote(json_str, safe='')
-    
-    # 3. AES 加密 (CBC 模式，PKCS7 Padding)
-    cipher = AES.new(key.encode('utf-8'), AES.MODE_CBC, iv.encode('utf-8'))
-    padded_data = pad(url_encoded.encode('utf-8'), AES.block_size)
-    encrypted_bytes = cipher.encrypt(padded_data)
-    
-    # 4. 轉 Base64
-    encrypted_base64 = base64.b64encode(encrypted_bytes).decode('utf-8')
-    return encrypted_base64
-
-def aes_decrypt(encrypted_base64, key, iv):
-    """
-    綠界新版電子發票專用的 AES 解密 (用來讀取回傳的發票號碼)
-    """
+    conn = None # 預設連線變數為空
+    cur = None  # 預設遊標（Cursor）變數為空
     try:
-        # 1. Base64 解碼
-        encrypted_bytes = base64.b64decode(encrypted_base64)
+        conn = get_db_connection() # 取得資料庫連線
+        conn.autocommit = True     # 設定為「自動提交」，每執行一個 SQL 指令即生效
+        cur = conn.cursor()        # 開啟遊標以執行 SQL 指令
+
+        # 1. 建立產品表 (products)
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS products (
+                id SERIAL PRIMARY KEY,            -- 自動遞增的主鍵 ID
+                name VARCHAR(100) NOT NULL,       -- 產品名稱（必填）
+                price INTEGER NOT NULL,           -- 價格（必填）
+                category VARCHAR(50),             -- 分類名稱
+                image_url TEXT,                   -- 圖片網址
+                is_available BOOLEAN DEFAULT TRUE,-- 是否上架（預設為是）
+                custom_options TEXT,              -- 自定義選項（如：辣度、冰塊）
+                sort_order INTEGER DEFAULT 100,   -- 排序序號
+                name_en VARCHAR(100),             -- 英文品名
+                name_jp VARCHAR(100),             -- 日文品名
+                name_kr VARCHAR(100),             -- 韓文品名
+                custom_options_en TEXT,           -- 英文自定義選項
+                custom_options_jp TEXT,           -- 日文自定義選項
+                custom_options_kr TEXT,           -- 韓文自定義選項
+                print_category VARCHAR(20) DEFAULT 'Noodle', -- 出單分類（用於廚房出單）
+                category_en VARCHAR(50),          -- 英文分類名
+                category_jp VARCHAR(50),          -- 日文分類名
+                category_kr VARCHAR(50)           -- 韓文分類名
+            );
+        ''')
         
-        # 2. AES 解密
-        cipher = AES.new(key.encode('utf-8'), AES.MODE_CBC, iv.encode('utf-8'))
-        decrypted_bytes = unpad(cipher.decrypt(encrypted_bytes), AES.block_size)
+        # 2. 建立訂單表 (orders)
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS orders (
+                id SERIAL PRIMARY KEY,            -- 訂單 ID
+                table_number VARCHAR(10),         -- 桌號
+                items TEXT NOT NULL,              -- 訂單項目內容（文字描述）
+                total_price INTEGER NOT NULL,     -- 總金額
+                status VARCHAR(20) DEFAULT 'Pending', -- 訂單狀態（預設為待處理）
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, -- 建立時間
+                daily_seq INTEGER DEFAULT 0,      -- 當日流水號
+                content_json TEXT,                -- 以 JSON 格式存儲的訂單明細
+                need_receipt BOOLEAN DEFAULT FALSE, -- 是否需要收據
+                lang VARCHAR(10) DEFAULT 'zh',    -- 下單時使用的語系
+                
+                -- 外送相關欄位
+                order_type VARCHAR(50) DEFAULT 'dine_in', -- 訂單類型（內用/外送/自取）
+                delivery_info TEXT,               -- 綜合外送資訊
+                customer_name TEXT,               -- 客戶姓名
+                customer_phone TEXT,              -- 客戶電話
+                customer_address TEXT,            -- 客戶地址
+                scheduled_for TEXT,               -- 預約送達時間
+                delivery_fee INTEGER DEFAULT 0,   -- 外送費
+
+                -- 👇 新增：綠界電子發票相關欄位
+                invoice_number VARCHAR(50),       -- 發票號碼 (例: AB12345678)
+                invoice_status VARCHAR(20) DEFAULT 'Not Issued', -- 發票狀態 (Not Issued: 未開立, Issued: 已開立, Void: 已作廢)
+                tax_id VARCHAR(10),               -- 統一編號 (買方統編)
+                carrier_type VARCHAR(1),          -- 載具類別 (1: 綠界, 2: 自然人憑證, 3: 手機條碼)
+                carrier_num VARCHAR(50)           -- 載具隱碼 (例: /AB12345)
+            );
+        ''')
         
-        # 3. URL Decode 並轉為 JSON
-        url_encoded_str = decrypted_bytes.decode('utf-8')
-        json_str = urllib.parse.unquote(url_encoded_str)
-        return json.loads(json_str)
-    except Exception as e:
-        print(f"AES Decrypt Error: {e}")
-        return {}
+        # 3. 建立系統設定表 (settings)
+        cur.execute('''CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);''')
 
-def issue_ecpay_invoice(order):
-    """
-    發送開立發票請求給綠界 (供 kitchen_routes 呼叫)
-    order: 從資料庫撈出的訂單字典 (dict)
-    """
-    # 🟢 修正：對齊資料庫中正確的欄位名稱
-    order_id = order.get('id', '')
-    amount = int(order.get('total_price', 0))        # 修正：total_amount -> total_price
-    customer_phone = order.get('customer_phone', '') # 修正：phone -> customer_phone
-    customer_name = order.get('customer_name', '') or "門市顧客"
-    customer_address = order.get('customer_address', '') or "台北市內湖區"
-    
-    tax_id = order.get('tax_id', '') or ''
-    carrier_type = order.get('carrier_type', '') or ''
-    carrier_num = order.get('carrier_num', '') or ''
-
-    is_company = bool(tax_id and len(str(tax_id)) == 8)
-
-    # 如果有載具，強制不列印；如果是公司戶(有統編)，強制列印
-    print_flag = "0"
-    if is_company:
-        print_flag = "1"
-    if carrier_type:
-        print_flag = "0"
-
-    # 1. 準備 Data 裡面的資料 (這是要被加密的內容)
-    data = {
-        "MerchantID": MERCHANT_ID,
-        "RelateNumber": f"ORDER{order_id}T{int(time.time())}", # 確保編號唯一
-        "CustomerID": "",
-        "CustomerIdentifier": tax_id if is_company else "",
-        "CustomerName": customer_name,
-        "CustomerAddr": customer_address,
-        "CustomerPhone": customer_phone,
-        "CustomerEmail": "",
-        "ClearanceMark": "", # 應稅通常為空字串
-        "Print": print_flag,
-        "Donation": "0",
-        "LoveCode": "",
-        "TaxType": "1", # 1: 應稅
-        "SalesAmount": amount,
-        "InvoiceRemark": "餐飲服務",
-        "Items": [
-            {
-                "ItemName": "餐飲費用",
-                "ItemCount": 1,
-                "ItemWord": "式",
-                "ItemPrice": amount,
-                "ItemTaxType": "1",
-                "ItemAmount": amount,
-                "ItemRemark": ""
-            }
-        ],
-        "InvType": "07", # 07: 一般稅額
-        "vat": "1",      # 1: 含稅
-    }
-    
-    # 處理載具欄位 (綠界規定：若無載具，不能送空字串，必須完全移除該欄位)
-    if carrier_type and carrier_num:
-        data["CarrierType"] = carrier_type
-        data["CarrierNum"] = carrier_num
-    
-    if not is_company:
-        data.pop("CustomerIdentifier", None)
-
-    # 2. 將 Data 進行 AES 加密
-    encrypted_data = aes_encrypt(data, HASH_KEY, HASH_IV)
-
-    # 3. 組合最終要 POST 出去的 Payload
-    payload = {
-        "MerchantID": MERCHANT_ID,
-        "RqHeader": {
-            "Timestamp": int(time.time()),
-            "Revision": "3.0.0" # 綠界文件要求的 API 版本號
-        },
-        "Data": encrypted_data
-    }
-
-    try:
-        # 4. 發送請求 (新版要求 Content-Type 必須是 application/json)
-        headers = {'Content-Type': 'application/json'}
-        response = requests.post(ISSUE_URL, json=payload, headers=headers)
-        result_json = response.json()
+        # 4. 插入預設設定 (新增了 shop_open 與其他外送參數)
+        default_settings = [
+            ('sender_email', 'onboarding@resend.dev'), # 預設發信人郵件
+            ('shop_open', '1'),                        # 預設全店營業中 (1: 開啟)
+            ('delivery_enabled', '1'),                 # 是否啟用外送功能 (後端用)
+            ('enable_delivery', '1'),                  # 前端按鈕可能使用的 key (保持相容)
+            ('delivery_min_price', '500'),             # 外送起送價
+            ('delivery_fee_base', '0'),                # 基礎外送費
+            ('delivery_max_km', '5'),                  # 最大外送距離 (公里)
+            ('delivery_fee_per_km', '10')              # 超過基礎距離後的每公里加價
+        ]
         
-        # 5. 判斷結果 (TransCode == 1 代表綠界系統成功接收並處理)
-        if result_json.get("TransCode") == 1:
-            # 將綠界回傳的加密 Data 解密，取得真實的發票號碼 InvoiceNo
-            response_data = aes_decrypt(result_json.get("Data", ""), HASH_KEY, HASH_IV)
-            invoice_no = response_data.get("InvoiceNo", f"SUCCESS_{order_id}")
+        for k, v in default_settings:
+            # 插入設定值，如果 Key 已經存在則跳過 (ON CONFLICT DO NOTHING)
+            # 這樣可以確保新增加的設定 (如 shop_open) 會被寫入，而已存在的設定不會被覆蓋
+            cur.execute("INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT DO NOTHING", (k, v))
+
+
+        # === 💡 關鍵修正：砍掉舊的 users 表格，確保能夠建立最新帶有 password_hash 的版本 ===
+        #cur.execute("DROP TABLE IF EXISTS users CASCADE;")
+        
+        # 建立使用者資料表 (users)
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS users (
+                id SERIAL PRIMARY KEY,            -- 使用者 ID
+                username VARCHAR(50) UNIQUE NOT NULL, -- 帳號名稱 (必須唯一)
+                password_hash TEXT NOT NULL,      -- 密碼的雜湊值 (絕對不存明文)
+                role VARCHAR(20) DEFAULT 'admin', -- 角色權限 (例如: admin, staff)
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP -- 建立時間
+            );
+        ''')
+
+        # 建立一個預設的 Admin 帳號 (因為上面我們 DROP TABLE 了，所以這裡一定會重新建立)
+        cur.execute("SELECT COUNT(*) FROM users")
+        user_count = cur.fetchone()[0]
+        
+        if user_count == 0:
+            print("👤 尚未建立任何使用者，正在建立預設的 Admin 帳號...")
+            default_username = "admin"
+            default_password = "password123" # ⚠️ 請在登入後台後立即更改此密碼！
             
-            return {"success": True, "invoice_no": invoice_no, "message": "OK"}
-        else:
-            return {"success": False, "message": str(result_json)}
-
-    except Exception as e:
-        return {"success": False, "message": f"Request failed: {str(e)}"}
-
-
-def invalid_ecpay_invoice(invoice_no, reason="訂單取消"):
-    """
-    發送作廢發票請求給綠界 (供 kitchen_routes 呼叫)
-    """
-    data = {
-        "MerchantID": MERCHANT_ID,
-        "InvoiceNo": invoice_no,
-        "InvoiceDate": time.strftime("%Y-%m-%d"), # 測試環境通常以當天日期作廢
-        "Reason": reason[:20] # 綠界規定作廢原因長度不能超過 20 字
-    }
-    
-    # 進行 AES 加密
-    encrypted_data = aes_encrypt(data, HASH_KEY, HASH_IV)
-    
-    payload = {
-        "MerchantID": MERCHANT_ID,
-        "RqHeader": {
-            "Timestamp": int(time.time()),
-            "Revision": "3.0.0"
-        },
-        "Data": encrypted_data
-    }
-
-    try:
-        headers = {'Content-Type': 'application/json'}
-        response = requests.post(INVALID_URL, json=payload, headers=headers)
-        result_json = response.json()
-        
-        if result_json.get("TransCode") == 1:
-            return {"success": True, "message": "作廢成功"}
-        else:
-            # 如果失敗，嘗試解密錯誤訊息看看詳細原因
-            err_data = aes_decrypt(result_json.get("Data", ""), HASH_KEY, HASH_IV)
-            msg = err_data.get("RtnMsg") or str(result_json)
-            return {"success": False, "message": msg}
+            # 使用 bcrypt 對密碼進行雜湊處理
+            # 必須將字串轉為 bytes (encode('utf-8'))
+            salt = bcrypt.gensalt()
+            hashed_password = bcrypt.hashpw(default_password.encode('utf-8'), salt).decode('utf-8')
             
+            cur.execute(
+                "INSERT INTO users (username, password_hash, role) VALUES (%s, %s, %s)",
+                (default_username, hashed_password, 'admin')
+            )
+            print(f"✅ 預設 Admin 帳號建立完成。帳號: {default_username} / 密碼: {default_password}")
+
+
+        # 5. 【關鍵】欄位自動補全 (Migration)
+        # 此段確保如果資料表已經存在，但缺少新開發的欄位時，會自動新增欄位
+        alters = [
+            # --- Orders 表格補全 ---
+            "ALTER TABLE orders ADD COLUMN IF NOT EXISTS lang VARCHAR(10) DEFAULT 'zh';",
+            "ALTER TABLE orders ADD COLUMN IF NOT EXISTS content_json TEXT;",
+            "ALTER TABLE orders ADD COLUMN IF NOT EXISTS order_type VARCHAR(50) DEFAULT 'dine_in';",
+            "ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_info TEXT;",
+            "ALTER TABLE orders ADD COLUMN IF NOT EXISTS customer_name TEXT;",
+            "ALTER TABLE orders ADD COLUMN IF NOT EXISTS customer_phone TEXT;",
+            "ALTER TABLE orders ADD COLUMN IF NOT EXISTS customer_address TEXT;",
+            "ALTER TABLE orders ADD COLUMN IF NOT EXISTS scheduled_for TEXT;",
+            "ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_fee INTEGER DEFAULT 0;",
+            
+            # 👇 新增：綠界發票欄位自動補全
+            "ALTER TABLE orders ADD COLUMN IF NOT EXISTS invoice_number VARCHAR(50);",
+            "ALTER TABLE orders ADD COLUMN IF NOT EXISTS invoice_status VARCHAR(20) DEFAULT 'Not Issued';",
+            "ALTER TABLE orders ADD COLUMN IF NOT EXISTS tax_id VARCHAR(10);",
+            "ALTER TABLE orders ADD COLUMN IF NOT EXISTS carrier_type VARCHAR(1);",
+            "ALTER TABLE orders ADD COLUMN IF NOT EXISTS carrier_num VARCHAR(50);",
+
+            # --- Products 表格補全 (防止舊資料庫缺少多語系欄位) ---
+            "ALTER TABLE products ADD COLUMN IF NOT EXISTS sort_order INTEGER DEFAULT 100;",
+            "ALTER TABLE products ADD COLUMN IF NOT EXISTS print_category VARCHAR(20) DEFAULT 'Noodle';",
+            "ALTER TABLE products ADD COLUMN IF NOT EXISTS name_en VARCHAR(100);",
+            "ALTER TABLE products ADD COLUMN IF NOT EXISTS name_jp VARCHAR(100);",
+            "ALTER TABLE products ADD COLUMN IF NOT EXISTS name_kr VARCHAR(100);",
+            "ALTER TABLE products ADD COLUMN IF NOT EXISTS category_en VARCHAR(50);",
+            "ALTER TABLE products ADD COLUMN IF NOT EXISTS category_jp VARCHAR(50);",
+            "ALTER TABLE products ADD COLUMN IF NOT EXISTS category_kr VARCHAR(50);",
+            "ALTER TABLE products ADD COLUMN IF NOT EXISTS custom_options_en TEXT;",
+            "ALTER TABLE products ADD COLUMN IF NOT EXISTS custom_options_jp TEXT;",
+            "ALTER TABLE products ADD COLUMN IF NOT EXISTS custom_options_kr TEXT;"
+        ]
+        
+        print("🔄 正在檢查資料庫欄位結構...")
+        for cmd in alters:
+            try:
+                cur.execute(cmd) # 執行增加欄位的指令
+            except Exception as e:
+                # 攔截錯誤，如果是「重複欄位」或「已存在」的報錯則忽略，其餘印出警告
+                # PostgreSQL 的 ADD COLUMN IF NOT EXISTS 在舊版本可能不支援，
+                # 所以這裡保留 try-except 以確保相容性
+                if 'duplicate' not in str(e).lower() and 'exists' not in str(e).lower():
+                    print(f"⚠️ Warning during migration: {e}")
+
+        print("✅ 資料庫初始化檢查完成 (含 order_type, delivery_info, 發票欄位, products 多語系欄位, 及 users 表格)")
+        return True
+
     except Exception as e:
-        return {"success": False, "message": f"Request failed: {str(e)}"}
+        # 捕獲初始化過程中的任何重大錯誤
+        print(f"❌ 資料庫初始化錯誤: {e}")
+        return False
+    
+    finally:
+        # 無論成功或失敗，最後都必須關閉遊標與連線，釋放資源
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
+
+if __name__ == "__main__":
+    # 當直接執行此 .py 檔案時，啟動初始化程序
+    init_db()
