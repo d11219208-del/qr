@@ -72,7 +72,13 @@ def issue_ecpay_invoice(order):
     # 🟢 修正：對齊資料庫中正確的欄位名稱
     order_id = order.get('id', '')
     amount = int(order.get('total_price', 0))        # 修正：total_amount -> total_price
-    customer_phone = order.get('customer_phone', '') # 修正：phone -> customer_phone
+    
+    # 👇 新增：確保手機字串乾淨，並加入預設信箱防呆邏輯
+    customer_phone = str(order.get('customer_phone', '') or "").strip()
+    customer_email = ""
+    if not customer_phone:
+        customer_email = "no-reply@test.com" # 綠界規定手機跟信箱不能同時為空，沒手機就塞預設信箱
+        
     customer_name = order.get('customer_name', '') or "門市顧客"
     customer_address = order.get('customer_address', '') or "台北市內湖區"
     
@@ -98,7 +104,7 @@ def issue_ecpay_invoice(order):
         "CustomerName": customer_name,
         "CustomerAddr": customer_address,
         "CustomerPhone": customer_phone,
-        "CustomerEmail": "",
+        "CustomerEmail": customer_email, # 👈 這裡帶入剛剛判斷的信箱變數
         "ClearanceMark": "", # 應稅通常為空字串
         "Print": print_flag,
         "Donation": "0",
