@@ -286,7 +286,11 @@ def check_new_orders():
                         <div>{fee_html}<span style="font-size:18px; color:#333; font-weight:bold;">${formatted_total}</span></div>
                     </div>
                 """
-                buttons += f"<button onclick='askPrintType({oid})' class='btn btn-print' style='width:100%;'>🖨️ 補印單據</button>"
+                # 👇 這裡修改：把補印按鈕與新的「作廢並修改」按鈕並排
+                buttons += f"""<div style="display:flex; gap:5px;">
+                    <button onclick='askPrintType({oid})' class='btn btn-print' style='flex:1;'>🖨️ 補印單據</button>
+                    <button onclick='if(confirm(\"⚠️ 確定要作廢發票並重新修改此單嗎？\")) {{ fetch(\"/kitchen/cancel/{oid}\").then(() => window.open(\"/menu?edit_oid={oid}&lang=zh\", \"_blank\")); }}' class='btn' style='flex:1; background:#ff9800; color:white;'>✏️ 作廢並修改</button>
+                </div>"""
 
             html_content += f"""
             <div class="card {status_cls}" data-id="{oid}">
@@ -585,7 +589,7 @@ def print_order(oid):
         
 
         
-# --- 4. 狀態變更 (完成/作廢) ---
+# --- 4. 狀態變更 (完成/作廢/列印) ---
 
 @kitchen_bp.route('/complete/<int:oid>')
 @login_required          # 🛡️ 防護 1：必須登入
@@ -690,6 +694,32 @@ def cancel_order(oid):
     except Exception as e:
         print(f"Error cancelling order: {e}")
         return "Error", 500
+
+
+# 👇 新增：列印發票的專屬路由
+@kitchen_bp.route('/print_invoice/<invoice_no>')
+@login_required
+def print_invoice_route(invoice_no):
+    """
+    接收前端的列印請求，向綠界索取發票 HTML 並回傳給瀏覽器
+    """
+    try:
+        print(f"[{get_current_time_str()}] 🖨️ 準備列印發票: {invoice_no}")
+        
+        # 呼叫 ecpay_invoice.py 裡的函數
+        result = print_ecpay_invoice(invoice_no)
+        
+        if result.get("success"):
+            # 綠界成功回傳 HTML，我們直接把它吐給瀏覽器
+            return result.get("html")
+        else:
+            # 如果失敗，回傳簡單的錯誤畫面
+            error_msg = result.get("message")
+            return f"<h1>列印失敗</h1><p>綠界回傳錯誤: {error_msg}</p>", 400
+            
+    except Exception as e:
+        print(f"Error printing invoice: {e}")
+        return f"<h1>系統錯誤</h1><p>{str(e)}</p>", 500
 
         
 # --- 5. 銷售排名 API ---
