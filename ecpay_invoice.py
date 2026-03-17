@@ -4,7 +4,7 @@ import time
 import json
 import urllib.parse
 import requests
-import base64 
+import base64
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad, unpad
 from dotenv import load_dotenv
@@ -148,15 +148,25 @@ def issue_ecpay_invoice(order):
         response = requests.post(ISSUE_URL, json=payload, headers=headers)
         result_json = response.json()
         
-        # 5. 判斷結果 (TransCode == 1 代表綠界系統成功接收並處理)
+        # 5. 判斷外層通訊結果 (TransCode == 1 代表綠界系統成功接收)
         if result_json.get("TransCode") == 1:
-            # 將綠界回傳的加密 Data 解密，取得真實的發票號碼 InvoiceNo
+            # 將綠界回傳的加密 Data 解密
             response_data = aes_decrypt(result_json.get("Data", ""), HASH_KEY, HASH_IV)
-            invoice_no = response_data.get("InvoiceNo", f"SUCCESS_{order_id}")
             
-            return {"success": True, "invoice_no": invoice_no, "message": "OK"}
+            # 👇 關鍵修正：檢查內層真正的回傳碼 RtnCode
+            rtn_code = response_data.get("RtnCode")
+            rtn_msg = response_data.get("RtnMsg", "無錯誤訊息")
+            
+            if rtn_code == 1:
+                # 真正開立成功！取得發票號碼
+                invoice_no = response_data.get("InvoiceNo", "")
+                return {"success": True, "invoice_no": invoice_no, "message": "OK"}
+            else:
+                # 綠界業務邏輯拒絕 (例如：金額不對、名稱有怪字元)
+                print(f"❌ 綠界拒絕開立發票: {rtn_msg} (代碼: {rtn_code})")
+                return {"success": False, "message": f"綠界退件: {rtn_msg} (代碼: {rtn_code})"}
         else:
-            return {"success": False, "message": str(result_json)}
+            return {"success": False, "message": f"API 通訊失敗: {result_json.get('TransMsg')}"}
 
     except Exception as e:
         return {"success": False, "message": f"Request failed: {str(e)}"}
@@ -190,10 +200,16 @@ def invalid_ecpay_invoice(invoice_no, reason="訂單取消"):
         response = requests.post(INVALID_URL, json=payload, headers=headers)
         result_json = response.json()
         
+        # 作廢功能也同步加入內層 RtnCode 驗證
         if result_json.get("TransCode") == 1:
-            return {"success": True, "message": "作廢成功"}
+            response_data = aes_decrypt(result_json.get("Data", ""), HASH_KEY, HASH_IV)
+            if response_data.get("RtnCode") == 1:
+                return {"success": True, "message": "作廢成功"}
+            else:
+                msg = response_data.get("RtnMsg", str(response_data))
+                return {"success": False, "message": f"綠界退件: {msg}"}
         else:
-            # 如果失敗，嘗試解密錯誤訊息看看詳細原因
+            # 如果通訊層就失敗，嘗試解密錯誤訊息
             err_data = aes_decrypt(result_json.get("Data", ""), HASH_KEY, HASH_IV)
             msg = err_data.get("RtnMsg") or str(result_json)
             return {"success": False, "message": msg}
