@@ -16,47 +16,32 @@ MERCHANT_ID = os.environ.get("ECPAY_INVOICE_MERCHANT_ID", "2000132")
 HASH_KEY = os.environ.get("ECPAY_INVOICE_HASH_KEY", "ejCk326UnaZWKisg")
 HASH_IV = os.environ.get("ECPAY_INVOICE_HASH_IV", "q9jcZX8Ib9LM8wYk")
 
-# 開立發票 URL (新版 B2C API 路徑)
+# 綠界新版 B2C API 路徑
 ISSUE_URL = os.environ.get("ECPAY_INVOICE_URL", "https://einvoice-stage.ecpay.com.tw/B2CInvoice/Issue")
-# 作廢發票 URL (新版 B2C API 路徑)
 INVALID_URL = os.environ.get("ECPAY_INVOICE_INVALID_URL", "https://einvoice-stage.ecpay.com.tw/B2CInvoice/Invalid")
+# 👇 新增：列印發票 API 路徑
+PRINT_URL = os.environ.get("ECPAY_INVOICE_PRINT_URL", "https://einvoice-stage.ecpay.com.tw/B2CInvoice/InvoicePrint")
 
 def aes_encrypt(data_dict, key, iv):
     """
     綠界新版電子發票專用的 AES 加密
-    1. 將 Dict 轉為 JSON 字串
-    2. 進行 URL Encode (綠界特殊規則)
-    3. 進行 AES CBC 加密
-    4. 轉為 Base64
     """
-    # 1. 轉 JSON
     json_str = json.dumps(data_dict, ensure_ascii=False, separators=(',', ':'))
-    
-    # 2. URL Encode (仿照 C# HttpUtility.UrlEncode)
     url_encoded = urllib.parse.quote(json_str, safe='')
-    
-    # 3. AES 加密 (CBC 模式，PKCS7 Padding)
     cipher = AES.new(key.encode('utf-8'), AES.MODE_CBC, iv.encode('utf-8'))
     padded_data = pad(url_encoded.encode('utf-8'), AES.block_size)
     encrypted_bytes = cipher.encrypt(padded_data)
-    
-    # 4. 轉 Base64
     encrypted_base64 = base64.b64encode(encrypted_bytes).decode('utf-8')
     return encrypted_base64
 
 def aes_decrypt(encrypted_base64, key, iv):
     """
-    綠界新版電子發票專用的 AES 解密 (用來讀取回傳的發票號碼)
+    綠界新版電子發票專用的 AES 解密
     """
     try:
-        # 1. Base64 解碼
         encrypted_bytes = base64.b64decode(encrypted_base64)
-        
-        # 2. AES 解密
         cipher = AES.new(key.encode('utf-8'), AES.MODE_CBC, iv.encode('utf-8'))
         decrypted_bytes = unpad(cipher.decrypt(encrypted_bytes), AES.block_size)
-        
-        # 3. URL Decode 並轉為 JSON
         url_encoded_str = decrypted_bytes.decode('utf-8')
         json_str = urllib.parse.unquote(url_encoded_str)
         return json.loads(json_str)
@@ -66,18 +51,16 @@ def aes_decrypt(encrypted_base64, key, iv):
 
 def issue_ecpay_invoice(order):
     """
-    發送開立發票請求給綠界 (供 kitchen_routes 呼叫)
-    order: 從資料庫撈出的訂單字典 (dict)
+    發送開立發票請求給綠界
     """
-    # 🟢 修正：對齊資料庫中正確的欄位名稱
     order_id = order.get('id', '')
-    amount = int(order.get('total_price', 0))        # 修正：total_amount -> total_price
+    amount = int(order.get('total_price', 0))
     
-    # 👇 新增：確保手機字串乾淨，並加入預設信箱防呆邏輯
+    # 手機與信箱防呆邏輯
     customer_phone = str(order.get('customer_phone', '') or "").strip()
     customer_email = ""
     if not customer_phone:
-        customer_email = "no-reply@test.com" # 綠界規定手機跟信箱不能同時為空，沒手機就塞預設信箱
+        customer_email = "no-reply@test.com"
         
     customer_name = order.get('customer_name', '') or "門市顧客"
     customer_address = order.get('customer_address', '') or "台北市內湖區"
@@ -88,28 +71,26 @@ def issue_ecpay_invoice(order):
 
     is_company = bool(tax_id and len(str(tax_id)) == 8)
 
-    # 如果有載具，強制不列印；如果是公司戶(有統編)，強制列印
     print_flag = "0"
     if is_company:
         print_flag = "1"
     if carrier_type:
         print_flag = "0"
 
-    # 1. 準備 Data 裡面的資料 (這是要被加密的內容)
     data = {
         "MerchantID": MERCHANT_ID,
-        "RelateNumber": f"ORDER{order_id}T{int(time.time())}", # 確保編號唯一
+        "RelateNumber": f"ORDER{order_id}T{int(time.time())}", 
         "CustomerID": "",
         "CustomerIdentifier": tax_id if is_company else "",
         "CustomerName": customer_name,
         "CustomerAddr": customer_address,
         "CustomerPhone": customer_phone,
-        "CustomerEmail": customer_email, # 👈 這裡帶入剛剛判斷的信箱變數
-        "ClearanceMark": "", # 應稅通常為空字串
+        "CustomerEmail": customer_email, 
+        "ClearanceMark": "", 
         "Print": print_flag,
         "Donation": "0",
         "LoveCode": "",
-        "TaxType": "1", # 1: 應稅
+        "TaxType": "1", 
         "SalesAmount": amount,
         "InvoiceRemark": "餐飲服務",
         "Items": [
@@ -123,11 +104,10 @@ def issue_ecpay_invoice(order):
                 "ItemRemark": ""
             }
         ],
-        "InvType": "07", # 07: 一般稅額
-        "vat": "1",      # 1: 含稅
+        "InvType": "07", 
+        "vat": "1",      
     }
     
-    # 處理載具欄位 (綠界規定：若無載具，不能送空字串，必須完全移除該欄位)
     if carrier_type and carrier_num:
         data["CarrierType"] = carrier_type
         data["CarrierNum"] = carrier_num
@@ -135,40 +115,31 @@ def issue_ecpay_invoice(order):
     if not is_company:
         data.pop("CustomerIdentifier", None)
 
-    # 2. 將 Data 進行 AES 加密
     encrypted_data = aes_encrypt(data, HASH_KEY, HASH_IV)
 
-    # 3. 組合最終要 POST 出去的 Payload
     payload = {
         "MerchantID": MERCHANT_ID,
         "RqHeader": {
             "Timestamp": int(time.time()),
-            "Revision": "3.0.0" # 綠界文件要求的 API 版本號
+            "Revision": "3.0.0" 
         },
         "Data": encrypted_data
     }
 
     try:
-        # 4. 發送請求 (新版要求 Content-Type 必須是 application/json)
         headers = {'Content-Type': 'application/json'}
         response = requests.post(ISSUE_URL, json=payload, headers=headers)
         result_json = response.json()
         
-        # 5. 判斷外層通訊結果 (TransCode == 1 代表綠界系統成功接收)
         if result_json.get("TransCode") == 1:
-            # 將綠界回傳的加密 Data 解密
             response_data = aes_decrypt(result_json.get("Data", ""), HASH_KEY, HASH_IV)
-            
-            # 👇 關鍵修正：檢查內層真正的回傳碼 RtnCode
             rtn_code = response_data.get("RtnCode")
             rtn_msg = response_data.get("RtnMsg", "無錯誤訊息")
             
             if rtn_code == 1:
-                # 真正開立成功！取得發票號碼
                 invoice_no = response_data.get("InvoiceNo", "")
                 return {"success": True, "invoice_no": invoice_no, "message": "OK"}
             else:
-                # 綠界業務邏輯拒絕 (例如：金額不對、名稱有怪字元)
                 print(f"❌ 綠界拒絕開立發票: {rtn_msg} (代碼: {rtn_code})")
                 return {"success": False, "message": f"綠界退件: {rtn_msg} (代碼: {rtn_code})"}
         else:
@@ -180,16 +151,15 @@ def issue_ecpay_invoice(order):
 
 def invalid_ecpay_invoice(invoice_no, reason="訂單取消"):
     """
-    發送作廢發票請求給綠界 (供 kitchen_routes 呼叫)
+    發送作廢發票請求給綠界
     """
     data = {
         "MerchantID": MERCHANT_ID,
         "InvoiceNo": invoice_no,
-        "InvoiceDate": time.strftime("%Y-%m-%d"), # 測試環境通常以當天日期作廢
-        "Reason": reason[:20] # 綠界規定作廢原因長度不能超過 20 字
+        "InvoiceDate": time.strftime("%Y-%m-%d"), 
+        "Reason": reason[:20] 
     }
     
-    # 進行 AES 加密
     encrypted_data = aes_encrypt(data, HASH_KEY, HASH_IV)
     
     payload = {
@@ -206,7 +176,6 @@ def invalid_ecpay_invoice(invoice_no, reason="訂單取消"):
         response = requests.post(INVALID_URL, json=payload, headers=headers)
         result_json = response.json()
         
-        # 作廢功能也同步加入內層 RtnCode 驗證
         if result_json.get("TransCode") == 1:
             response_data = aes_decrypt(result_json.get("Data", ""), HASH_KEY, HASH_IV)
             if response_data.get("RtnCode") == 1:
@@ -215,10 +184,61 @@ def invalid_ecpay_invoice(invoice_no, reason="訂單取消"):
                 msg = response_data.get("RtnMsg", str(response_data))
                 return {"success": False, "message": f"綠界退件: {msg}"}
         else:
-            # 如果通訊層就失敗，嘗試解密錯誤訊息
             err_data = aes_decrypt(result_json.get("Data", ""), HASH_KEY, HASH_IV)
             msg = err_data.get("RtnMsg") or str(result_json)
             return {"success": False, "message": msg}
+            
+    except Exception as e:
+        return {"success": False, "message": f"Request failed: {str(e)}"}
+
+
+# 👇 新增：列印發票函數
+def print_ecpay_invoice(invoice_no):
+    """
+    發送列印發票請求給綠界
+    回傳：包含發票排版的 HTML 字串 (供前端列印使用)
+    """
+    data = {
+        "MerchantID": MERCHANT_ID,
+        "InvoiceNo": invoice_no,
+        "PrintStyle": "1", # 1: 證明聯 (預設), 2: 明細, 3: 證明聯+明細
+        "IsPrint": "1"     # 1: 執行列印
+    }
+    
+    encrypted_data = aes_encrypt(data, HASH_KEY, HASH_IV)
+    
+    payload = {
+        "MerchantID": MERCHANT_ID,
+        "RqHeader": {
+            "Timestamp": int(time.time()),
+            "Revision": "3.0.0"
+        },
+        "Data": encrypted_data
+    }
+
+    try:
+        headers = {'Content-Type': 'application/json'}
+        response = requests.post(PRINT_URL, json=payload, headers=headers)
+        
+        # 嘗試解析 JSON (綠界 V3 API 通常回傳 JSON)
+        try:
+            result_json = response.json()
+            if result_json.get("TransCode") == 1:
+                response_data = aes_decrypt(result_json.get("Data", ""), HASH_KEY, HASH_IV)
+                if response_data.get("RtnCode") == 1:
+                    # 取得 HTML 內容
+                    invoice_html = response_data.get("InvoiceHtml", "")
+                    return {"success": True, "html": invoice_html}
+                else:
+                    return {"success": False, "message": f"列印失敗: {response_data.get('RtnMsg')}"}
+            else:
+                return {"success": False, "message": f"API 通訊失敗: {result_json.get('TransMsg')}"}
+        except json.JSONDecodeError:
+            # 防呆：如果綠界直接回傳 HTML 網頁而不是 JSON，就直接抓取
+            if response.text.strip().startswith("<"):
+                return {"success": True, "html": response.text}
+            else:
+                return {"success": False, "message": "收到未知的非 JSON 格式"}
             
     except Exception as e:
         return {"success": False, "message": f"Request failed: {str(e)}"}
