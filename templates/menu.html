@@ -334,26 +334,27 @@
             ❌ 統編格式錯誤或無效，請重新確認 (Invalid Tax ID)
         </div>
 
-        <span class="input-label" style="color:#334155; display:block; margin-bottom:4px; font-size: 0.9em;">發票載具 (Carrier - 選填)</span>
+        <span class="input-label" style="color:#334155; display:block; margin-bottom:4px; font-size: 0.9em;">發票處理 (Invoice Method)</span>
         <select id="carrier_type" class="modern-input" style="background:white; border-color:#cbd5e1; padding:8px 10px; width: 100%; box-sizing: border-box; margin-bottom: 10px;" onchange="toggleCarrierInput()">
             <option value="">不使用載具 (印出紙本/預設)</option>
             <option value="3">手機條碼 (Mobile Barcode)</option>
             <option value="2">自然人憑證 (Citizen Digital Cert.)</option>
-            </select>
+            <option value="don">愛心捐贈碼 (Donation Code)</option>
+        </select>
 
         <div id="carrier_num_container" style="display: none;">
-            <span class="input-label" style="color:#334155; display:block; margin-bottom:4px; font-size: 0.9em;">載具號碼 (Carrier Number)</span>
+            <span id="carrier_label" class="input-label" style="color:#334155; display:block; margin-bottom:4px; font-size: 0.9em;">載具號碼 (Carrier Number)</span>
             <input type="text" id="carrier_num" class="modern-input" placeholder="例如: /AB12345" 
                    style="background:white; border-color:#cbd5e1; padding:8px 10px; width: 100%; box-sizing: border-box;"
                    onblur="validateCarrierNum()" oninput="this.value = this.value.toUpperCase()">
             <div id="carrier_error" style="color: #ef4444; font-size: 0.85em; margin-top: 6px; display: none;">
-                ❌ 載具格式錯誤 (Invalid Carrier Number)
+                ❌ 格式錯誤 (Invalid Format)
             </div>
         </div>
     </div>
 
     <script>
-        // 統編驗證 (保留你原有的邏輯)
+        // 統編驗證 (保留原有邏輯)
         function validateTaxId() {
             const input = document.getElementById('tax_id');
             const errorDiv = document.getElementById('tax_id_error');
@@ -367,7 +368,7 @@
 
             const regex = /^\d{8}$/;
             if (!regex.test(taxId)) {
-                showError(input, errorDiv);
+                showTaxError(input, errorDiv);
                 return false;
             }
 
@@ -381,7 +382,7 @@
             let isValid = (sum % 10 === 0) || (taxId.charAt(6) === '7' && (sum + 1) % 10 === 0);
 
             if (!isValid) {
-                showError(input, errorDiv);
+                showTaxError(input, errorDiv);
                 return false;
             } else {
                 input.style.borderColor = '#10b981'; 
@@ -390,26 +391,41 @@
             }
         }
 
-        // 切換顯示載具輸入框
+        function showTaxError(input, errorDiv) {
+            input.style.borderColor = '#ef4444';
+            errorDiv.style.display = 'block';
+        }
+
+        // 切換顯示載具/捐贈碼輸入框
         function toggleCarrierInput() {
             const type = document.getElementById('carrier_type').value;
             const container = document.getElementById('carrier_num_container');
+            const label = document.getElementById('carrier_label');
             const input = document.getElementById('carrier_num');
             const errorDiv = document.getElementById('carrier_error');
 
             if (type !== '') {
                 container.style.display = 'block';
-                // 切換時更改 placeholder 提示
-                input.placeholder = type === '3' ? "例如: /AB12345" : "例如: AB12345678901234";
+                // 根據選擇切換標籤與提示
+                if (type === '3') {
+                    label.innerText = "手機條碼 (Mobile Barcode)";
+                    input.placeholder = "例如: /AB12345";
+                } else if (type === '2') {
+                    label.innerText = "自然人憑證 (Citizen Digital Cert.)";
+                    input.placeholder = "例如: AB12345678901234";
+                } else if (type === 'don') {
+                    label.innerText = "受贈碼 (Donation Code)";
+                    input.placeholder = "例如: 1950 (3至7碼數字)";
+                }
             } else {
                 container.style.display = 'none';
-                input.value = ''; // 清空號碼
+                input.value = ''; 
                 input.style.borderColor = '#cbd5e1';
                 errorDiv.style.display = 'none';
             }
         }
 
-        // 載具格式驗證
+        // 載具與捐贈碼格式驗證
         function validateCarrierNum() {
             const type = document.getElementById('carrier_type').value;
             const input = document.getElementById('carrier_num');
@@ -431,10 +447,15 @@
                 // 自然人憑證: 2碼大寫英文 + 14碼數字
                 const regex = /^[A-Z]{2}\d{14}$/;
                 isValid = regex.test(num);
+            } else if (type === 'don') {
+                // 捐贈碼: 3至7碼純數字
+                const regex = /^\d{3,7}$/;
+                isValid = regex.test(num);
             }
 
             if (!isValid) {
-                showError(input, errorDiv);
+                input.style.borderColor = '#ef4444';
+                errorDiv.style.display = 'block';
                 return false;
             } else {
                 input.style.borderColor = '#10b981';
@@ -442,66 +463,9 @@
                 return true;
             }
         }
-
-        function showError(input, errorDiv) {
-            input.style.borderColor = '#ef4444';
-            errorDiv.style.display = 'block';
-        }
     </script>
 
-    <script>
-        function validateTaxId() {
-            const input = document.getElementById('tax_id');
-            const errorDiv = document.getElementById('tax_id_error');
-            const taxId = input.value.trim();
-            
-            // 1. 如果為空，視為個人發票，重置樣式並通過
-            if (taxId === '') {
-                input.style.borderColor = '#cbd5e1';
-                errorDiv.style.display = 'none';
-                return true;
-            }
-
-            // 2. 檢查是否為 8 碼純數字
-            const regex = /^\d{8}$/;
-            if (!regex.test(taxId)) {
-                showTaxError(input, errorDiv);
-                return false;
-            }
-
-            // 3. 執行台灣統一編號 Checksum 驗證演算法
-            const multiplier = [1, 2, 1, 2, 1, 2, 4, 1];
-            let sum = 0;
-
-            for (let i = 0; i < 8; i++) {
-                let product = parseInt(taxId.charAt(i), 10) * multiplier[i];
-                sum += Math.floor(product / 10) + (product % 10);
-            }
-
-            let isValid = false;
-            if (sum % 10 === 0) {
-                isValid = true;
-            } else if (taxId.charAt(6) === '7' && (sum + 1) % 10 === 0) {
-                // 如果第7碼是7，且 sum+1 的個位數為0也算合法
-                isValid = true;
-            }
-
-            // 4. 驗證結果處理
-            if (!isValid) {
-                showTaxError(input, errorDiv);
-                return false;
-            } else {
-                input.style.borderColor = '#10b981'; // 驗證成功顯示綠色邊框
-                errorDiv.style.display = 'none';
-                return true;
-            }
-        }
-
-        function showTaxError(input, errorDiv) {
-            input.style.borderColor = '#ef4444'; // 驗證失敗顯示紅色邊框
-            errorDiv.style.display = 'block';
-        }
-    </script>
+    //購物車
 
     <div id="list"></div>
 
