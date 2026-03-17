@@ -1,4 +1,3 @@
-# routes/menu_routes.py
 from flask import Blueprint, render_template, request, jsonify, redirect, url_for, session
 from database import get_db_connection
 from translations import load_translations
@@ -20,17 +19,17 @@ def get_menu_data():
     settings_rows = cur.fetchall()
     settings = {row[0]: row[1] for row in settings_rows}
     
-    # 【關鍵修改】確保 delivery_min_price 存在於設定中
+    # 確保 delivery_min_price 存在於設定中
     if 'delivery_min_price' not in settings:
         settings['delivery_min_price'] = '0'  # 若資料庫未設定，預設為 0
     
     # 讀取產品 (包含多語系欄位)
     cur.execute("""
         SELECT id, name, price, category, image_url, is_available, custom_options, sort_order,
-               name_en, name_jp, name_kr, 
-               custom_options_en, custom_options_jp, custom_options_kr, 
-               print_category, 
-               category_en, category_jp, category_kr
+                name_en, name_jp, name_kr, 
+                custom_options_en, custom_options_jp, custom_options_kr, 
+                print_category, 
+                category_en, category_jp, category_kr
         FROM products 
         ORDER BY sort_order ASC, id ASC
     """)
@@ -104,10 +103,9 @@ def process_order_submission(request, order_type_override=None):
         if order_type == 'delivery' and not delivery_enabled:
              return "Delivery Service is currently disabled / 外送服務目前關閉中", 403
 
-        # --- C. 處理編輯模式：抓取舊訂單資料作為後備 (Backfill) ---
+        # --- C. 處理編輯模式：抓取舊訂單資料作為後備 ---
         db_old_data = {}
         if old_order_id:
-            # 讀取舊訂單資料時，一併讀取發票資訊
             cur.execute("""
                 SELECT lang, order_type, delivery_info, delivery_fee, 
                        customer_name, customer_phone, customer_address, scheduled_for, table_number,
@@ -132,10 +130,15 @@ def process_order_submission(request, order_type_override=None):
                 }
                 final_lang = db_old_data['lang']
 
-        # 接收前端傳來的發票與載具資訊 (優先取表單，若無則取舊訂單)
-        tax_id = request.form.get('tax_id') or db_old_data.get('tax_id') or ''
-        carrier_type = request.form.get('carrier_type') or db_old_data.get('carrier_type') or ''
-        carrier_num = request.form.get('carrier_num') or db_old_data.get('carrier_num') or ''
+        # 【發票資訊】優先取表單提交的值，若無（例如編輯模式未改動）則取舊訂單值
+        tax_id = request.form.get('tax_id')
+        if tax_id is None: tax_id = db_old_data.get('tax_id') or ''
+        
+        carrier_type = request.form.get('carrier_type')
+        if carrier_type is None: carrier_type = db_old_data.get('carrier_type') or ''
+        
+        carrier_num = request.form.get('carrier_num')
+        if carrier_num is None: carrier_num = db_old_data.get('carrier_num') or ''
 
         # --- D. 處理外送與客戶資訊 (優先級：Form > Session > DB Old Order) ---
         sess_data = session.get('delivery_data', {})
@@ -158,7 +161,6 @@ def process_order_submission(request, order_type_override=None):
         delivery_info_json_str = None
         delivery_fee = 0
         
-        # 決定是否執行外送邏輯
         should_process_as_delivery = False
         if order_type == 'delivery':
             should_process_as_delivery = True
@@ -167,8 +169,6 @@ def process_order_submission(request, order_type_override=None):
 
         if should_process_as_delivery:
             order_type = 'delivery'
-            
-            # 運費計算
             sess_fee = sess_info.get('shipping_fee')
             form_fee = request.form.get('delivery_fee')
             
@@ -237,7 +237,6 @@ def process_order_submission(request, order_type_override=None):
         # --- F. 寫入資料庫 ---
         cur.execute("LOCK TABLE orders IN SHARE ROW EXCLUSIVE MODE")
 
-        # 寫入包含 tax_id, carrier_type, carrier_num 的資料
         cur.execute("""
             INSERT INTO orders (
                 table_number, items, total_price, lang, 
@@ -291,7 +290,6 @@ def process_order_submission(request, order_type_override=None):
 # 3. 路由定義
 # ==========================================
 
-# --- 首頁 ---
 @menu_bp.route('/')
 def index():
     table_num = request.args.get('table', '')
@@ -313,7 +311,6 @@ def index():
                            delivery_enabled=delivery_enabled)
 
 
-# --- 內用/外帶 路由 ---
 @menu_bp.route('/menu', methods=['GET', 'POST'])
 def menu():
     if request.method == 'POST':
@@ -349,7 +346,6 @@ def menu():
                            is_delivery_mode=False)
 
 
-# --- 外送 專用路由 ---
 @menu_bp.route('/delivery', methods=['GET', 'POST'])
 def delivery_menu():
     if request.method == 'POST':
@@ -373,6 +369,7 @@ def delivery_menu():
                            current_mode='delivery',
                            is_delivery_mode=True,
                            session_delivery=session_delivery)
+    
 
 
 # --- 下單成功頁面 ---
