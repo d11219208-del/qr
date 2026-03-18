@@ -47,32 +47,41 @@ def aes_decrypt(encrypted_base64, key, iv):
 def issue_ecpay_invoice(order):
     """
     發送開立發票請求給綠界
-    修正點：確保 SalesAmount 等於所有 ItemAmount 的總和
+    修正點：強化 content_json 解析與金額轉型，避免金額為 0
     """
     order_id = order.get('id', '')
     
-    # 1. 解析商品明細 (content_json)
-    c_json = order.get('content_json', '[]')
+    # 1. 解析商品明細 (從 database.py 的 content_json 欄位)
+    c_json = order.get('content_json')
     ecpay_items = []
     calculated_total = 0
     
     try:
+        # 確保 c_json 是 list 格式
         if isinstance(c_json, str):
             cart = json.loads(c_json)
-        elif isinstance(c_json, (list, dict)):
-            cart = c_json if isinstance(c_json, list) else [c_json]
+        elif isinstance(c_json, list):
+            cart = c_json
         else:
             cart = []
 
         for item in cart:
-            name = item.get('name_zh', item.get('name', '商品'))
-            qty = int(item.get('qty', 1))
-            # 確保價格為整數，綠界不接受小數點單價
-            price = int(float(item.get('price', 0))) 
+            # 抓取名稱，優先順序：中文名 > 原名 > 預設
+            name = item.get('name_zh') or item.get('name') or "商品"
+            
+            # 強制轉換數量與單價為數值，若失敗則給予預設值
+            try:
+                qty = int(float(item.get('qty', 1)))
+                price = int(float(item.get('price', 0)))
+            except (ValueError, TypeError):
+                qty = 1
+                price = 0
+            
             item_sum = price * qty
             
-            options = item.get('options_zh', item.get('options', []))
-            if options:
+            # 處理規格 (options_zh)，附加在名稱後
+            options = item.get('options_zh') or item.get('options', [])
+            if options and isinstance(options, list):
                 name += f" ({'/'.join(options)})"
 
             ecpay_items.append({
@@ -87,9 +96,16 @@ def issue_ecpay_invoice(order):
             calculated_total += item_sum
             
     except Exception as e:
-        print(f"明細解析錯誤: {e}")
-        # 若解析失敗，改用傳入的總價
-        calculated_total = int(float(order.get('total_price', 0)))
+        print(f"❌ 明細解析失敗: {e}")
+
+    # --- 防呆機制：如果明細加總為 0，嘗試使用 order 裡的總金額 ---
+    if calculated_total == 0:
+        db_total = order.get('total_price', 0)
+        try:
+            calculated_total = int(float(db_total))
+        except:
+            calculated_total = 0
+            
         ecpay_items = [{
             "ItemName": "餐飲費用",
             "ItemCount": 1,
@@ -100,31 +116,27 @@ def issue_ecpay_invoice(order):
             "ItemRemark": ""
         }]
 
-    # --- 重要：處理折扣或運費導致的總價不符 ---
-    # 如果傳入的 order['total_price'] 與明細加總不符（例如有折價券）
-    # 綠界要求 SalesAmount 必須等於 Items 總和，因此我們以 calculated_total 為準
-    sales_amount = calculated_total 
-
-    # 2. 客戶資訊與防呆
-    customer_phone = str(order.get('customer_phone', '') or "").strip()
-    customer_email = order.get('customer_email', "")
+    # 2. 客戶資訊與發票類型判斷
+    customer_phone = str(order.get('customer_phone') or "").strip()
+    customer_email = str(order.get('customer_email') or "").strip()
     if not customer_phone and not customer_email:
         customer_email = "no-reply@test.com"
         
-    customer_name = order.get('customer_name', '') or "門市顧客"
-    customer_address = order.get('customer_address', '') or "台北市"
+    customer_name = order.get('customer_name') or "門市顧客"
+    customer_address = order.get('customer_address') or "台北市"
     
-    tax_id = order.get('tax_id', '') or ''
-    carrier_type = order.get('carrier_type', '') or ''
-    carrier_num = order.get('carrier_num', '') or ''
+    tax_id = str(order.get('tax_id') or "").strip()
+    carrier_type = str(order.get('carrier_type') or "").strip()
+    carrier_num = str(order.get('carrier_num') or "").strip()
 
-    is_company = bool(tax_id and len(str(tax_id)) == 8)
+    is_company = bool(tax_id and len(tax_id) == 8)
 
+    # 判斷是否需要列印
     print_flag = "0"
     if is_company:
-        print_flag = "1"
+        print_flag = "1" # 有統編一定要列印
     if carrier_type:
-        print_flag = "0"
+        print_flag = "0" # 有載具就不列印
 
     # 3. 組裝 Data 物件
     data = {
@@ -141,8 +153,8 @@ def issue_ecpay_invoice(order):
         "Donation": "0",
         "LoveCode": "",
         "TaxType": "1", 
-        "SalesAmount": sales_amount, # 必須等於 Items 加總
-        "InvoiceRemark": "餐飲服務",
+        "SalesAmount": calculated_total, # 最終總金額
+        "InvoiceRemark": f"Order ID: {order_id}",
         "Items": ecpay_items,
         "InvType": "07", 
         "vat": "1",      
@@ -155,7 +167,7 @@ def issue_ecpay_invoice(order):
     if not is_company:
         data.pop("CustomerIdentifier", None)
 
-    # 4. 加密與發送
+    # 4. 加密與 API 發送
     encrypted_data = aes_encrypt(data, HASH_KEY, HASH_IV)
     payload = {
         "MerchantID": MERCHANT_ID,
@@ -213,7 +225,7 @@ def invalid_ecpay_invoice(invoice_no, reason="訂單取消"):
             response_data = aes_decrypt(result_json.get("Data", ""), HASH_KEY, HASH_IV)
             if response_data.get("RtnCode") == 1:
                 return {"success": True, "message": "作廢成功"}
-        return {"success": False, "message": f"作廢失敗: {result_json.get('TransMsg')}"}
+        return {"success": False, "message": "作廢失敗"}
     except Exception as e:
         return {"success": False, "message": str(e)}
 
