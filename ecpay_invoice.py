@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# 讀取環境變數 (加上測試環境的預設值)
+# 讀取環境變數 (加上測試環境的預設值防呆)
 MERCHANT_ID = os.environ.get("ECPAY_INVOICE_MERCHANT_ID", "2000132")
 HASH_KEY = os.environ.get("ECPAY_INVOICE_HASH_KEY", "ejCk326UnaZWKisg")
 HASH_IV = os.environ.get("ECPAY_INVOICE_HASH_IV", "q9jcZX8Ib9LM8wYk")
@@ -47,14 +47,14 @@ def aes_decrypt(encrypted_base64, key, iv):
 def issue_ecpay_invoice(order):
     """
     發送開立發票請求給綠界
-    支援解析 content_json 轉換為綠界商品明細
+    修正點：確保 SalesAmount 等於所有 ItemAmount 的總和
     """
     order_id = order.get('id', '')
-    total_amount = int(order.get('total_price', 0))
     
     # 1. 解析商品明細 (content_json)
     c_json = order.get('content_json', '[]')
     ecpay_items = []
+    calculated_total = 0
     
     try:
         if isinstance(c_json, str):
@@ -67,34 +67,43 @@ def issue_ecpay_invoice(order):
         for item in cart:
             name = item.get('name_zh', item.get('name', '商品'))
             qty = int(item.get('qty', 1))
-            price = int(item.get('price', 0))
+            # 確保價格為整數，綠界不接受小數點單價
+            price = int(float(item.get('price', 0))) 
+            item_sum = price * qty
             
-            # 處理規格 (options)，若有規格則附加在名稱後面
             options = item.get('options_zh', item.get('options', []))
             if options:
                 name += f" ({'/'.join(options)})"
 
             ecpay_items.append({
-                "ItemName": name[:30], # 綠界限制名稱長度
+                "ItemName": name[:30], 
                 "ItemCount": qty,
                 "ItemWord": "份",
                 "ItemPrice": price,
                 "ItemTaxType": "1",
-                "ItemAmount": price * qty,
+                "ItemAmount": item_sum,
                 "ItemRemark": ""
             })
+            calculated_total += item_sum
+            
     except Exception as e:
         print(f"明細解析錯誤: {e}")
-        # 如果解析失敗，使用保底的單一品項以免發票開立失敗
+        # 若解析失敗，改用傳入的總價
+        calculated_total = int(float(order.get('total_price', 0)))
         ecpay_items = [{
             "ItemName": "餐飲費用",
             "ItemCount": 1,
             "ItemWord": "式",
-            "ItemPrice": total_amount,
+            "ItemPrice": calculated_total,
             "ItemTaxType": "1",
-            "ItemAmount": total_amount,
+            "ItemAmount": calculated_total,
             "ItemRemark": ""
         }]
+
+    # --- 重要：處理折扣或運費導致的總價不符 ---
+    # 如果傳入的 order['total_price'] 與明細加總不符（例如有折價券）
+    # 綠界要求 SalesAmount 必須等於 Items 總和，因此我們以 calculated_total 為準
+    sales_amount = calculated_total 
 
     # 2. 客戶資訊與防呆
     customer_phone = str(order.get('customer_phone', '') or "").strip()
@@ -109,15 +118,13 @@ def issue_ecpay_invoice(order):
     carrier_type = order.get('carrier_type', '') or ''
     carrier_num = order.get('carrier_num', '') or ''
 
-    # 判斷是否為統編發票
     is_company = bool(tax_id and len(str(tax_id)) == 8)
 
-    # 列印旗標判斷
     print_flag = "0"
     if is_company:
-        print_flag = "1" # 統編件必須列印
+        print_flag = "1"
     if carrier_type:
-        print_flag = "0" # 有載具就不列印
+        print_flag = "0"
 
     # 3. 組裝 Data 物件
     data = {
@@ -134,8 +141,8 @@ def issue_ecpay_invoice(order):
         "Donation": "0",
         "LoveCode": "",
         "TaxType": "1", 
-        "SalesAmount": total_amount,
-        "InvoiceRemark": f"Order ID: {order_id}",
+        "SalesAmount": sales_amount, # 必須等於 Items 加總
+        "InvoiceRemark": "餐飲服務",
         "Items": ecpay_items,
         "InvType": "07", 
         "vat": "1",      
@@ -177,7 +184,7 @@ def issue_ecpay_invoice(order):
                     "message": "OK"
                 }
             else:
-                return {"success": False, "message": f"綠界退件: {rtn_msg}"}
+                return {"success": False, "message": f"綠界退件: {rtn_msg} (代碼: {rtn_code})"}
         else:
             return {"success": False, "message": f"API 通訊失敗: {result_json.get('TransMsg')}"}
     except Exception as e:
@@ -206,7 +213,7 @@ def invalid_ecpay_invoice(invoice_no, reason="訂單取消"):
             response_data = aes_decrypt(result_json.get("Data", ""), HASH_KEY, HASH_IV)
             if response_data.get("RtnCode") == 1:
                 return {"success": True, "message": "作廢成功"}
-        return {"success": False, "message": "作廢失敗"}
+        return {"success": False, "message": f"作廢失敗: {result_json.get('TransMsg')}"}
     except Exception as e:
         return {"success": False, "message": str(e)}
 
@@ -232,7 +239,8 @@ def print_ecpay_invoice(invoice_no):
             result_json = response.json()
             if result_json.get("TransCode") == 1:
                 res_data = aes_decrypt(result_json.get("Data", ""), HASH_KEY, HASH_IV)
-                return {"success": True, "html": res_data.get("InvoiceHtml", "")}
+                if res_data.get("RtnCode") == 1:
+                    return {"success": True, "html": res_data.get("InvoiceHtml", "")}
             return {"success": False, "message": "取得列印資料失敗"}
         except:
             if response.text.strip().startswith("<"):
