@@ -131,6 +131,7 @@ def process_order_submission(request, order_type_override=None):
                 final_lang = db_old_data['lang']
 
         # 【發票資訊】優先取表單提交的值，若無（例如編輯模式未改動）則取舊訂單值
+        # 注意：載具類別與號碼若為空字串，我們依然寫入空字串或 None
         tax_id = request.form.get('tax_id')
         if tax_id is None: tax_id = db_old_data.get('tax_id') or ''
         
@@ -235,6 +236,7 @@ def process_order_submission(request, order_type_override=None):
         total_price += delivery_fee
 
         # --- F. 寫入資料庫 ---
+        # 確保併發環境下 daily_seq 正確
         cur.execute("LOCK TABLE orders IN SHARE ROW EXCLUSIVE MODE")
 
         cur.execute("""
