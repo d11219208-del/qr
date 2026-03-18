@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# 讀取環境變數 (加上測試環境的預設值防呆)
+# 讀取環境變數 (加上測試環境的預設值)
 MERCHANT_ID = os.environ.get("ECPAY_INVOICE_MERCHANT_ID", "2000132")
 HASH_KEY = os.environ.get("ECPAY_INVOICE_HASH_KEY", "ejCk326UnaZWKisg")
 HASH_IV = os.environ.get("ECPAY_INVOICE_HASH_IV", "q9jcZX8Ib9LM8wYk")
@@ -19,13 +19,10 @@ HASH_IV = os.environ.get("ECPAY_INVOICE_HASH_IV", "q9jcZX8Ib9LM8wYk")
 # 綠界新版 B2C API 路徑
 ISSUE_URL = os.environ.get("ECPAY_INVOICE_URL", "https://einvoice-stage.ecpay.com.tw/B2CInvoice/Issue")
 INVALID_URL = os.environ.get("ECPAY_INVOICE_INVALID_URL", "https://einvoice-stage.ecpay.com.tw/B2CInvoice/Invalid")
-# 👇 新增：列印發票 API 路徑
 PRINT_URL = os.environ.get("ECPAY_INVOICE_PRINT_URL", "https://einvoice-stage.ecpay.com.tw/B2CInvoice/InvoicePrint")
 
 def aes_encrypt(data_dict, key, iv):
-    """
-    綠界新版電子發票專用的 AES 加密
-    """
+    """綠界新版電子發票專用的 AES 加密"""
     json_str = json.dumps(data_dict, ensure_ascii=False, separators=(',', ':'))
     url_encoded = urllib.parse.quote(json_str, safe='')
     cipher = AES.new(key.encode('utf-8'), AES.MODE_CBC, iv.encode('utf-8'))
@@ -35,9 +32,7 @@ def aes_encrypt(data_dict, key, iv):
     return encrypted_base64
 
 def aes_decrypt(encrypted_base64, key, iv):
-    """
-    綠界新版電子發票專用的 AES 解密
-    """
+    """綠界新版電子發票專用的 AES 解密"""
     try:
         encrypted_bytes = base64.b64decode(encrypted_base64)
         cipher = AES.new(key.encode('utf-8'), AES.MODE_CBC, iv.encode('utf-8'))
@@ -52,31 +47,79 @@ def aes_decrypt(encrypted_base64, key, iv):
 def issue_ecpay_invoice(order):
     """
     發送開立發票請求給綠界
+    支援解析 content_json 轉換為綠界商品明細
     """
     order_id = order.get('id', '')
-    amount = int(order.get('total_price', 0))
+    total_amount = int(order.get('total_price', 0))
     
-    # 手機與信箱防呆邏輯
+    # 1. 解析商品明細 (content_json)
+    c_json = order.get('content_json', '[]')
+    ecpay_items = []
+    
+    try:
+        if isinstance(c_json, str):
+            cart = json.loads(c_json)
+        elif isinstance(c_json, (list, dict)):
+            cart = c_json if isinstance(c_json, list) else [c_json]
+        else:
+            cart = []
+
+        for item in cart:
+            name = item.get('name_zh', item.get('name', '商品'))
+            qty = int(item.get('qty', 1))
+            price = int(item.get('price', 0))
+            
+            # 處理規格 (options)，若有規格則附加在名稱後面
+            options = item.get('options_zh', item.get('options', []))
+            if options:
+                name += f" ({'/'.join(options)})"
+
+            ecpay_items.append({
+                "ItemName": name[:30], # 綠界限制名稱長度
+                "ItemCount": qty,
+                "ItemWord": "份",
+                "ItemPrice": price,
+                "ItemTaxType": "1",
+                "ItemAmount": price * qty,
+                "ItemRemark": ""
+            })
+    except Exception as e:
+        print(f"明細解析錯誤: {e}")
+        # 如果解析失敗，使用保底的單一品項以免發票開立失敗
+        ecpay_items = [{
+            "ItemName": "餐飲費用",
+            "ItemCount": 1,
+            "ItemWord": "式",
+            "ItemPrice": total_amount,
+            "ItemTaxType": "1",
+            "ItemAmount": total_amount,
+            "ItemRemark": ""
+        }]
+
+    # 2. 客戶資訊與防呆
     customer_phone = str(order.get('customer_phone', '') or "").strip()
-    customer_email = ""
-    if not customer_phone:
+    customer_email = order.get('customer_email', "")
+    if not customer_phone and not customer_email:
         customer_email = "no-reply@test.com"
         
     customer_name = order.get('customer_name', '') or "門市顧客"
-    customer_address = order.get('customer_address', '') or "台北市內湖區"
+    customer_address = order.get('customer_address', '') or "台北市"
     
     tax_id = order.get('tax_id', '') or ''
     carrier_type = order.get('carrier_type', '') or ''
     carrier_num = order.get('carrier_num', '') or ''
 
+    # 判斷是否為統編發票
     is_company = bool(tax_id and len(str(tax_id)) == 8)
 
+    # 列印旗標判斷
     print_flag = "0"
     if is_company:
-        print_flag = "1"
+        print_flag = "1" # 統編件必須列印
     if carrier_type:
-        print_flag = "0"
+        print_flag = "0" # 有載具就不列印
 
+    # 3. 組裝 Data 物件
     data = {
         "MerchantID": MERCHANT_ID,
         "RelateNumber": f"ORDER{order_id}T{int(time.time())}", 
@@ -91,19 +134,9 @@ def issue_ecpay_invoice(order):
         "Donation": "0",
         "LoveCode": "",
         "TaxType": "1", 
-        "SalesAmount": amount,
-        "InvoiceRemark": "餐飲服務",
-        "Items": [
-            {
-                "ItemName": "餐飲費用",
-                "ItemCount": 1,
-                "ItemWord": "式",
-                "ItemPrice": amount,
-                "ItemTaxType": "1",
-                "ItemAmount": amount,
-                "ItemRemark": ""
-            }
-        ],
+        "SalesAmount": total_amount,
+        "InvoiceRemark": f"Order ID: {order_id}",
+        "Items": ecpay_items,
         "InvType": "07", 
         "vat": "1",      
     }
@@ -115,8 +148,8 @@ def issue_ecpay_invoice(order):
     if not is_company:
         data.pop("CustomerIdentifier", None)
 
+    # 4. 加密與發送
     encrypted_data = aes_encrypt(data, HASH_KEY, HASH_IV)
-
     payload = {
         "MerchantID": MERCHANT_ID,
         "RqHeader": {
@@ -137,22 +170,21 @@ def issue_ecpay_invoice(order):
             rtn_msg = response_data.get("RtnMsg", "無錯誤訊息")
             
             if rtn_code == 1:
-                invoice_no = response_data.get("InvoiceNo", "")
-                return {"success": True, "invoice_no": invoice_no, "message": "OK"}
+                return {
+                    "success": True, 
+                    "invoice_no": response_data.get("InvoiceNo", ""), 
+                    "random_number": response_data.get("RandomNumber", ""),
+                    "message": "OK"
+                }
             else:
-                print(f"❌ 綠界拒絕開立發票: {rtn_msg} (代碼: {rtn_code})")
-                return {"success": False, "message": f"綠界退件: {rtn_msg} (代碼: {rtn_code})"}
+                return {"success": False, "message": f"綠界退件: {rtn_msg}"}
         else:
             return {"success": False, "message": f"API 通訊失敗: {result_json.get('TransMsg')}"}
-
     except Exception as e:
         return {"success": False, "message": f"Request failed: {str(e)}"}
 
-
 def invalid_ecpay_invoice(invoice_no, reason="訂單取消"):
-    """
-    發送作廢發票請求給綠界
-    """
+    """發送作廢發票請求"""
     data = {
         "MerchantID": MERCHANT_ID,
         "InvoiceNo": invoice_no,
@@ -161,84 +193,50 @@ def invalid_ecpay_invoice(invoice_no, reason="訂單取消"):
     }
     
     encrypted_data = aes_encrypt(data, HASH_KEY, HASH_IV)
-    
     payload = {
         "MerchantID": MERCHANT_ID,
-        "RqHeader": {
-            "Timestamp": int(time.time()),
-            "Revision": "3.0.0"
-        },
+        "RqHeader": { "Timestamp": int(time.time()), "Revision": "3.0.0" },
         "Data": encrypted_data
     }
 
     try:
-        headers = {'Content-Type': 'application/json'}
-        response = requests.post(INVALID_URL, json=payload, headers=headers)
+        response = requests.post(INVALID_URL, json=payload)
         result_json = response.json()
-        
         if result_json.get("TransCode") == 1:
             response_data = aes_decrypt(result_json.get("Data", ""), HASH_KEY, HASH_IV)
             if response_data.get("RtnCode") == 1:
                 return {"success": True, "message": "作廢成功"}
-            else:
-                msg = response_data.get("RtnMsg", str(response_data))
-                return {"success": False, "message": f"綠界退件: {msg}"}
-        else:
-            err_data = aes_decrypt(result_json.get("Data", ""), HASH_KEY, HASH_IV)
-            msg = err_data.get("RtnMsg") or str(result_json)
-            return {"success": False, "message": msg}
-            
+        return {"success": False, "message": "作廢失敗"}
     except Exception as e:
-        return {"success": False, "message": f"Request failed: {str(e)}"}
+        return {"success": False, "message": str(e)}
 
-
-# 👇 新增：列印發票函數
 def print_ecpay_invoice(invoice_no):
-    """
-    發送列印發票請求給綠界
-    回傳：包含發票排版的 HTML 字串 (供前端列印使用)
-    """
+    """發送列印發票請求並取得 HTML"""
     data = {
         "MerchantID": MERCHANT_ID,
         "InvoiceNo": invoice_no,
-        "PrintStyle": "1", # 1: 證明聯 (預設), 2: 明細, 3: 證明聯+明細
-        "IsPrint": "1"     # 1: 執行列印
+        "PrintStyle": "1", 
+        "IsPrint": "1"
     }
     
     encrypted_data = aes_encrypt(data, HASH_KEY, HASH_IV)
-    
     payload = {
         "MerchantID": MERCHANT_ID,
-        "RqHeader": {
-            "Timestamp": int(time.time()),
-            "Revision": "3.0.0"
-        },
+        "RqHeader": { "Timestamp": int(time.time()), "Revision": "3.0.0" },
         "Data": encrypted_data
     }
 
     try:
-        headers = {'Content-Type': 'application/json'}
-        response = requests.post(PRINT_URL, json=payload, headers=headers)
-        
-        # 嘗試解析 JSON (綠界 V3 API 通常回傳 JSON)
+        response = requests.post(PRINT_URL, json=payload)
         try:
             result_json = response.json()
             if result_json.get("TransCode") == 1:
-                response_data = aes_decrypt(result_json.get("Data", ""), HASH_KEY, HASH_IV)
-                if response_data.get("RtnCode") == 1:
-                    # 取得 HTML 內容
-                    invoice_html = response_data.get("InvoiceHtml", "")
-                    return {"success": True, "html": invoice_html}
-                else:
-                    return {"success": False, "message": f"列印失敗: {response_data.get('RtnMsg')}"}
-            else:
-                return {"success": False, "message": f"API 通訊失敗: {result_json.get('TransMsg')}"}
-        except json.JSONDecodeError:
-            # 防呆：如果綠界直接回傳 HTML 網頁而不是 JSON，就直接抓取
+                res_data = aes_decrypt(result_json.get("Data", ""), HASH_KEY, HASH_IV)
+                return {"success": True, "html": res_data.get("InvoiceHtml", "")}
+            return {"success": False, "message": "取得列印資料失敗"}
+        except:
             if response.text.strip().startswith("<"):
                 return {"success": True, "html": response.text}
-            else:
-                return {"success": False, "message": "收到未知的非 JSON 格式"}
-            
+            return {"success": False, "message": "格式錯誤"}
     except Exception as e:
-        return {"success": False, "message": f"Request failed: {str(e)}"}
+        return {"success": False, "message": str(e)}
