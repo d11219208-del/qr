@@ -5,7 +5,7 @@ import psycopg2.extras
 import traceback  
 import bcrypt  # 💡 新增：引入 bcrypt 用來驗證密碼
 #引入綠界發票api
-from ecpay_invoice import issue_ecpay_invoice, invalid_ecpay_invoice
+from utils.ecpay_invoice import issue_ecpay_invoice, invalid_ecpay_invoice, print_ecpay_invoice
 # 🛡️ 引入我們在 utils.py 寫好的雙重防護罩
 from utils import login_required, role_required
 from datetime import datetime, timedelta
@@ -276,9 +276,11 @@ def check_new_orders():
                     <a href='/menu?edit_oid={oid}&lang=zh' target='_blank' class='btn' style='flex:1; background:#ff9800; color:white;'>✏️ 修改</a>
                     <button onclick='if(confirm(\"⚠️ 確定作廢此單？\")) action(\"/kitchen/cancel/{oid}\")' class='btn btn-void' style='width:50px;'>🗑️</button>
                 </div>"""
+
             elif status == 'Cancelled':
                 buttons += f"<div style='text-align:center; color:#d32f2f; font-weight:bold; margin-bottom:5px;'>【此單已作廢】</div>"
                 buttons += f"<button onclick='askPrintType({oid})' class='btn btn-print' style='width:100%; opacity:0.6;'>🖨️ 補印作廢單</button>"
+
             else: # Completed
                 buttons += f"""
                     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; padding:0 5px; opacity:0.7;">
@@ -286,11 +288,18 @@ def check_new_orders():
                         <div>{fee_html}<span style="font-size:18px; color:#333; font-weight:bold;">${formatted_total}</span></div>
                     </div>
                 """
-                # 👇 這裡修改：把補印按鈕與新的「作廢並修改」按鈕並排
-                buttons += f"""<div style="display:flex; gap:5px;">
-                    <button onclick='askPrintType({oid})' class='btn btn-print' style='flex:1;'>🖨️ 補印單據</button>
-                    <button onclick='if(confirm(\"⚠️ 確定要作廢發票並重新修改此單嗎？\")) {{ fetch(\"/kitchen/cancel/{oid}\").then(() => window.open(\"/menu?edit_oid={oid}&lang=zh\", \"_blank\")); }}' class='btn' style='flex:1; background:#ff9800; color:white;'>✏️ 作廢並修改</button>
-                </div>"""
+                # 👇 修改處：在 Completed 狀態下放入三個按鈕
+                buttons += f"""
+                <div style="display:flex; flex-direction:column; gap:5px;">
+                    <button onclick='askPrintType({oid})' class='btn btn-print' style='width:100%;'>🖨️ 補印單據</button>
+                    
+                    <div style="display:flex; gap:5px;">
+                        <button onclick='if(confirm(\"⚠️ 確定只要作廢發票，並將此單更改為【作廢狀態】嗎？\")) action(\"/kitchen/cancel/{oid}\")' class='btn' style='flex:1; background:#f44336; color:white; border:none; border-radius:4px; padding:6px; cursor:pointer;'>🗑️ 作廢訂單</button>
+                        
+                        <button onclick='if(confirm(\"⚠️ 確定要作廢發票並重新修改此單嗎？\")) {{ fetch(\"/kitchen/cancel/{oid}\").then(() => {{ window.open(\"/menu?edit_oid={oid}&lang=zh\", \"_blank\"); window.location.reload(); }}); }}' class='btn' style='flex:1; background:#ff9800; color:white; border:none; border-radius:4px; padding:6px; cursor:pointer;'>✏️ 作廢並修改</button>
+                    </div>
+                </div>
+                """
 
             html_content += f"""
             <div class="card {status_cls}" data-id="{oid}">
@@ -310,7 +319,6 @@ def check_new_orders():
     except Exception as e:
         traceback.print_exc()
         return jsonify({'html': f"載入錯誤: {str(e)}", 'max_seq': 0, 'new_ids': []})
-
 
 # --- 3. 核心列印路由 (支援 80mm & 精確字體控制) ---
 @kitchen_bp.route('/print_order/<int:oid>')
