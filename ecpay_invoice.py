@@ -47,10 +47,16 @@ def aes_decrypt(encrypted_base64, key, iv):
 def issue_ecpay_invoice(order):
     """
     發送開立發票請求給綠界
-    修正點：強化 content_json 解析與金額轉型，避免金額為 0
+    修正點：支援 unit_price 解析、長度裁切，並自動補齊外送費/折扣差額
     """
     order_id = order.get('id', '')
     
+    # 取得資料庫傳來的訂單總價 (做最後防呆驗證用)
+    try:
+        db_total = int(float(order.get('total_price', 0)))
+    except:
+        db_total = 0
+
     # 1. 解析商品明細 (從 database.py 的 content_json 欄位)
     c_json = order.get('content_json')
     ecpay_items = []
@@ -66,13 +72,21 @@ def issue_ecpay_invoice(order):
             cart = []
 
         for item in cart:
+            if not isinstance(item, dict):
+                continue
+                
             # 抓取名稱，優先順序：中文名 > 原名 > 預設
             name = item.get('name_zh') or item.get('name') or "商品"
             
-            # 強制轉換數量與單價為數值，若失敗則給予預設值
+            # 強制轉換數量與單價為數值
+            # 💡 加入邏輯：優先抓取 unit_price (因應您的資料格式)
+            raw_price = item.get('unit_price')
+            if raw_price is None:
+                raw_price = item.get('price', 0)
+                
             try:
                 qty = int(float(item.get('qty', 1)))
-                price = int(float(item.get('price', 0)))
+                price = int(float(raw_price))
             except (ValueError, TypeError):
                 qty = 1
                 price = 0
@@ -84,37 +98,52 @@ def issue_ecpay_invoice(order):
             if options and isinstance(options, list):
                 name += f" ({'/'.join(options)})"
 
-            ecpay_items.append({
-                "ItemName": name[:30], 
-                "ItemCount": qty,
-                "ItemWord": "份",
-                "ItemPrice": price,
-                "ItemTaxType": "1",
-                "ItemAmount": item_sum,
-                "ItemRemark": ""
-            })
-            calculated_total += item_sum
+            # 💡 防呆：加上選項後可能字串太長，必須在這裡進行裁切 (綠界限制 30 字元)
+            name = name[:30]
+
+            if item_sum != 0 or price != 0:
+                ecpay_items.append({
+                    "ItemName": name, 
+                    "ItemCount": qty,
+                    "ItemWord": "份",
+                    "ItemPrice": price,
+                    "ItemTaxType": "1",
+                    "ItemAmount": item_sum,
+                    "ItemRemark": ""
+                })
+                calculated_total += item_sum
             
     except Exception as e:
         print(f"❌ 明細解析失敗: {e}")
 
-    # --- 防呆機制：如果明細加總為 0，嘗試使用 order 裡的總金額 ---
-    if calculated_total == 0:
-        db_total = order.get('total_price', 0)
-        try:
-            calculated_total = int(float(db_total))
-        except:
-            calculated_total = 0
-            
+    # --- 💡 防呆機制與自動差額校正 ---
+    if not ecpay_items or calculated_total == 0:
+        # 如果因為任何原因解析不到商品，降級開立統一名稱
         ecpay_items = [{
             "ItemName": "餐飲費用",
             "ItemCount": 1,
             "ItemWord": "式",
-            "ItemPrice": calculated_total,
+            "ItemPrice": db_total,
             "ItemTaxType": "1",
-            "ItemAmount": calculated_total,
+            "ItemAmount": db_total,
             "ItemRemark": ""
         }]
+        calculated_total = db_total
+        
+    elif calculated_total != db_total:
+        # 如果明細加總不等於訂單總額 (通常是因為外送費、折價券)，自動補上差額
+        diff = db_total - calculated_total
+        diff_name = "運費及其他費用" if diff > 0 else "折扣優惠折抵"
+        ecpay_items.append({
+            "ItemName": diff_name[:30],
+            "ItemCount": 1,
+            "ItemWord": "式",
+            "ItemPrice": diff,
+            "ItemTaxType": "1",
+            "ItemAmount": diff,
+            "ItemRemark": ""
+        })
+        calculated_total = db_total # 強制對齊
 
     # 2. 客戶資訊與發票類型判斷
     customer_phone = str(order.get('customer_phone') or "").strip()
@@ -153,7 +182,7 @@ def issue_ecpay_invoice(order):
         "Donation": "0",
         "LoveCode": "",
         "TaxType": "1", 
-        "SalesAmount": calculated_total, # 最終總金額
+        "SalesAmount": calculated_total, # 最終總金額 (已對齊)
         "InvoiceRemark": f"Order ID: {order_id}",
         "Items": ecpay_items,
         "InvType": "07", 
