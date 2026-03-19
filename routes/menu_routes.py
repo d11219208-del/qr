@@ -236,6 +236,7 @@ def process_order_submission(request, order_type_override=None):
         total_price += delivery_fee
 
         # --- F. 寫入資料庫 ---
+        print("接收到的表單資料:", request.form)
         # 確保併發環境下 daily_seq 正確
         cur.execute("LOCK TABLE orders IN SHARE ROW EXCLUSIVE MODE")
 
