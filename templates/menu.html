@@ -465,7 +465,7 @@
         }
     </script>
 
-    //購物車
+<!--購物車-->
 
     <div id="list"></div>
 
@@ -680,7 +680,7 @@
         }
     }
 
-    // 打開商品選項彈窗
+        // 打開商品選項彈窗
     function openOpt(productId, cartIndex = -1) {
         cur = P.find(x => x.id == productId); 
         if(!cur) return;
@@ -701,7 +701,7 @@
         } else if (!Array.isArray(opts)) {
             opts = [];
         }
-
+    
         let existingOpts = editIndex > -1 ? C[editIndex].options_zh : [];
         
         opts.forEach((o, index) => {
@@ -735,13 +735,13 @@
         document.getElementById('opt-m').style.display = 'flex';
         document.getElementById('cart-m').style.display = 'none';
     }
-
+    
     function cq(n) {
         let input = document.getElementById('m-q'); 
         let val = parseInt(input.value) || 1;
         if(val + n >= 1) input.value = val + n;
     }
-
+    
     // 加入購物車
     function addC() {
         let q = parseInt(document.getElementById('m-q').value) || 1;
@@ -749,7 +749,7 @@
         if(typeof opts_zh === 'string') opts_zh = opts_zh.split(',').filter(x=>x);
         let opts_en = cur.custom_options_en || opts_zh;
         if(typeof opts_en === 'string') opts_en = opts_en.split(',').filter(x=>x);
-
+    
         let itemData = { 
             id: cur.id, 
             name_zh: cur.name_zh, name_en: cur.name_en, name_jp: cur.name_jp, name_kr: cur.name_kr, 
@@ -767,7 +767,7 @@
         upd(); 
         if(editIndex > -1) showCart();
     }
-
+    
     // 更新購物車總計顯示
     function upd() {
         if(C.length) {
@@ -781,7 +781,7 @@
             document.getElementById('bar').style.display = 'none';
         }
     }
-
+    
     function updateCartQty(idx, n) {
         C[idx].qty += n; 
         if(C[idx].qty <= 0) C.splice(idx, 1);
@@ -789,7 +789,7 @@
         showCart(); 
         upd();
     }
-
+    
     // 顯示購物車明細彈窗
     function showCart() {
         let h = "";
@@ -827,9 +827,10 @@
         document.getElementById('c-list').innerHTML = h || `<div style="text-align:center; padding: 40px 0; font-weight:bold; color:var(--text-muted);">${T.empty_cart}</div>`;
         document.getElementById('cart-m').style.display = 'flex';
     }
-
+    
     // 最終結帳函式
     function sub() {
+        // 1. 外送低消檢查
         if (IS_DELIVERY) {
             let foodTotal = C.reduce((a, b) => a + (b.unit_price * b.qty), 0);
             if (foodTotal < DELIVERY_MIN) {
@@ -837,37 +838,39 @@
                 return; 
             }
         }
-
+    
         let tableVal = "";
+        
+        // 2. 判斷訂單類型並收集對應資料
         if (IS_DELIVERY) {
             tableVal = '外送';
         } else if (currentMode === 'takeout') {
             tableVal = '外帶';
             
-            // 1. 取得畫面上方介面輸入的「時間」與「手機號碼」
+            // 取得畫面上方介面輸入的「時間」與「手機號碼」
             const timeVal = document.getElementById('takeout_time').value;
             const phoneVal = document.getElementById('phone').value; 
             
-            // 2. 必填驗證
+            // 必填驗證
             if(!timeVal) {
                 alert("⚠️ 請選擇取餐時間");
                 return;
             }
-
-            // 【增加】結帳送出時再次檢查時間，避免預設時間不在營業範圍內
+    
+            // 結帳送出時再次檢查時間，避免預設時間不在營業範圍內
             const selectedDate = new Date(timeVal);
             const timeInMinutes = selectedDate.getHours() * 60 + selectedDate.getMinutes();
             if (timeInMinutes < (10 * 60 + 30) || timeInMinutes > (20 * 60 + 30)) {
                 alert("⚠️ 取餐時間僅限 10:30 AM 至 08:30 PM 之間，請重新選擇！");
                 return;
             }
-
+    
             if(!phoneVal || phoneVal.trim() === '') {
                 alert("⚠️ 請輸入聯絡手機號碼");
                 return;
             }
             
-            // 3. 將使用者輸入的資料，塞入隱藏的表單欄位準備送出
+            // 將使用者輸入的資料，塞入隱藏的表單欄位準備送出
             document.getElementById('scheduled_for_input').value = timeVal.replace('T', ' ');
             document.getElementById('phone_input').value = phoneVal.trim();
             
@@ -875,20 +878,49 @@
             // 若為內用模式，直接抓取桌號欄位
             tableVal = document.getElementById('visible_table').value;
         }
-
+    
         if(!tableVal || tableVal.trim() === '') {
             return alert(T.table_placeholder || '請輸入桌號');
         }
         
         document.getElementById('tbl_input').value = tableVal;
         
+        // 3. 確認結帳
         if(confirm(T.confirm_order)) {
+            let orderForm = document.getElementById('order-form');
+    
+            // 【發票修正重點】動態將發票資料加入送出的表單中
+            // 為了避免重複建立隱藏欄位，我們先建立一個小幫手函數
+            function addHiddenInput(form, name, value) {
+                // 先找找看表單裡有沒有這個隱藏欄位，沒有的話就建立一個
+                let input = form.querySelector(`input[name="${name}"]`);
+                if (!input) {
+                    input = document.createElement('input');
+                    input.type = 'hidden';
+                    input.name = name;
+                    form.appendChild(input);
+                }
+                input.value = value || '';
+            }
+    
+            // 抓取畫面上發票區塊的資料，並塞進隱藏欄位
+            let taxIdElem = document.getElementById('tax_id');
+            let carrierTypeElem = document.getElementById('carrier_type');
+            let carrierNumElem = document.getElementById('carrier_num');
+    
+            // 安全檢查，確保元素存在才抓值
+            addHiddenInput(orderForm, 'tax_id', taxIdElem ? taxIdElem.value : '');
+            addHiddenInput(orderForm, 'carrier_type', carrierTypeElem ? carrierTypeElem.value : '');
+            addHiddenInput(orderForm, 'carrier_num', carrierNumElem ? carrierNumElem.value : '');
+    
             // 將購物車內容轉成字串塞入表單
             document.getElementById('cart_input').value = JSON.stringify(C);
+            
             // 清除暫存
             localStorage.removeItem('cart_cache');
-            // 送出表單
-            document.getElementById('order-form').submit();
+            
+            // 正式送出表單
+            orderForm.submit();
         }
     }
     
