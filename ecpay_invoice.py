@@ -1,4 +1,3 @@
-# ecpay_invoice.py
 import os
 import time
 import json
@@ -47,7 +46,8 @@ def aes_decrypt(encrypted_base64, key, iv):
 def issue_ecpay_invoice(order):
     """
     發送開立發票請求給綠界
-    修正點：支援 unit_price 解析、長度裁切，並自動補齊外送費/折扣差額
+    修正點：支援 unit_price 解析、長度裁切，並自動補齊外送費/折扣差額，
+            及處理愛心捐贈碼與各類載具格式翻譯。
     """
     order_id = order.get('id', '')
     
@@ -155,17 +155,37 @@ def issue_ecpay_invoice(order):
     customer_address = order.get('customer_address') or "台北市"
     
     tax_id = str(order.get('tax_id') or "").strip()
-    carrier_type = str(order.get('carrier_type') or "").strip()
-    carrier_num = str(order.get('carrier_num') or "").strip()
+    frontend_carrier_type = str(order.get('carrier_type') or "").strip()
+    frontend_carrier_num = str(order.get('carrier_num') or "").strip()
 
     is_company = bool(tax_id and len(tax_id) == 8)
 
-    # 判斷是否需要列印
-    print_flag = "0"
+    # 🟢 幫綠界翻譯載具與捐贈碼邏輯 🟢
+    ecpay_donation = "0"
+    ecpay_print = "1"
+    ecpay_carrier_type = ""
+    ecpay_carrier_num = ""
+    ecpay_love_code = ""
+
     if is_company:
-        print_flag = "1" # 有統編一定要列印
-    if carrier_type:
-        print_flag = "0" # 有載具就不列印
+        # 情況 A：打統編 (B2B) -> 強制列印紙本，不可捐贈，不可用載具
+        ecpay_print = "1"
+        ecpay_donation = "0"
+    elif frontend_carrier_type == 'don':
+        # 情況 B：愛心捐贈碼
+        ecpay_donation = "1"
+        ecpay_print = "0" # 捐贈不可列印
+        ecpay_love_code = frontend_carrier_num
+    elif frontend_carrier_type in ['2', '3']:
+        # 情況 C：手機條碼或自然人憑證
+        ecpay_donation = "0"
+        ecpay_print = "0" # 有載具不可列印
+        ecpay_carrier_type = frontend_carrier_type
+        ecpay_carrier_num = frontend_carrier_num
+    else:
+        # 情況 D：預設印出紙本 (未選擇或不支援的選項)
+        ecpay_donation = "0"
+        ecpay_print = "1"
 
     # 3. 組裝 Data 物件
     data = {
@@ -178,20 +198,21 @@ def issue_ecpay_invoice(order):
         "CustomerPhone": customer_phone,
         "CustomerEmail": customer_email, 
         "ClearanceMark": "", 
-        "Print": print_flag,
-        "Donation": "0",
-        "LoveCode": "",
+        "Print": ecpay_print,            # 使用翻譯後的參數
+        "Donation": ecpay_donation,      # 使用翻譯後的參數
+        "LoveCode": ecpay_love_code,     # 使用翻譯後的參數
         "TaxType": "1", 
-        "SalesAmount": calculated_total, # 最終總金額 (已對齊)
+        "SalesAmount": calculated_total,
         "InvoiceRemark": f"Order ID: {order_id}",
         "Items": ecpay_items,
         "InvType": "07", 
         "vat": "1",      
     }
     
-    if carrier_type and carrier_num:
-        data["CarrierType"] = carrier_type
-        data["CarrierNum"] = carrier_num
+    # 加入綠界要求的載具欄位 (如果有值才加，而且絕不能是 'don')
+    if ecpay_carrier_type and ecpay_carrier_num:
+        data["CarrierType"] = ecpay_carrier_type
+        data["CarrierNum"] = ecpay_carrier_num
     
     if not is_company:
         data.pop("CustomerIdentifier", None)
