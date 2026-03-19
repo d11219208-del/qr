@@ -1,4 +1,3 @@
-
 import os  # 匯入作業系統模組，用於讀取環境變數
 import psycopg2  # 匯入 PostgreSQL 資料庫驅動模組
 from urllib.parse import urlparse  # 匯入網址解析工具
@@ -75,11 +74,11 @@ def init_db():
                 scheduled_for TEXT,               -- 預約送達時間
                 delivery_fee INTEGER DEFAULT 0,   -- 外送費
 
-                -- 👇 新增：綠界電子發票相關欄位
+                -- 👇 新增：綠界電子發票相關欄位 (已放寬長度)
                 invoice_number VARCHAR(50),       -- 發票號碼 (例: AB12345678)
                 invoice_status VARCHAR(20) DEFAULT 'Not Issued', -- 發票狀態 (Not Issued: 未開立, Issued: 已開立, Void: 已作廢)
-                tax_id VARCHAR(10),               -- 統一編號 (買方統編)
-                carrier_type VARCHAR(10),          -- 載具類別 (1: 綠界, 2: 自然人憑證, 3: 手機條碼)
+                tax_id VARCHAR(15),               -- 統一編號 (買方統編，放寬至 15)
+                carrier_type VARCHAR(10),         -- 載具類別 (1: 綠界, 2: 自然人憑證, 3: 手機條碼，放寬至 10 以容納 'don')
                 carrier_num VARCHAR(50)           -- 載具隱碼 (例: /AB12345)
             );
         ''')
@@ -140,7 +139,7 @@ def init_db():
             print(f"✅ 預設 Admin 帳號建立完成。帳號: {default_username} / 密碼: {default_password}")
 
 
-        # 5. 【關鍵】欄位自動補全 (Migration)
+        # 5. 【關鍵】欄位自動補全與類型修正 (Migration)
         # 此段確保如果資料表已經存在，但缺少新開發的欄位時，會自動新增欄位
         alters = [
             # --- Orders 表格補全 ---
@@ -154,12 +153,17 @@ def init_db():
             "ALTER TABLE orders ADD COLUMN IF NOT EXISTS scheduled_for TEXT;",
             "ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_fee INTEGER DEFAULT 0;",
             
-            # 👇 新增：綠界發票欄位自動補全
+            # 👇 新增：綠界發票欄位自動補全 (修正為正確長度)
             "ALTER TABLE orders ADD COLUMN IF NOT EXISTS invoice_number VARCHAR(50);",
             "ALTER TABLE orders ADD COLUMN IF NOT EXISTS invoice_status VARCHAR(20) DEFAULT 'Not Issued';",
-            "ALTER TABLE orders ADD COLUMN IF NOT EXISTS tax_id VARCHAR(10);",
-            "ALTER TABLE orders ADD COLUMN IF NOT EXISTS carrier_type VARCHAR(1);",
+            "ALTER TABLE orders ADD COLUMN IF NOT EXISTS tax_id VARCHAR(15);",
+            "ALTER TABLE orders ADD COLUMN IF NOT EXISTS carrier_type VARCHAR(10);",
             "ALTER TABLE orders ADD COLUMN IF NOT EXISTS carrier_num VARCHAR(50);",
+
+            # 👇 終極修復：強制把已經存在的舊欄位「撐大」，解決 VARCHAR(1) 報錯問題！
+            "ALTER TABLE orders ALTER COLUMN carrier_type TYPE VARCHAR(10);",
+            "ALTER TABLE orders ALTER COLUMN tax_id TYPE VARCHAR(15);",
+            "ALTER TABLE orders ALTER COLUMN carrier_num TYPE VARCHAR(50);",
 
             # --- Products 表格補全 (防止舊資料庫缺少多語系欄位) ---
             "ALTER TABLE products ADD COLUMN IF NOT EXISTS sort_order INTEGER DEFAULT 100;",
@@ -178,15 +182,13 @@ def init_db():
         print("🔄 正在檢查資料庫欄位結構...")
         for cmd in alters:
             try:
-                cur.execute(cmd) # 執行增加欄位的指令
+                cur.execute(cmd) # 執行增加/修改欄位的指令
             except Exception as e:
                 # 攔截錯誤，如果是「重複欄位」或「已存在」的報錯則忽略，其餘印出警告
-                # PostgreSQL 的 ADD COLUMN IF NOT EXISTS 在舊版本可能不支援，
-                # 所以這裡保留 try-except 以確保相容性
                 if 'duplicate' not in str(e).lower() and 'exists' not in str(e).lower():
                     print(f"⚠️ Warning during migration: {e}")
 
-        print("✅ 資料庫初始化檢查完成 (含 order_type, delivery_info, 發票欄位, products 多語系欄位, 及 users 表格)")
+        print("✅ 資料庫初始化檢查完成 (含 order_type, delivery_info, 發票欄位長度修復, products 多語系欄位, 及 users 表格)")
         return True
 
     except Exception as e:
