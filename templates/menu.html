@@ -328,6 +328,7 @@
     
     <span class="input-label" style="color:#334155; display:block; margin-bottom:4px; font-size: 0.9em;">統一編號 (Tax ID - 選填)</span>
     <input type="text" id="tax_id" name="tax_id" class="modern-input" placeholder="請輸入 8 碼數字" maxlength="8" 
+           value="{{ tax_id | default('') }}"
            style="background:white; border-color:#cbd5e1; padding:8px 10px; width: 100%; box-sizing: border-box; margin-bottom: 10px;" 
            onblur="validateTaxId()">
     <div id="tax_id_error" style="color: #ef4444; font-size: 0.85em; margin-top: -6px; margin-bottom: 10px; display: none;">
@@ -336,15 +337,16 @@
 
     <span class="input-label" style="color:#334155; display:block; margin-bottom:4px; font-size: 0.9em;">發票處理 (Invoice Method)</span>
     <select id="carrier_type" name="carrier_type" class="modern-input" style="background:white; border-color:#cbd5e1; padding:8px 10px; width: 100%; box-sizing: border-box; margin-bottom: 10px;" onchange="toggleCarrierInput()">
-        <option value="">不使用載具 (印出紙本/預設)</option>
-        <option value="3">手機條碼 (Mobile Barcode)</option>
-        <option value="2">自然人憑證 (Citizen Digital Cert.)</option>
-        <option value="don">愛心捐贈碼 (Donation Code)</option>
+        <option value="" {% if not carrier_type %}selected{% endif %}>不使用載具 (印出紙本/預設)</option>
+        <option value="3" {% if carrier_type == '3' %}selected{% endif %}>手機條碼 (Mobile Barcode)</option>
+        <option value="2" {% if carrier_type == '2' %}selected{% endif %}>自然人憑證 (Citizen Digital Cert.)</option>
+        <option value="don" {% if carrier_type == 'don' or carrier_type == '4' %}selected{% endif %}>愛心捐贈碼 (Donation Code)</option>
     </select>
 
     <div id="carrier_num_container" style="display: none;">
         <span id="carrier_label" class="input-label" style="color:#334155; display:block; margin-bottom:4px; font-size: 0.9em;">載具號碼 (Carrier Number)</span>
         <input type="text" id="carrier_num" name="carrier_num" class="modern-input" placeholder="例如: /AB12345" 
+               value="{{ carrier_num | default('') }}"
                style="background:white; border-color:#cbd5e1; padding:8px 10px; width: 100%; box-sizing: border-box;"
                onblur="validateCarrierNum()" oninput="this.value = this.value.toUpperCase()">
         <div id="carrier_error" style="color: #ef4444; font-size: 0.85em; margin-top: 6px; display: none;">
@@ -354,6 +356,11 @@
 </div>
 
     <script>
+        // 💡 新增：當網頁載入完成後，執行一次 toggleCarrierInput，確保如果有舊載具設定，輸入框會正確展開
+        window.addEventListener('DOMContentLoaded', function() {
+            toggleCarrierInput();
+        });
+
         // 統編驗證 (保留原有邏輯)
         function validateTaxId() {
             const input = document.getElementById('tax_id');
@@ -419,7 +426,10 @@
                 }
             } else {
                 container.style.display = 'none';
-                input.value = ''; 
+                // 💡 只有在手動切換回空值時才清空輸入框，避免載入時誤清舊資料
+                if(document.activeElement === document.getElementById('carrier_type')) {
+                    input.value = ''; 
+                }
                 input.style.borderColor = '#cbd5e1';
                 errorDiv.style.display = 'none';
             }
@@ -465,9 +475,7 @@
         }
     </script>
 
-<!--購物車-->
-
-    <div id="list"></div>
+<div id="list"></div>
 
     <form id="order-form" method="POST" action="/menu">
         <input type="hidden" name="cart_data" id="cart_input">
@@ -624,6 +632,9 @@
             initCart();
         }
     });
+    </script>
+
+    
 
     // 渲染商品列表
     let h = "", lastCatKey = "", cats = [];
