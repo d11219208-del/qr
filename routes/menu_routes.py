@@ -113,6 +113,11 @@ def process_order_submission(request, order_type_override=None):
                 FROM orders WHERE id=%s
             """, (old_order_id,))
             row = cur.fetchone()
+            
+            # 💡 除錯神器：印出從資料庫抓出來的原汁原味資料
+            print(f"👉 [DEBUG] 查詢舊訂單 ID: {old_order_id}")
+            print(f"👉 [DEBUG] 資料庫原始 row 資料: {row}")
+            
             if row:
                 db_old_data = {
                     'lang': row[0],
@@ -124,23 +129,27 @@ def process_order_submission(request, order_type_override=None):
                     'customer_address': row[6],
                     'scheduled_for': row[7],
                     'table_number': row[8],
-                    'tax_id': row[9],
-                    'carrier_type': row[10],
-                    'carrier_num': row[11]
+                    # 確保就算資料庫是 NULL，也會轉換成乾淨的空字串，避免程式報錯
+                    'tax_id': row[9] if row[9] is not None else '',
+                    'carrier_type': row[10] if row[10] is not None else '',
+                    'carrier_num': row[11] if row[11] is not None else ''
                 }
                 final_lang = db_old_data['lang']
 
         # 【發票資訊】全新邏輯：只要是編輯模式，就「強制」無縫接軌帶入舊資料！
-        # 如果是全新訂單，才從前端表單 (request.form) 抓取資料。
-        # 舊的發票號碼 (invoice_number) 我們不去抓它，這樣稍後綠界就會開立全新的發票。
         if db_old_data:
-            tax_id = db_old_data.get('tax_id') or ''
-            carrier_type = db_old_data.get('carrier_type') or ''
-            carrier_num = db_old_data.get('carrier_num') or ''
+            # 編輯模式：完全信任資料庫的舊資料，忽略前端表單傳來的值
+            tax_id = db_old_data.get('tax_id', '')
+            carrier_type = db_old_data.get('carrier_type', '')
+            carrier_num = db_old_data.get('carrier_num', '')
+            print(f"✅ [DEBUG] 編輯模式啟動！強制帶入舊發票資訊 -> 統編: '{tax_id}', 載具類別: '{carrier_type}', 載具號碼: '{carrier_num}'")
         else:
-            tax_id = request.form.get('tax_id') or ''
-            carrier_type = request.form.get('carrier_type') or ''
-            carrier_num = request.form.get('carrier_num') or ''
+            # 新訂單模式：從前端表單抓取資料
+            tax_id = request.form.get('tax_id', '')
+            carrier_type = request.form.get('carrier_type', '')
+            carrier_num = request.form.get('carrier_num', '')
+            print(f"🆕 [DEBUG] 新增訂單！接收表單發票資訊 -> 統編: '{tax_id}', 載具類別: '{carrier_type}', 載具號碼: '{carrier_num}'")
+            
 
         # --- D. 處理外送與客戶資訊 (優先級：Form > Session > DB Old Order) ---
         sess_data = session.get('delivery_data', {})
