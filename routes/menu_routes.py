@@ -130,22 +130,17 @@ def process_order_submission(request, order_type_override=None):
                 }
                 final_lang = db_old_data['lang']
 
-        # 【發票資訊】優先取表單提交的值，若無（例如編輯模式未改動）則取舊訂單值
-        # 注意：載具類別與號碼若為空字串，我們依然寫入空字串或 None
-        tax_id = request.form.get('tax_id')
-        # 💡 修正：表單沒填時會送出空字串 ''，所以要一併檢查 None 和 ''
-        if tax_id is None or tax_id == '': 
+        # 【發票資訊】全新邏輯：只要是編輯模式，就「強制」無縫接軌帶入舊資料！
+        # 如果是全新訂單，才從前端表單 (request.form) 抓取資料。
+        # 舊的發票號碼 (invoice_number) 我們不去抓它，這樣稍後綠界就會開立全新的發票。
+        if db_old_data:
             tax_id = db_old_data.get('tax_id') or ''
-        
-        carrier_type = request.form.get('carrier_type')
-        # 💡 修正：一併檢查 None 和 ''
-        if carrier_type is None or carrier_type == '': 
             carrier_type = db_old_data.get('carrier_type') or ''
-        
-        carrier_num = request.form.get('carrier_num')
-        # 💡 修正：一併檢查 None 和 ''
-        if carrier_num is None or carrier_num == '': 
             carrier_num = db_old_data.get('carrier_num') or ''
+        else:
+            tax_id = request.form.get('tax_id') or ''
+            carrier_type = request.form.get('carrier_type') or ''
+            carrier_num = request.form.get('carrier_num') or ''
 
         # --- D. 處理外送與客戶資訊 (優先級：Form > Session > DB Old Order) ---
         sess_data = session.get('delivery_data', {})
