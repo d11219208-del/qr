@@ -79,7 +79,7 @@ def init_db():
                 invoice_number VARCHAR(50),       -- 發票號碼 (例: AB12345678)
                 invoice_status VARCHAR(20) DEFAULT 'Not Issued', -- 發票狀態 (Not Issued: 未開立, Issued: 已開立, Void: 已作廢)
                 tax_id VARCHAR(10),               -- 統一編號 (買方統編)
-                carrier_type VARCHAR(1),          -- 載具類別 (1: 綠界, 2: 自然人憑證, 3: 手機條碼)
+                carrier_type VARCHAR(10),          -- 載具類別 (1: 綠界, 2: 自然人憑證, 3: 手機條碼)
                 carrier_num VARCHAR(50)           -- 載具隱碼 (例: /AB12345)
             );
         ''')
