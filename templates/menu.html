@@ -322,13 +322,17 @@
     </div>
     {% endif %}
 
+   {% set current_tax_id = (old_order.tax_id if old_order and old_order.tax_id) else (tax_id if tax_id is defined else '') %}
+   {% set current_carrier_type = (old_order.carrier_type if old_order and old_order.carrier_type) else (carrier_type if carrier_type is defined else '') %}
+   {% set current_carrier_num = (old_order.carrier_num if old_order and old_order.carrier_num) else (carrier_num if carrier_num is defined else '') %}
+
    <div class="invoice-section" style="padding: 12px; margin: 10px 12px; background: #f8fafc; border-radius: 8px; border: 1px solid #e2e8f0;">
     <div style="font-weight: bold; margin-bottom: 4px; color: #334155;">🧾 發票資訊 (Invoice)</div>
     <div style="font-size: 0.85em; color: #64748b; margin-bottom: 10px;">未填寫統編將自動為您開立「個人發票」</div>
     
     <span class="input-label" style="color:#334155; display:block; margin-bottom:4px; font-size: 0.9em;">統一編號 (Tax ID - 選填)</span>
     <input type="text" id="tax_id" name="tax_id" class="modern-input" placeholder="請輸入 8 碼數字" maxlength="8" 
-           value="{{ tax_id if tax_id is defined else '' }}"
+           value="{{ current_tax_id }}"
            style="background:white; border-color:#cbd5e1; padding:8px 10px; width: 100%; box-sizing: border-box; margin-bottom: 10px;" 
            onblur="validateTaxId()">
     <div id="tax_id_error" style="color: #ef4444; font-size: 0.85em; margin-top: -6px; margin-bottom: 10px; display: none;">
@@ -337,16 +341,16 @@
 
     <span class="input-label" style="color:#334155; display:block; margin-bottom:4px; font-size: 0.9em;">發票處理 (Invoice Method)</span>
     <select id="carrier_type" name="carrier_type" class="modern-input" style="background:white; border-color:#cbd5e1; padding:8px 10px; width: 100%; box-sizing: border-box; margin-bottom: 10px;" onchange="toggleCarrierInput()">
-        <option value="" {% if (carrier_type if carrier_type is defined else '') == '' %}selected{% endif %}>不使用載具 (印出紙本/預設)</option>
-        <option value="3" {% if (carrier_type if carrier_type is defined else '') == '3' %}selected{% endif %}>手機條碼 (Mobile Barcode)</option>
-        <option value="2" {% if (carrier_type if carrier_type is defined else '') == '2' %}selected{% endif %}>自然人憑證 (Citizen Digital Cert.)</option>
-        <option value="don" {% if (carrier_type if carrier_type is defined else '') in ['don', '4'] %}selected{% endif %}>愛心捐贈碼 (Donation Code)</option>
+        <option value="" {% if current_carrier_type == '' %}selected{% endif %}>不使用載具 (印出紙本/預設)</option>
+        <option value="3" {% if current_carrier_type == '3' %}selected{% endif %}>手機條碼 (Mobile Barcode)</option>
+        <option value="2" {% if current_carrier_type == '2' %}selected{% endif %}>自然人憑證 (Citizen Digital Cert.)</option>
+        <option value="4" {% if current_carrier_type in ['don', '4'] %}selected{% endif %}>愛心捐贈碼 (Donation Code)</option>
     </select>
 
     <div id="carrier_num_container" style="display: none;">
         <span id="carrier_label" class="input-label" style="color:#334155; display:block; margin-bottom:4px; font-size: 0.9em;">載具號碼 (Carrier Number)</span>
         <input type="text" id="carrier_num" name="carrier_num" class="modern-input" placeholder="例如: /AB12345" 
-               value="{{ carrier_num if carrier_num is defined else '' }}"
+               value="{{ current_carrier_num }}"
                style="background:white; border-color:#cbd5e1; padding:8px 10px; width: 100%; box-sizing: border-box;"
                onblur="validateCarrierNum()" oninput="this.value = this.value.toUpperCase()">
         <div id="carrier_error" style="color: #ef4444; font-size: 0.85em; margin-top: 6px; display: none;">
@@ -421,7 +425,7 @@
                 }
             } else {
                 container.style.display = 'none';
-                // 💡 注意：這裡不主動清空 value，以免編輯模式載入時把資料洗掉
+                // 不主動清空 value，以免編輯模式載入時把資料洗掉
                 input.style.borderColor = '#cbd5e1';
                 errorDiv.style.display = 'none';
             }
@@ -466,7 +470,7 @@
             }
         }
 
-        // 💡 修正：頁面載入時自動執行一次，讓載具欄位如果已經有值，能立刻顯示出來
+        // 頁面載入時自動執行一次，讓載具欄位如果已經有值，能立刻顯示出來
         document.addEventListener('DOMContentLoaded', function() {
             toggleCarrierInput();
         });
