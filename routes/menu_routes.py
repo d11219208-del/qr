@@ -136,19 +136,23 @@ def process_order_submission(request, order_type_override=None):
                 }
                 final_lang = db_old_data['lang']
 
-        # 【發票資訊】全新邏輯：只要是編輯模式，就「強制」無縫接軌帶入舊資料！
-        if db_old_data:
-            # 編輯模式：完全信任資料庫的舊資料，忽略前端表單傳來的值
+        # 【發票資訊】全新邏輯：優先信任前端表單！
+        # 因為 HTML 已經預填了舊資料，使用者若修改，表單送來的就是新資料；若刪除，送來的就是空字串 ''。
+        # 只有當 request.form 完全沒收到該欄位 (is None) 時，才用 db_old_data 當最後防線。
+        
+        tax_id = request.form.get('tax_id')
+        if tax_id is None:
             tax_id = db_old_data.get('tax_id', '')
+            
+        carrier_type = request.form.get('carrier_type')
+        if carrier_type is None:
             carrier_type = db_old_data.get('carrier_type', '')
+            
+        carrier_num = request.form.get('carrier_num')
+        if carrier_num is None:
             carrier_num = db_old_data.get('carrier_num', '')
-            print(f"✅ [DEBUG] 編輯模式啟動！強制帶入舊發票資訊 -> 統編: '{tax_id}', 載具類別: '{carrier_type}', 載具號碼: '{carrier_num}'")
-        else:
-            # 新訂單模式：從前端表單抓取資料
-            tax_id = request.form.get('tax_id', '')
-            carrier_type = request.form.get('carrier_type', '')
-            carrier_num = request.form.get('carrier_num', '')
-            print(f"🆕 [DEBUG] 新增訂單！接收表單發票資訊 -> 統編: '{tax_id}', 載具類別: '{carrier_type}', 載具號碼: '{carrier_num}'")
+
+        print(f"✅ [DEBUG] 最終寫入的發票資訊 -> 統編: '{tax_id}', 載具類別: '{carrier_type}', 載具號碼: '{carrier_num}'")
             
 
         # --- D. 處理外送與客戶資訊 (優先級：Form > Session > DB Old Order) ---
