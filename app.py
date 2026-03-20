@@ -1,3 +1,4 @@
+# app.py
 import os
 from flask import Flask
 from database import init_db
@@ -5,10 +6,13 @@ from database import init_db
 # 引用原本的路由
 from routes import menu_bp, kitchen_bp, admin_bp, delivery_bp
 
-# --- 新增引用：引用剛剛建立的 try_routes (資料庫檢視功能) ---
+# 引用資料庫檢視功能
 from routes.try_routes import try_bp 
 
-# 💡 修改引入：把我們剛剛在 utils.py 寫好的 inject_user_info 一起引進來
+# 💡 新增引用：引用我們剛剛建立的 訂單與發票管理 路由藍圖
+from routes.admin_orders_routes import admin_orders_bp
+
+# 引入 utils 裡的功能
 from utils import start_background_tasks, inject_user_info
 
 def create_app():
@@ -37,12 +41,16 @@ def create_app():
     # 外送服務 (路徑 /delivery)
     app.register_blueprint(delivery_bp, url_prefix='/delivery')
 
-    # --- 新增註冊：資料庫檢視頁面 (路徑 /try) ---
+    # 資料庫檢視頁面 (路徑 /try)
     # 這讓我們可以透過網址 /try 來查看資料庫欄位
     app.register_blueprint(try_bp, url_prefix='/try')
 
+    # 💡 新增註冊：訂單與發票管理路由
+    # 這裡不加 url_prefix，這樣裡面的 /api/orders 和 /admin/orders 網址才能保持原樣運作
+    app.register_blueprint(admin_orders_bp)
+
     # ==========================================
-    # 💡 新增註冊：上下文處理器 (Context Processor)
+    # 上下文處理器 (Context Processor)
     # 這樣一來，所有的 HTML 網頁就都能直接讀取到 current_username 和 logout_url 了！
     # ==========================================
     app.context_processor(inject_user_info)
