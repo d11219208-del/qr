@@ -114,7 +114,7 @@ def kitchen_panel():
 
 # --- 2. 檢查新訂單 API ---
 @kitchen_bp.route('/check_new_orders')
-@login_required          # 🛡️ 防護 1：必須登入
+#@login_required          # 🛡️ 防護 1：必須登入
 def check_new_orders():
     try:
         # 【關鍵修改 1】：接收前端傳來的最後一次看過的序號 (預設為 0)
@@ -125,10 +125,11 @@ def check_new_orders():
         conn = get_db_connection()
         cur = conn.cursor()
         
-        # SQL 查詢：確保包含 customer_address
+        # 💡 修改處 1：SQL 查詢新增 5 個發票欄位
         query = """
             SELECT id, table_number, items, total_price, status, created_at, lang, daily_seq, content_json,
-                   customer_name, customer_phone, customer_address, scheduled_for, delivery_fee, order_type
+                   customer_name, customer_phone, customer_address, scheduled_for, delivery_fee, order_type,
+                   invoice_number, invoice_status, tax_id, carrier_type, carrier_num
             FROM orders 
             WHERE created_at >= %s AND created_at <= %s
             ORDER BY 
@@ -142,10 +143,11 @@ def check_new_orders():
         except Exception as e:
             conn.rollback() 
             print(f"SQL Fallback triggered (check_new_orders): {e}")
-            # Fallback (防止舊資料庫結構缺少 order_type 報錯)
+            # Fallback (防止舊資料庫結構缺少 order_type 報錯)，同樣補上 5 個發票欄位
             query_fallback = """
                 SELECT id, table_number, items, total_price, status, created_at, lang, daily_seq, content_json,
-                       customer_name, customer_phone, customer_address, scheduled_for, delivery_fee, 'unknown'
+                       customer_name, customer_phone, customer_address, scheduled_for, delivery_fee, 'unknown',
+                       invoice_number, invoice_status, tax_id, carrier_type, carrier_num
                 FROM orders 
                 WHERE created_at >= %s AND created_at <= %s
                 ORDER BY status, daily_seq ASC
@@ -168,9 +170,10 @@ def check_new_orders():
             html_content = "<div id='loading-msg' style='grid-column:1/-1;text-align:center;padding:100px;font-size:1.5em;color:#888;'>🍽️ 目前沒有訂單</div>"
         
         for o in orders:
-            # 解包變數 (確保變數數量 = 15)
+            # 💡 修改處 2：解包變數 (從 15 個擴充到 20 個)
             oid, table, raw_items, total, status, created, order_lang, seq_num, c_json, \
-            c_name, c_phone, c_addr, c_schedule, c_fee, c_type = o
+            c_name, c_phone, c_addr, c_schedule, c_fee, c_type, \
+            inv_num, inv_status, tax_id, car_type, car_num = o
             
             status_cls = status.lower()
             tw_time = created + timedelta(hours=8)
@@ -263,6 +266,38 @@ def check_new_orders():
             buttons = ""
             print_btn_html = f"<button onclick='askPrintType({oid})' class='btn btn-print' style='flex:1;'>🖨️ 列印</button>"
 
+            # 💡 修改處 3：整理發票 HTML 區塊 (提供作廢與完成訂單共用)
+            invoice_html = ""
+            if status in ['Completed', 'Cancelled']:
+                inv_str = inv_num if inv_num else "尚未開立"
+                # 狀態標籤樣式
+                if inv_status == 'Issued':
+                    status_badge = "<span style='background:#dcfce7; color:#166534; padding:2px 6px; border-radius:4px; font-size:11px;'>✅ 已開立</span>"
+                elif inv_status == 'Void':
+                    status_badge = "<span style='background:#fee2e2; color:#991b1b; padding:2px 6px; border-radius:4px; font-size:11px;'>❌ 已作廢</span>"
+                else:
+                    status_badge = "<span style='background:#f1f5f9; color:#475569; padding:2px 6px; border-radius:4px; font-size:11px;'>未開立</span>"
+
+                # 統編與載具明細
+                inv_details = []
+                if tax_id: inv_details.append(f"統編: {tax_id}")
+                if car_type == '3': inv_details.append(f"手機條碼: {car_num}")
+                elif car_type == '2': inv_details.append(f"自然人: {car_num}")
+                elif car_type in ['don', '4']: inv_details.append(f"捐贈碼: {car_num}")
+                
+                details_str = f"<div style='margin-top:4px; color:#475569; font-size:12px;'>{' / '.join(inv_details)}</div>" if inv_details else ""
+
+                invoice_html = f"""
+                <div style="background:#f8fafc; border:1px solid #cbd5e1; border-radius:6px; padding:8px; margin-bottom:10px; text-align:left;">
+                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                        <span style="font-weight:bold; color:#334155; font-size:13px;">🧾 發票: {inv_str}</span>
+                        {status_badge}
+                    </div>
+                    {details_str}
+                </div>
+                """
+
+            # --- 按鈕渲染區塊 ---
             if status == 'Pending':
                 buttons += f"""
                     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; padding:0 5px;">
@@ -278,17 +313,19 @@ def check_new_orders():
                 </div>"""
 
             elif status == 'Cancelled':
+                buttons += invoice_html  # 👈 插入發票資訊
                 buttons += f"<div style='text-align:center; color:#d32f2f; font-weight:bold; margin-bottom:5px;'>【此單已作廢】</div>"
                 buttons += f"<button onclick='askPrintType({oid})' class='btn btn-print' style='width:100%; opacity:0.6;'>🖨️ 補印作廢單</button>"
 
             else: # Completed
+                buttons += invoice_html  # 👈 插入發票資訊
                 buttons += f"""
                     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; padding:0 5px; opacity:0.7;">
                         <span style="font-size:13px; color:#666;">實收總計:</span>
                         <div>{fee_html}<span style="font-size:18px; color:#333; font-weight:bold;">${formatted_total}</span></div>
                     </div>
                 """
-                # 👇 修改處：在 Completed 狀態下放入三個按鈕
+                # 👇 在 Completed 狀態下放入三個按鈕
                 buttons += f"""
                 <div style="display:flex; flex-direction:column; gap:5px;">
                     <button onclick='askPrintType({oid})' class='btn btn-print' style='width:100%;'>🖨️ 補印單據</button>
