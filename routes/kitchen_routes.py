@@ -125,7 +125,7 @@ def check_new_orders():
         conn = get_db_connection()
         cur = conn.cursor()
         
-        # 💡 修改處 1：SQL 查詢新增 5 個發票欄位
+        # SQL 查詢：加入發票相關的 5 個欄位
         query = """
             SELECT id, table_number, items, total_price, status, created_at, lang, daily_seq, content_json,
                    customer_name, customer_phone, customer_address, scheduled_for, delivery_fee, order_type,
@@ -143,7 +143,7 @@ def check_new_orders():
         except Exception as e:
             conn.rollback() 
             print(f"SQL Fallback triggered (check_new_orders): {e}")
-            # Fallback (防止舊資料庫結構缺少 order_type 報錯)，同樣補上 5 個發票欄位
+            # Fallback (加入發票相關的 5 個欄位)
             query_fallback = """
                 SELECT id, table_number, items, total_price, status, created_at, lang, daily_seq, content_json,
                        customer_name, customer_phone, customer_address, scheduled_for, delivery_fee, 'unknown',
@@ -170,10 +170,10 @@ def check_new_orders():
             html_content = "<div id='loading-msg' style='grid-column:1/-1;text-align:center;padding:100px;font-size:1.5em;color:#888;'>🍽️ 目前沒有訂單</div>"
         
         for o in orders:
-            # 💡 修改處 2：解包變數 (從 15 個擴充到 20 個)
+            # 解包變數 (確保變數數量擴充至 20)
             oid, table, raw_items, total, status, created, order_lang, seq_num, c_json, \
             c_name, c_phone, c_addr, c_schedule, c_fee, c_type, \
-            inv_num, inv_status, tax_id, car_type, car_num = o
+            inv_num, inv_status, tax_id, carrier_type, carrier_num = o
             
             status_cls = status.lower()
             tw_time = created + timedelta(hours=8)
@@ -231,6 +231,39 @@ def check_new_orders():
             if has_addr:
                 info_html += f"<div style='margin-top:2px; line-height:1.2; border-top:1px dashed #aaa; padding-top:2px; font-weight:bold; color:#bf360c;'>📍 {c_addr}</div>"
 
+            # 🧾 【新增】發票資訊區塊
+            inv_html = "<div style='margin-top:6px; padding-top:4px; border-top:1px dashed #ccc; font-size:0.95em; color:#475569;'>"
+            
+            # 處理發票狀態
+            inv_status_str = str(inv_status).strip() if inv_status else 'Not Issued'
+            if inv_status_str == 'Issued':
+                status_badge = "<span style='color:#10b981; font-weight:bold;'>✅ 已開立</span>"
+            elif inv_status_str == 'Void':
+                status_badge = "<span style='color:#ef4444; font-weight:bold;'>❌ 已作廢</span>"
+            else:
+                status_badge = "<span style='color:#f59e0b; font-weight:bold;'>⏳ 未開立</span>"
+                
+            inv_num_display = str(inv_num).strip() if inv_num else "無"
+            inv_html += f"<div style='margin-bottom:2px;'>🧾 發票: {inv_num_display} {status_badge}</div>"
+            
+            # 處理統編
+            if tax_id and str(tax_id).strip():
+                inv_html += f"<div style='margin-bottom:2px;'>🏢 統編: <span style='font-weight:bold; color:#0f172a;'>{tax_id}</span></div>"
+                
+            # 處理載具
+            if carrier_type and str(carrier_type).strip():
+                ctype = str(carrier_type).strip()
+                cname = "載具"
+                if ctype == '3': cname = "📱 手機條碼"
+                elif ctype == '2': cname = "💳 自然人憑證"
+                elif ctype in ['don', '4']: cname = "❤️ 愛心捐贈"
+                
+                cnum = str(carrier_num).strip() if carrier_num else ""
+                inv_html += f"<div>{cname}: <span style='font-weight:bold; color:#0f172a;'>{cnum}</span></div>"
+                
+            inv_html += "</div>"
+            info_html += inv_html
+
             # 將詳細資訊嵌入桌號區塊
             if info_html:
                 table_html = f"<div class='table-num' style='flex-direction:column; padding:5px;'><div>{display_table}</div><div style='font-size:0.5em; font-weight:normal; text-align:left; width:100%; margin-top:5px; color:#333; word-break:break-all;'>{info_html}</div></div>"
@@ -266,38 +299,6 @@ def check_new_orders():
             buttons = ""
             print_btn_html = f"<button onclick='askPrintType({oid})' class='btn btn-print' style='flex:1;'>🖨️ 列印</button>"
 
-            # 💡 修改處 3：整理發票 HTML 區塊 (提供作廢與完成訂單共用)
-            invoice_html = ""
-            if status in ['Completed', 'Cancelled']:
-                inv_str = inv_num if inv_num else "尚未開立"
-                # 狀態標籤樣式
-                if inv_status == 'Issued':
-                    status_badge = "<span style='background:#dcfce7; color:#166534; padding:2px 6px; border-radius:4px; font-size:11px;'>✅ 已開立</span>"
-                elif inv_status == 'Void':
-                    status_badge = "<span style='background:#fee2e2; color:#991b1b; padding:2px 6px; border-radius:4px; font-size:11px;'>❌ 已作廢</span>"
-                else:
-                    status_badge = "<span style='background:#f1f5f9; color:#475569; padding:2px 6px; border-radius:4px; font-size:11px;'>未開立</span>"
-
-                # 統編與載具明細
-                inv_details = []
-                if tax_id: inv_details.append(f"統編: {tax_id}")
-                if car_type == '3': inv_details.append(f"手機條碼: {car_num}")
-                elif car_type == '2': inv_details.append(f"自然人: {car_num}")
-                elif car_type in ['don', '4']: inv_details.append(f"捐贈碼: {car_num}")
-                
-                details_str = f"<div style='margin-top:4px; color:#475569; font-size:12px;'>{' / '.join(inv_details)}</div>" if inv_details else ""
-
-                invoice_html = f"""
-                <div style="background:#f8fafc; border:1px solid #cbd5e1; border-radius:6px; padding:8px; margin-bottom:10px; text-align:left;">
-                    <div style="display:flex; justify-content:space-between; align-items:center;">
-                        <span style="font-weight:bold; color:#334155; font-size:13px;">🧾 發票: {inv_str}</span>
-                        {status_badge}
-                    </div>
-                    {details_str}
-                </div>
-                """
-
-            # --- 按鈕渲染區塊 ---
             if status == 'Pending':
                 buttons += f"""
                     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; padding:0 5px;">
@@ -313,19 +314,17 @@ def check_new_orders():
                 </div>"""
 
             elif status == 'Cancelled':
-                buttons += invoice_html  # 👈 插入發票資訊
                 buttons += f"<div style='text-align:center; color:#d32f2f; font-weight:bold; margin-bottom:5px;'>【此單已作廢】</div>"
                 buttons += f"<button onclick='askPrintType({oid})' class='btn btn-print' style='width:100%; opacity:0.6;'>🖨️ 補印作廢單</button>"
 
             else: # Completed
-                buttons += invoice_html  # 👈 插入發票資訊
                 buttons += f"""
                     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; padding:0 5px; opacity:0.7;">
                         <span style="font-size:13px; color:#666;">實收總計:</span>
                         <div>{fee_html}<span style="font-size:18px; color:#333; font-weight:bold;">${formatted_total}</span></div>
                     </div>
                 """
-                # 👇 在 Completed 狀態下放入三個按鈕
+                # 👇 修改處：在 Completed 狀態下放入三個按鈕
                 buttons += f"""
                 <div style="display:flex; flex-direction:column; gap:5px;">
                     <button onclick='askPrintType({oid})' class='btn btn-print' style='width:100%;'>🖨️ 補印單據</button>
