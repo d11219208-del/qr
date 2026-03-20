@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>訂單與發票管理後台</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+<body class="bg-light">
+
+<div class="container mt-5">
+    <h2 class="mb-4">📋 訂單與發票管理系統</h2>
+
+    <div class="card p-3 mb-4 shadow-sm">
+        <div class="row align-items-center">
+            <div class="col-auto">
+                <label for="searchDate" class="col-form-label">選擇訂單日期：</label>
+            </div>
+            <div class="col-auto">
+                <input type="date" id="searchDate" class="form-control">
+            </div>
+            <div class="col-auto">
+                <button class="btn btn-primary" onclick="fetchOrders()">🔍 查詢訂單</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="card shadow-sm">
+        <div class="card-body">
+            <table class="table table-hover align-middle">
+                <thead class="table-dark">
+                    <tr>
+                        <th>訂單編號</th>
+                        <th>顧客姓名</th>
+                        <th>總金額</th>
+                        <th>發票號碼</th>
+                        <th>發票狀態</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody id="orderTableBody">
+                    <tr>
+                        <td colspan="6" class="text-center text-muted">請先選擇日期並點擊查詢</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<script>
+    // 預設將日期選擇器填入今天日期
+    document.getElementById('searchDate').valueAsDate = new Date();
+
+    // 查詢訂單
+    async function fetchOrders() {
+        const date = document.getElementById('searchDate').value;
+        if (!date) return alert("請選擇日期！");
+
+        const tbody = document.getElementById('orderTableBody');
+        tbody.innerHTML = `<tr><td colspan="6" class="text-center">載入中...</td></tr>`;
+
+        try {
+            // 呼叫後端 API
+            const response = await fetch(`/api/orders?date=${date}`);
+            const data = await response.json();
+
+            if (data.success && data.orders.length > 0) {
+                tbody.innerHTML = ""; // 清空表格
+                data.orders.forEach(order => {
+                    // 判斷發票狀態來決定按鈕樣式
+                    const hasInvoice = order.invoice_no && order.invoice_no !== "";
+                    
+                    tbody.innerHTML += `
+                        <tr>
+                            <td>#${order.id}</td>
+                            <td>${order.customer_name || '門市顧客'}</td>
+                            <td>$${order.total_price}</td>
+                            <td>${hasInvoice ? order.invoice_no : '<span class="text-muted">未開立</span>'}</td>
+                            <td>${order.invoice_status || '正常'}</td>
+                            <td>
+                                <button class="btn btn-sm btn-outline-secondary" onclick="editOrder(${order.id})">✏️ 修改</button>
+                                ${hasInvoice && order.invoice_status !== '已作廢' ? 
+                                    `<button class="btn btn-sm btn-outline-danger" onclick="voidInvoice('${order.invoice_no}')">🗑️ 作廢發票</button>` 
+                                    : ''}
+                            </td>
+                        </tr>
+                    `;
+                });
+            } else {
+                tbody.innerHTML = `<tr><td colspan="6" class="text-center text-muted">該日無訂單紀錄</td></tr>`;
+            }
+        } catch (error) {
+            console.error(error);
+            tbody.innerHTML = `<tr><td colspan="6" class="text-center text-danger">查詢失敗，請檢查網路連線</td></tr>`;
+        }
+    }
+
+    // 作廢發票邏輯
+    async function voidInvoice(invoiceNo) {
+        if (!confirm(`確定要作廢發票 ${invoiceNo} 嗎？作廢後無法復原！`)) return;
+
+        try {
+            const response = await fetch('/api/invoice/void', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ invoice_no: invoiceNo, reason: '客戶要求作廢/退貨' })
+            });
+            const result = await response.json();
+
+            if (result.success) {
+                alert('✅ 發票作廢成功！');
+                fetchOrders(); // 重新整理列表
+            } else {
+                alert(`❌ 作廢失敗：${result.message}`);
+            }
+        } catch (error) {
+            alert('❌ 發生錯誤，請查看控制台');
+        }
+    }
+
+    // 修改訂單 (這裡可以依據您的需求彈出 Modal 或導向編輯頁面)
+    function editOrder(orderId) {
+        alert(`這裡未來可以串接修改訂單 ${orderId} 的功能！`);
+        // window.location.href = `/admin/order/edit/${orderId}`;
+    }
+</script>
+
+</body>
+</html>
