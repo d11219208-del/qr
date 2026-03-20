@@ -341,17 +341,28 @@ def menu():
     edit_oid = request.args.get('edit_oid')
     preload_cart = "null" 
     order_lang = display_lang 
+    
+    # 💡 新增：先預設這三個發票變數為空值，以免新訂單模式下報錯
+    tax_id = ""
+    carrier_type = ""
+    carrier_num = ""
 
     if edit_oid:
         conn = get_db_connection()
         cur = conn.cursor()
-        cur.execute("SELECT table_number, content_json, lang FROM orders WHERE id=%s", (edit_oid,))
+        # 💡 修正 1：把 tax_id, carrier_type, carrier_num 加進 SQL 查詢裡
+        cur.execute("SELECT table_number, content_json, lang, tax_id, carrier_type, carrier_num FROM orders WHERE id=%s", (edit_oid,))
         old_data = cur.fetchone()
         cur.close(); conn.close()
+        
         if old_data:
             if not url_table: url_table = old_data[0]
             preload_cart = old_data[1] 
             order_lang = old_data[2] if old_data[2] else 'zh'
+            # 💡 修正 2：把資料庫查出來的值賦予給變數（如果資料庫存 NULL 就轉成空字串）
+            tax_id = old_data[3] if old_data[3] else ""
+            carrier_type = old_data[4] if old_data[4] else ""
+            carrier_num = old_data[5] if old_data[5] else ""
 
     settings, products = get_menu_data()
     
@@ -360,7 +371,11 @@ def menu():
                            display_lang=display_lang, order_lang=order_lang, 
                            preload_cart=preload_cart, edit_oid=edit_oid, config=settings,
                            current_mode='dine_in',
-                           is_delivery_mode=False)
+                           is_delivery_mode=False,
+                           # 💡 修正 3：把發票變數正式傳遞給前端 HTML！
+                           tax_id=tax_id,
+                           carrier_type=carrier_type,
+                           carrier_num=carrier_num)
 
 
 @menu_bp.route('/delivery', methods=['GET', 'POST'])
@@ -385,7 +400,11 @@ def delivery_menu():
                            preload_cart="null", edit_oid=None, config=settings,
                            current_mode='delivery',
                            is_delivery_mode=True,
-                           session_delivery=session_delivery)
+                           session_delivery=session_delivery,
+                           # 外送預設沒有編輯舊單邏輯，所以也預設為空，防止前端 Jinja2 報錯
+                           tax_id="",
+                           carrier_type="",
+                           carrier_num="")
     
 
 
