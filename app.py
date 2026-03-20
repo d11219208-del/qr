@@ -2,7 +2,7 @@
 import os
 from flask import Flask
 from database import init_db
-
+ 
 # 引用原本的路由
 from routes import menu_bp, kitchen_bp, admin_bp, delivery_bp
 
