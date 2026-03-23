@@ -12,7 +12,7 @@
     <h2 class="mb-4">📋 訂單與發票管理系統</h2>
 
     <div class="card p-3 mb-4 shadow-sm">
-        <div class="row align-items-center">
+        <div class="row align-items-center gy-3">
             <div class="col-auto">
                 <label for="searchDate" class="col-form-label">選擇訂單日期：</label>
             </div>
@@ -20,7 +20,21 @@
                 <input type="date" id="searchDate" class="form-control">
             </div>
             <div class="col-auto">
-                <button class="btn btn-primary" onclick="fetchOrders()">🔍 查詢訂單</button>
+                <button class="btn btn-primary" onclick="fetchOrders('date')">📅 日期查詢</button>
+            </div>
+
+            <div class="col-auto d-none d-md-block">
+                <div class="vr" style="height: 38px;"></div>
+            </div>
+
+            <div class="col-auto">
+                <label for="searchInvoice" class="col-form-label">或搜尋發票號碼：</label>
+            </div>
+            <div class="col-auto">
+                <input type="text" id="searchInvoice" class="form-control" placeholder="輸入大寫發票號碼(如: AB12345678)">
+            </div>
+            <div class="col-auto">
+                <button class="btn btn-info text-white" onclick="fetchOrders('invoice')">🔍 發票查詢</button>
             </div>
         </div>
     </div>
@@ -40,7 +54,7 @@
                 </thead>
                 <tbody id="orderTableBody">
                     <tr>
-                        <td colspan="6" class="text-center text-muted">請先選擇日期並點擊查詢</td>
+                        <td colspan="6" class="text-center text-muted">請選擇日期或輸入發票號碼並點擊查詢</td>
                     </tr>
                 </tbody>
             </table>
@@ -52,52 +66,80 @@
     // 預設將日期選擇器填入今天日期
     document.getElementById('searchDate').valueAsDate = new Date();
 
-    // 查詢訂單
-    async function fetchOrders() {
-        const date = document.getElementById('searchDate').value;
-        if (!date) return alert("請選擇日期！");
+    // 查詢訂單 (支援按日期或按發票號碼)
+    async function fetchOrders(searchType = 'date') {
+        let url = '';
+        
+        if (searchType === 'date') {
+            const date = document.getElementById('searchDate').value;
+            if (!date) return alert("請選擇日期！");
+            url = `/api/orders?date=${date}`;
+        } else if (searchType === 'invoice') {
+            const invoiceNo = document.getElementById('searchInvoice').value.trim();
+            if (!invoiceNo) return alert("請輸入發票號碼！");
+            url = `/api/orders?invoice_no=${invoiceNo}`;
+        }
 
         const tbody = document.getElementById('orderTableBody');
         tbody.innerHTML = `<tr><td colspan="6" class="text-center">載入中...</td></tr>`;
 
         try {
             // 呼叫後端 API
-            const response = await fetch(`/api/orders?date=${date}`);
+            const response = await fetch(url);
             const data = await response.json();
 
             if (data.success && data.orders.length > 0) {
                 tbody.innerHTML = ""; // 清空表格
                 data.orders.forEach(order => {
-                    // 判斷發票狀態來決定按鈕樣式
+                    // 狀態判斷
                     const hasInvoice = order.invoice_no && order.invoice_no !== "";
+                    const isVoided = order.invoice_status === '已作廢';
+
+                    // 準備狀態標籤 UI
+                    let statusBadge = '';
+                    if (isVoided) {
+                        statusBadge = `<span class="badge bg-danger">已作廢</span>`;
+                    } else if (hasInvoice) {
+                        statusBadge = `<span class="badge bg-success">正常</span>`;
+                    } else {
+                        statusBadge = `<span class="badge bg-secondary">未開立</span>`;
+                    }
+
+                    // 準備按鈕 UI
+                    let actionButtons = `<button class="btn btn-sm btn-outline-secondary me-1" onclick="editOrder(${order.id})">✏️ 修改</button>`;
                     
+                    // 如果有發票且還沒作廢 -> 顯示作廢按鈕
+                    if (hasInvoice && !isVoided) {
+                        actionButtons += `<button class="btn btn-sm btn-outline-danger me-1" onclick="voidInvoice('${order.invoice_no}', '${searchType}')">🗑️ 作廢發票</button>`;
+                    }
+                    
+                    // 如果沒發票，或是已經作廢了 -> 顯示 (重)開發票按鈕
+                    if (!hasInvoice || isVoided) {
+                        actionButtons += `<button class="btn btn-sm btn-outline-success" onclick="issueInvoice(${order.id}, '${searchType}')">🧾 ${isVoided ? '重開發票' : '開立發票'}</button>`;
+                    }
+
                     tbody.innerHTML += `
                         <tr>
                             <td>#${order.id}</td>
                             <td>${order.customer_name || '門市顧客'}</td>
                             <td>$${order.total_price}</td>
-                            <td>${hasInvoice ? order.invoice_no : '<span class="text-muted">未開立</span>'}</td>
-                            <td>${order.invoice_status || '正常'}</td>
-                            <td>
-                                <button class="btn btn-sm btn-outline-secondary" onclick="editOrder(${order.id})">✏️ 修改</button>
-                                ${hasInvoice && order.invoice_status !== '已作廢' ? 
-                                    `<button class="btn btn-sm btn-outline-danger" onclick="voidInvoice('${order.invoice_no}')">🗑️ 作廢發票</button>` 
-                                    : ''}
-                            </td>
+                            <td>${hasInvoice ? order.invoice_no : '<span class="text-muted">-</span>'}</td>
+                            <td>${statusBadge}</td>
+                            <td>${actionButtons}</td>
                         </tr>
                     `;
                 });
             } else {
-                tbody.innerHTML = `<tr><td colspan="6" class="text-center text-muted">該日無訂單紀錄</td></tr>`;
+                tbody.innerHTML = `<tr><td colspan="6" class="text-center text-muted">查無相符的訂單紀錄</td></tr>`;
             }
         } catch (error) {
             console.error(error);
-            tbody.innerHTML = `<tr><td colspan="6" class="text-center text-danger">查詢失敗，請檢查網路連線</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="6" class="text-center text-danger">查詢失敗，請檢查網路連線或後端 API</td></tr>`;
         }
     }
 
     // 作廢發票邏輯
-    async function voidInvoice(invoiceNo) {
+    async function voidInvoice(invoiceNo, currentSearchType) {
         if (!confirm(`確定要作廢發票 ${invoiceNo} 嗎？作廢後無法復原！`)) return;
 
         try {
@@ -110,7 +152,7 @@
 
             if (result.success) {
                 alert('✅ 發票作廢成功！');
-                fetchOrders(); // 重新整理列表
+                fetchOrders(currentSearchType); // 重新整理當前列表
             } else {
                 alert(`❌ 作廢失敗：${result.message}`);
             }
@@ -119,9 +161,33 @@
         }
     }
 
-    // 修改訂單 (這裡可以依據您的需求彈出 Modal 或導向編輯頁面)
+    // 重開發票邏輯
+    async function issueInvoice(orderId, currentSearchType) {
+        if (!confirm(`確定要為訂單 #${orderId} (重)開立發票嗎？`)) return;
+
+        try {
+            // 這裡呼叫後端開立發票的 API
+            const response = await fetch('/api/invoice/issue', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ order_id: orderId })
+            });
+            const result = await response.json();
+
+            if (result.success) {
+                alert(`✅ 發票開立成功！發票號碼為：${result.invoice_no || '請重整查看'}`);
+                fetchOrders(currentSearchType); // 重新整理當前列表
+            } else {
+                alert(`❌ 開立失敗：${result.message}`);
+            }
+        } catch (error) {
+            alert('❌ 發生錯誤，請查看控制台');
+        }
+    }
+
+    // 修改訂單
     function editOrder(orderId) {
-        alert(`這裡未來可以串接修改訂單 ${orderId} 的功能！`);
+        alert(`這裡未來可以串接修改訂單 #${orderId} 的功能！`);
         // window.location.href = `/admin/order/edit/${orderId}`;
     }
 </script>
