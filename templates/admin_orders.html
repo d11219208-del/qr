@@ -49,7 +49,7 @@
                         <th>總金額</th>
                         <th>發票號碼</th>
                         <th>發票狀態</th>
-                        <th>操作</th>
+                        <th style="min-width: 250px;">操作</th>
                     </tr>
                 </thead>
                 <tbody id="orderTableBody">
@@ -105,18 +105,27 @@
                         statusBadge = `<span class="badge bg-secondary">未開立</span>`;
                     }
 
-                    // 準備按鈕 UI
-                    let actionButtons = `<button class="btn btn-sm btn-outline-secondary me-1" onclick="editOrder(${order.id})">✏️ 修改</button>`;
+                    // 💡 更新：套用您提供的按鈕排版，並將 {oid} 替換為 JS 的 ${order.id}
+                    let actionButtons = `
+                        <div style="display:flex; flex-direction:column; gap:5px;">
+                            <button onclick='askPrintType(${order.id})' class='btn btn-outline-secondary btn-sm' style='width:100%;'>🖨️ 補印單據</button>
+                            
+                            <div style="display:flex; gap:5px;">
+                                <button onclick='if(confirm("⚠️ 確定只要作廢發票，並將此單更改為【作廢狀態】嗎？")) action("/kitchen/cancel/${order.id}")' class='btn btn-sm' style='flex:1; background:#f44336; color:white; border:none; border-radius:4px; padding:6px; cursor:pointer;'>🗑️ 作廢訂單</button>
+                                
+                                <button onclick='if(confirm("⚠️ 確定要作廢發票並重新修改此單嗎？")) { fetch("/kitchen/cancel/${order.id}").then(() => { window.open("/menu?edit_oid=${order.id}&lang=zh", "_blank"); window.location.reload(); }); }' class='btn btn-sm' style='flex:1; background:#ff9800; color:white; border:none; border-radius:4px; padding:6px; cursor:pointer;'>✏️ 作廢並修改</button>
+                            </div>
+                    `;
                     
-                    // 如果有發票且還沒作廢 -> 顯示作廢按鈕
+                    // 將原本的綠界作廢/開立按鈕加在最下方
+                    actionButtons += `<div style="display:flex; gap:5px;">`;
                     if (hasInvoice && !isVoided) {
-                        actionButtons += `<button class="btn btn-sm btn-outline-danger me-1" onclick="voidInvoice('${order.invoice_no}', '${searchType}')">🗑️ 作廢發票</button>`;
+                        actionButtons += `<button class="btn btn-sm btn-outline-danger" style="flex:1;" onclick="voidInvoice('${order.invoice_no}', '${searchType}')">🧾 僅作廢發票</button>`;
                     }
-                    
-                    // 如果沒發票，或是已經作廢了 -> 顯示 (重)開發票按鈕
                     if (!hasInvoice || isVoided) {
-                        actionButtons += `<button class="btn btn-sm btn-outline-success" onclick="issueInvoice(${order.id}, '${searchType}')">🧾 ${isVoided ? '重開發票' : '開立發票'}</button>`;
+                        actionButtons += `<button class="btn btn-sm btn-outline-success" style="flex:1;" onclick="issueInvoice(${order.id}, '${searchType}')">🧾 ${isVoided ? '重開發票' : '獨立開立發票'}</button>`;
                     }
+                    actionButtons += `</div></div>`; // 閉合 div
 
                     tbody.innerHTML += `
                         <tr>
@@ -185,10 +194,25 @@
         }
     }
 
-    // 修改訂單
-    function editOrder(orderId) {
-        alert(`這裡未來可以串接修改訂單 #${orderId} 的功能！`);
-        // window.location.href = `/admin/order/edit/${orderId}`;
+    // 確保這裡有全域的 action 函式可供呼叫 (如已在其他地方定義，可依需求保留或移除)
+    function action(url) {
+        fetch(url).then(res => {
+            if(res.ok) {
+                alert('操作成功！');
+                window.location.reload();
+            } else {
+                alert('操作失敗！');
+            }
+        }).catch(err => {
+            console.error(err);
+            alert('操作發生錯誤！');
+        });
+    }
+
+    // 確保有 askPrintType 函式 (如已定義，也可依需求調整)
+    function askPrintType(orderId) {
+        alert(`準備補印訂單 #${orderId} 的單據`);
+        // 可依需求呼叫您的列印 API
     }
 </script>
 
