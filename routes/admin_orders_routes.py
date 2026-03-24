@@ -3,8 +3,8 @@
 from flask import Blueprint, request, jsonify, render_template, session, redirect, url_for
 import bcrypt # 用於密碼驗證
 
-# 💡 注意：這裡假設您開立發票的函式叫做 create_ecpay_invoice，如果不同請自行修改
-from ecpay_invoice import invalid_ecpay_invoice, create_ecpay_invoice 
+# 💡 修正：已經為您換成正確的 issue_ecpay_invoice
+from ecpay_invoice import invalid_ecpay_invoice, issue_ecpay_invoice 
 
 import database # 您的資料庫模組
 from database import get_db_connection # 確保引入資料庫連線功能
@@ -78,7 +78,7 @@ def get_orders():
     invoice_no = request.args.get('invoice_no') # 格式預期為發票號碼字串
     
     try:
-        # 💡 新增：如果有傳入發票號碼，優先用發票號碼搜尋
+        # 如果有傳入發票號碼，優先用發票號碼搜尋
         if invoice_no:
             orders = database.get_order_by_invoice(invoice_no)
         # 否則用日期搜尋
@@ -119,7 +119,7 @@ def void_invoice():
     return jsonify(result)
 
 
-# 3. 💡 新增：開立(重開)發票 API
+# 3. 開立(重開)發票 API
 @admin_orders_bp.route('/api/invoice/issue', methods=['POST'])
 @login_required          
 @role_required('admin')  
@@ -136,9 +136,8 @@ def issue_invoice():
         if not order_data:
              return jsonify({"success": False, "message": "找不到該筆訂單"})
              
-        # 步驟 B: 呼叫您的 ecpay_invoice.py 裡的開立發票功能
-        # (如果您開立發票的函式名稱不同，請修改這裡)
-        result = create_ecpay_invoice(order_data)
+        # 步驟 B: 💡 修正：正確呼叫您的 issue_ecpay_invoice 函數
+        result = issue_ecpay_invoice(order_data)
         
         # 步驟 C: 如果綠界成功開出發票，取得新發票號碼並存回資料庫
         if result.get("success"):
