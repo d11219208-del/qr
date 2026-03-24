@@ -1,16 +1,23 @@
 # routes/admin_orders_routes.py
 
+import psycopg2
+import psycopg2.extras
 from flask import Blueprint, request, jsonify, render_template, session, redirect, url_for
 import bcrypt
-from datetime import date
-import datetime # 用於產生 Log 的時間戳記
+from datetime import date, datetime
 
-from ecpay_invoice import invalid_ecpay_invoice, issue_ecpay_invoice 
+# 💡 引入您的綠界發票功能 (加上了 print_ecpay_invoice)
+from ecpay_invoice import invalid_ecpay_invoice, issue_ecpay_invoice, print_ecpay_invoice
+
 import database
 from database import get_db_connection
 from utils import login_required, role_required  
 
 admin_orders_bp = Blueprint('admin_orders', __name__)
+
+def get_current_time_str():
+    """產生時間戳記供 Log 使用"""
+    return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
 # ==========================================
 # 🛡️ 登入與登出系統
@@ -59,29 +66,8 @@ def logout():
 
 
 # ==========================================
-# 📋 訂單與發票 API
+# 📋 訂單與發票 API (升級使用 psycopg2 寫法)
 # ==========================================
-
-@admin_orders_bp.route('/api/orders', methods=['GET'])
-@login_required          
-@role_required('admin')  
-def get_orders():
-    target_date = request.args.get('date')
-    invoice_no = request.args.get('invoice_no')
-    
-    try:
-        if invoice_no:
-            orders = database.get_order_by_invoice(invoice_no)
-        elif target_date:
-            orders = database.get_orders_by_date(target_date)
-        else:
-            return jsonify({"success": False, "message": "請提供日期或發票號碼"})
-            
-        return jsonify({"success": True, "orders": orders})
-    except Exception as e:
-        print(f"API Error: {e}")
-        return jsonify({"success": False, "message": "資料庫查詢失敗"})
-
 
 @admin_orders_bp.route('/api/invoice/void', methods=['POST'])
 @login_required          
@@ -98,9 +84,13 @@ def void_invoice():
     
     if result.get("success"):
         try:
-            database.update_invoice_status(invoice_no, "已作廢")
+            c = get_db_connection()
+            cur = c.cursor()
+            cur.execute("UPDATE orders SET invoice_status='Void' WHERE invoice_number=%s", (invoice_no,))
+            c.commit()
+            c.close()
         except Exception as e:
-            print(f"DB Update Error (void_invoice): {e}")
+            print(f"[{get_current_time_str()}] DB Update Error (void_invoice): {e}")
             
     return jsonify(result)
 
@@ -116,72 +106,108 @@ def issue_invoice():
         return jsonify({"success": False, "message": "缺少訂單編號"})
         
     try:
-        order_data = database.get_order_by_id(order_id)
+        c = get_db_connection()
+        cur = c.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("SELECT * FROM orders WHERE id=%s", (order_id,))
+        order_data = cur.fetchone()
+        
         if not order_data:
+             c.close()
              return jsonify({"success": False, "message": "找不到該筆訂單"})
              
         result = issue_ecpay_invoice(order_data)
         
         if result.get("success"):
             new_invoice_no = result.get("invoice_no")
-            database.update_order_invoice(order_id, new_invoice_no, "正常")
+            cur.execute("""
+                UPDATE orders 
+                SET invoice_number=%s, invoice_status='Issued' 
+                WHERE id=%s
+            """, (new_invoice_no, order_id))
+            c.commit()
+            print(f"[{get_current_time_str()}] 🧾 後台發票開立成功: {new_invoice_no}")
             
+        c.close()
         return jsonify(result)
         
     except Exception as e:
-        print(f"Issue Invoice Error: {e}")
+        print(f"[{get_current_time_str()}] Issue Invoice Error: {e}")
         return jsonify({"success": False, "message": "開立發票發生系統錯誤"})
 
 
 # ==========================================
-# 🛑 核心修復：結合發票與訂單作廢的防呆機制
+# 🛑 核心作廢路由：確保帳務防呆
 # ==========================================
-@admin_orders_bp.route('/kitchen/cancel/<int:order_id>', methods=['GET', 'POST'])
+@admin_orders_bp.route('/admin/cancel/<int:oid>', methods=['GET', 'POST'])
 @login_required
 @role_required('admin')
-def cancel_order_and_invoice(order_id):
-    """
-    這個路由處理「作廢訂單」按鈕。
-    防呆機制：有發票 -> 嘗試作廢發票 -> 失敗則【阻斷】訂單作廢 -> 成功則繼續作廢訂單。
-    """
-    now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    
+def admin_cancel_order(oid):
     try:
-        # 1. 取得訂單資訊
-        order = database.get_order_by_id(order_id)
+        c = get_db_connection()
+        cur = c.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+        # 1. 先取得訂單資訊
+        cur.execute("SELECT * FROM orders WHERE id=%s", (oid,))
+        order = cur.fetchone()
+
         if not order:
+            c.close()
             return jsonify({"success": False, "message": "找不到該訂單"}), 404
 
-        invoice_no = order.get('invoice_no')
+        invoice_no = order.get('invoice_number') 
         invoice_status = order.get('invoice_status')
 
-        # 2. 如果這單有發票，而且還沒被作廢過，先執行綠界發票作廢
-        if invoice_no and invoice_status != '已作廢':
-            inv_result = invalid_ecpay_invoice(invoice_no, "訂單作廢連動")
+        # 2. 如果這單有發票且尚未作廢，先執行綠界發票作廢
+        if invoice_no and invoice_status == 'Issued':
+            void_res = invalid_ecpay_invoice(invoice_no, f"訂單 {oid} 作廢連動")
             
-            # 🛑 阻斷機制：如果發票作廢失敗，回傳錯誤，不執行後續的訂單作廢！
-            if not inv_result.get("success"):
-                error_msg = inv_result.get('message', '未知錯誤')
-                print(f"[{now}] ⚠️ 發票作廢失敗: {error_msg}")
+            # 🛑 阻斷機制
+            if not void_res.get('success'):
+                c.close()
+                error_msg = void_res.get('message', '未知錯誤')
+                print(f"[{get_current_time_str()}] ⚠️ 發票作廢失敗: {error_msg}")
                 return jsonify({
                     "success": False, 
                     "message": f"綠界發票作廢失敗：{error_msg}。\n為避免帳務錯誤，此訂單尚未作廢！"
                 }), 400
                 
-            # 發票作廢成功，更新發票狀態
-            database.update_invoice_status(invoice_no, "已作廢")
-            print(f"[{now}] ✅ 發票已作廢: {invoice_no}")
+            # 作廢成功，更新發票狀態
+            print(f"[{get_current_time_str()}] 🗑️ 發票作廢成功: {invoice_no}")
+            cur.execute("UPDATE orders SET invoice_status='Void' WHERE id=%s", (oid,))
 
-        # 3. 發票處理安全通過後，再將「訂單」狀態改為作廢
-        # 💡 請確保 database.py 裡有 update_order_status 這個函數 (若您的函數名稱不同，請自行調整)
-        database.update_order_status(order_id, "已作廢") 
-        print(f"[{now}] 🗑️ 訂單作廢: ID {order_id}")
-        
+        # 3. 再將「訂單」狀態改為 Cancelled
+        cur.execute("UPDATE orders SET status='Cancelled' WHERE id=%s", (oid,))
+        c.commit()
+        c.close()
+
+        print(f"[{get_current_time_str()}] 🗑️ 訂單作廢: ID {oid}")
         return jsonify({"success": True, "message": "訂單與發票皆已作廢！"})
         
     except Exception as e:
-        print(f"[{now}] ❌ Cancel Order Error: {e}")
+        print(f"[{get_current_time_str()}] ❌ Cancel Order Error: {e}")
         return jsonify({"success": False, "message": "系統內部錯誤"}), 500
+
+
+# ==========================================
+# 🖨️ 發票列印 API
+# ==========================================
+@admin_orders_bp.route('/admin/print_invoice/<invoice_no>')
+@login_required
+@role_required('admin')
+def admin_print_invoice(invoice_no):
+    """向綠界索取發票 HTML 並回傳給瀏覽器"""
+    try:
+        print(f"[{get_current_time_str()}] 🖨️ 準備列印發票: {invoice_no}")
+        result = print_ecpay_invoice(invoice_no)
+        
+        if result.get("success"):
+            return result.get("html")
+        else:
+            return f"<h1>列印失敗</h1><p>綠界回傳錯誤: {result.get('message')}</p>", 400
+            
+    except Exception as e:
+        print(f"Error printing invoice: {e}")
+        return f"<h1>系統錯誤</h1><p>{str(e)}</p>", 500
 
 
 # ==========================================
@@ -197,10 +223,18 @@ def admin_orders_page():
     if not search_date and not search_invoice:
         search_date = date.today().strftime('%Y-%m-%d')
 
+    # 使用 psycopg2 直接取資料以避免 database.py 發生欄位衝突
+    c = get_db_connection()
+    cur = c.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    
     if search_invoice:
-        orders = database.get_order_by_invoice(search_invoice)
+        cur.execute("SELECT * FROM orders WHERE invoice_number = %s ORDER BY id DESC", (search_invoice,))
     else:
-        orders = database.get_orders_by_date(search_date)
+        # 假設您的日期欄位叫做 created_at，若不同請自行調整
+        cur.execute("SELECT * FROM orders WHERE DATE(created_at) = %s ORDER BY id DESC", (search_date,))
+        
+    orders = cur.fetchall()
+    c.close()
 
     table_html = ""
     if orders:
@@ -208,37 +242,49 @@ def admin_orders_page():
             oid = order.get('id', '')
             c_name = order.get('customer_name') or '門市顧客'
             t_price = order.get('total_price', 0)
-            inv_no = order.get('invoice_no')
+            
+            # 💡 對齊您的 DB 欄位名稱
+            inv_no = order.get('invoice_number') 
             inv_status = order.get('invoice_status')
+            order_status = order.get('status')
 
             has_invoice = bool(inv_no)
-            is_voided = (inv_status == '已作廢')
+            is_voided = (inv_status == 'Void')
+            is_issued = (inv_status == 'Issued')
+            is_cancelled = (order_status == 'Cancelled')
 
-            if is_voided:
+            # 狀態標籤
+            if is_voided or is_cancelled:
                 status_badge = '<span class="badge bg-danger">已作廢</span>'
-            elif has_invoice:
-                status_badge = '<span class="badge bg-success">正常</span>'
+            elif is_issued:
+                status_badge = '<span class="badge bg-success">已開立</span>'
             else:
                 status_badge = '<span class="badge bg-secondary">未開立</span>'
 
             # 按鈕 HTML 組裝
-            buttons = f"""
-            <div style="display:flex; flex-direction:column; gap:5px;">
-                <button onclick='askPrintType({oid})' class='btn btn-outline-secondary btn-sm' style='width:100%;'>🖨️ 補印單據</button>
+            buttons = f"""<div style="display:flex; flex-direction:column; gap:5px;">"""
+
+            # 列印發票按鈕
+            if has_invoice and is_issued:
+                buttons += f"""<button onclick="window.open('/admin/print_invoice/{inv_no}', '_blank')" class='btn btn-outline-primary btn-sm' style='width:100%;'>🖨️ 列印發票</button>"""
+            else:
+                buttons += f"""<button disabled class='btn btn-outline-secondary btn-sm' style='width:100%;'>🖨️ 無發票可印</button>"""
                 
+            buttons += f"""
                 <div style="display:flex; gap:5px;">
-                    <button onclick='if(confirm("⚠️ 確定只要作廢發票，並將此單更改為【作廢狀態】嗎？")) action("/kitchen/cancel/{oid}")' class='btn btn-sm' style='flex:1; background:#f44336; color:white; border:none; border-radius:4px; padding:6px; cursor:pointer;'>🗑️ 作廢訂單</button>
+                    <button onclick='if(confirm("⚠️ 確定只要作廢發票，並將此單更改為【作廢狀態】嗎？")) action("/admin/cancel/{oid}")' class='btn btn-sm' style='flex:1; background:#f44336; color:white; border:none; border-radius:4px; padding:6px; cursor:pointer;' {'disabled' if is_cancelled else ''}>🗑️ 作廢訂單</button>
                     
-                    <button onclick='if(confirm("⚠️ 確定要作廢發票並重新修改此單嗎？")) {{ fetch("/kitchen/cancel/{oid}").then(res => res.json()).then(data => {{ if(data.success){{ window.open("/menu?edit_oid={oid}&lang=zh", "_blank"); window.location.reload(); }} else {{ alert("修改前置作廢失敗：" + data.message); }} }}); }}' class='btn btn-sm' style='flex:1; background:#ff9800; color:white; border:none; border-radius:4px; padding:6px; cursor:pointer;'>✏️ 作廢並修改</button>
+                    <button onclick='if(confirm("⚠️ 確定要作廢發票並重新修改此單嗎？")) {{ fetch("/admin/cancel/{oid}").then(res => res.json()).then(data => {{ if(data.success){{ window.open("/menu?edit_oid={oid}&lang=zh", "_blank"); window.location.reload(); }} else {{ alert("作廢失敗：" + data.message); }} }}); }}' class='btn btn-sm' style='flex:1; background:#ff9800; color:white; border:none; border-radius:4px; padding:6px; cursor:pointer;' {'disabled' if is_cancelled else ''}>✏️ 作廢並修改</button>
                 </div>
                 <div style="display:flex; gap:5px;">
             """
             
-            if has_invoice and not is_voided:
+            # 獨立發票操作
+            if has_invoice and is_issued:
                 buttons += f"""<button class="btn btn-sm btn-outline-danger" style="flex:1;" onclick="voidInvoice('{inv_no}')">🧾 僅作廢發票</button>"""
                 
             if not has_invoice or is_voided:
-                btn_text = '重開發票' if is_voided else '獨立開立發票'
+                btn_text = '重開發票' if is_voided else '獨立開立'
                 buttons += f"""<button class="btn btn-sm btn-outline-success" style="flex:1;" onclick="issueInvoice({oid})">🧾 {btn_text}</button>"""
                 
             buttons += "</div></div>"
