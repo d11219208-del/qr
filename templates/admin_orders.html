@@ -17,10 +17,10 @@
                 <label for="searchDate" class="col-form-label">選擇訂單日期：</label>
             </div>
             <div class="col-auto">
-                <input type="date" id="searchDate" class="form-control">
+                <input type="date" id="searchDate" class="form-control" value="{{ search_date or '' }}">
             </div>
             <div class="col-auto">
-                <button class="btn btn-primary" onclick="fetchOrders('date')">📅 日期查詢</button>
+                <button class="btn btn-primary" onclick="window.location.href='?date=' + document.getElementById('searchDate').value">📅 日期查詢</button>
             </div>
 
             <div class="col-auto d-none d-md-block">
@@ -31,10 +31,10 @@
                 <label for="searchInvoice" class="col-form-label">或搜尋發票號碼：</label>
             </div>
             <div class="col-auto">
-                <input type="text" id="searchInvoice" class="form-control" placeholder="輸入大寫發票號碼(如: AB12345678)">
+                <input type="text" id="searchInvoice" class="form-control" placeholder="輸入大寫發票號碼(如: AB12345678)" value="{{ search_invoice or '' }}">
             </div>
             <div class="col-auto">
-                <button class="btn btn-info text-white" onclick="fetchOrders('invoice')">🔍 發票查詢</button>
+                <button class="btn btn-info text-white" onclick="window.location.href='?invoice_no=' + document.getElementById('searchInvoice').value">🔍 發票查詢</button>
             </div>
         </div>
     </div>
@@ -52,10 +52,8 @@
                         <th style="min-width: 250px;">操作</th>
                     </tr>
                 </thead>
-                <tbody id="orderTableBody">
-                    <tr>
-                        <td colspan="6" class="text-center text-muted">請選擇日期或輸入發票號碼並點擊查詢</td>
-                    </tr>
+                <tbody>
+                    {{ table_html | safe }}
                 </tbody>
             </table>
         </div>
@@ -63,92 +61,8 @@
 </div>
 
 <script>
-    // 預設將日期選擇器填入今天日期
-    document.getElementById('searchDate').valueAsDate = new Date();
-
-    // 查詢訂單 (支援按日期或按發票號碼)
-    async function fetchOrders(searchType = 'date') {
-        let url = '';
-        
-        if (searchType === 'date') {
-            const date = document.getElementById('searchDate').value;
-            if (!date) return alert("請選擇日期！");
-            url = `/api/orders?date=${date}`;
-        } else if (searchType === 'invoice') {
-            const invoiceNo = document.getElementById('searchInvoice').value.trim();
-            if (!invoiceNo) return alert("請輸入發票號碼！");
-            url = `/api/orders?invoice_no=${invoiceNo}`;
-        }
-
-        const tbody = document.getElementById('orderTableBody');
-        tbody.innerHTML = `<tr><td colspan="6" class="text-center">載入中...</td></tr>`;
-
-        try {
-            // 呼叫後端 API
-            const response = await fetch(url);
-            const data = await response.json();
-
-            if (data.success && data.orders.length > 0) {
-                tbody.innerHTML = ""; // 清空表格
-                data.orders.forEach(order => {
-                    // 狀態判斷
-                    const hasInvoice = order.invoice_no && order.invoice_no !== "";
-                    const isVoided = order.invoice_status === '已作廢';
-
-                    // 準備狀態標籤 UI
-                    let statusBadge = '';
-                    if (isVoided) {
-                        statusBadge = `<span class="badge bg-danger">已作廢</span>`;
-                    } else if (hasInvoice) {
-                        statusBadge = `<span class="badge bg-success">正常</span>`;
-                    } else {
-                        statusBadge = `<span class="badge bg-secondary">未開立</span>`;
-                    }
-
-                    // 💡 更新：套用您提供的按鈕排版，並將 {oid} 替換為 JS 的 ${order.id}
-                    let actionButtons = `
-                        <div style="display:flex; flex-direction:column; gap:5px;">
-                            <button onclick='askPrintType(${order.id})' class='btn btn-outline-secondary btn-sm' style='width:100%;'>🖨️ 補印單據</button>
-                            
-                            <div style="display:flex; gap:5px;">
-                                <button onclick='if(confirm("⚠️ 確定只要作廢發票，並將此單更改為【作廢狀態】嗎？")) action("/kitchen/cancel/${order.id}")' class='btn btn-sm' style='flex:1; background:#f44336; color:white; border:none; border-radius:4px; padding:6px; cursor:pointer;'>🗑️ 作廢訂單</button>
-                                
-                                <button onclick='if(confirm("⚠️ 確定要作廢發票並重新修改此單嗎？")) { fetch("/kitchen/cancel/${order.id}").then(() => { window.open("/menu?edit_oid=${order.id}&lang=zh", "_blank"); window.location.reload(); }); }' class='btn btn-sm' style='flex:1; background:#ff9800; color:white; border:none; border-radius:4px; padding:6px; cursor:pointer;'>✏️ 作廢並修改</button>
-                            </div>
-                    `;
-                    
-                    // 將原本的綠界作廢/開立按鈕加在最下方
-                    actionButtons += `<div style="display:flex; gap:5px;">`;
-                    if (hasInvoice && !isVoided) {
-                        actionButtons += `<button class="btn btn-sm btn-outline-danger" style="flex:1;" onclick="voidInvoice('${order.invoice_no}', '${searchType}')">🧾 僅作廢發票</button>`;
-                    }
-                    if (!hasInvoice || isVoided) {
-                        actionButtons += `<button class="btn btn-sm btn-outline-success" style="flex:1;" onclick="issueInvoice(${order.id}, '${searchType}')">🧾 ${isVoided ? '重開發票' : '獨立開立發票'}</button>`;
-                    }
-                    actionButtons += `</div></div>`; // 閉合 div
-
-                    tbody.innerHTML += `
-                        <tr>
-                            <td>#${order.id}</td>
-                            <td>${order.customer_name || '門市顧客'}</td>
-                            <td>$${order.total_price}</td>
-                            <td>${hasInvoice ? order.invoice_no : '<span class="text-muted">-</span>'}</td>
-                            <td>${statusBadge}</td>
-                            <td>${actionButtons}</td>
-                        </tr>
-                    `;
-                });
-            } else {
-                tbody.innerHTML = `<tr><td colspan="6" class="text-center text-muted">查無相符的訂單紀錄</td></tr>`;
-            }
-        } catch (error) {
-            console.error(error);
-            tbody.innerHTML = `<tr><td colspan="6" class="text-center text-danger">查詢失敗，請檢查網路連線或後端 API</td></tr>`;
-        }
-    }
-
-    // 作廢發票邏輯
-    async function voidInvoice(invoiceNo, currentSearchType) {
+    // 獨立作廢發票
+    async function voidInvoice(invoiceNo) {
         if (!confirm(`確定要作廢發票 ${invoiceNo} 嗎？作廢後無法復原！`)) return;
 
         try {
@@ -161,7 +75,7 @@
 
             if (result.success) {
                 alert('✅ 發票作廢成功！');
-                fetchOrders(currentSearchType); // 重新整理當前列表
+                window.location.reload(); // 成功後直接重整網頁
             } else {
                 alert(`❌ 作廢失敗：${result.message}`);
             }
@@ -170,12 +84,11 @@
         }
     }
 
-    // 重開發票邏輯
-    async function issueInvoice(orderId, currentSearchType) {
+    // 獨立重開發票
+    async function issueInvoice(orderId) {
         if (!confirm(`確定要為訂單 #${orderId} (重)開立發票嗎？`)) return;
 
         try {
-            // 這裡呼叫後端開立發票的 API
             const response = await fetch('/api/invoice/issue', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -185,7 +98,7 @@
 
             if (result.success) {
                 alert(`✅ 發票開立成功！發票號碼為：${result.invoice_no || '請重整查看'}`);
-                fetchOrders(currentSearchType); // 重新整理當前列表
+                window.location.reload(); // 成功後直接重整網頁
             } else {
                 alert(`❌ 開立失敗：${result.message}`);
             }
@@ -194,25 +107,24 @@
         }
     }
 
-    // 確保這裡有全域的 action 函式可供呼叫 (如已在其他地方定義，可依需求保留或移除)
+    // 處理作廢訂單 API
     function action(url) {
         fetch(url).then(res => {
             if(res.ok) {
-                alert('操作成功！');
+                alert('✅ 操作成功！');
                 window.location.reload();
             } else {
-                alert('操作失敗！');
+                alert('❌ 操作失敗！');
             }
         }).catch(err => {
             console.error(err);
-            alert('操作發生錯誤！');
+            alert('❌ 操作發生錯誤！');
         });
     }
 
-    // 確保有 askPrintType 函式 (如已定義，也可依需求調整)
+    // 補印單據
     function askPrintType(orderId) {
-        alert(`準備補印訂單 #${orderId} 的單據`);
-        // 可依需求呼叫您的列印 API
+        alert(`準備補印訂單 #${orderId} 的單據 (待串接列印 API)`);
     }
 </script>
 
