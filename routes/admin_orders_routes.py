@@ -2,14 +2,17 @@
 
 from flask import Blueprint, request, jsonify, render_template, session, redirect, url_for
 import bcrypt # 用於密碼驗證
-from ecpay_invoice import invalid_ecpay_invoice # 引入您剛剛寫好的作廢功能
+
+# 💡 注意：這裡假設您開立發票的函式叫做 create_ecpay_invoice，如果不同請自行修改
+from ecpay_invoice import invalid_ecpay_invoice, create_ecpay_invoice 
+
 import database # 您的資料庫模組
 from database import get_db_connection # 確保引入資料庫連線功能
 
 # 🛡️ 引入我們在 utils.py 寫好的雙重防護罩
 from utils import login_required, role_required  
 
-# 💡 修正：將 app = Flask(__name__) 改為使用 Blueprint
+# 使用 Blueprint
 admin_orders_bp = Blueprint('admin_orders', __name__)
 
 # ==========================================
@@ -39,7 +42,7 @@ def login():
                     session['user_id'] = user_id
                     session['username'] = username
                     session['role'] = role
-                    # 成功登入後跳轉 (假設您的 admin_bp 裡有 admin_panel)
+                    # 成功登入後跳轉
                     return redirect(url_for('admin.admin_panel'))
                 else:
                     return render_template('login.html', error="密碼錯誤")
@@ -59,7 +62,6 @@ def login():
 def logout():
     """處理登出"""
     session.clear() 
-    # 跳轉回登入頁 (如果 login 是在別的 blueprint，請維持 'admin.login'；如果就是上面那個，可改為 'admin_orders.login')
     return redirect(url_for('admin.login'))
 
 
@@ -67,23 +69,29 @@ def logout():
 # 📋 訂單與發票 API (加上了權限防護)
 # ==========================================
 
-# 1. 取得指定日期的訂單 API
+# 1. 取得指定日期「或」指定發票號碼的訂單 API
 @admin_orders_bp.route('/api/orders', methods=['GET'])
 @login_required          
 @role_required('admin')  
 def get_orders():
     target_date = request.args.get('date') # 格式預期為 YYYY-MM-DD
-    if not target_date:
-        return jsonify({"success": False, "message": "請提供日期"})
+    invoice_no = request.args.get('invoice_no') # 格式預期為發票號碼字串
     
     try:
-        # 呼叫您的資料庫查詢該日訂單 (請依據您的 database.py 實際寫法調整)
-        # 預期回傳一個 list of dict，包含訂單與發票號碼
-        orders = database.get_orders_by_date(target_date) 
+        # 💡 新增：如果有傳入發票號碼，優先用發票號碼搜尋
+        if invoice_no:
+            orders = database.get_order_by_invoice(invoice_no)
+        # 否則用日期搜尋
+        elif target_date:
+            orders = database.get_orders_by_date(target_date)
+        else:
+            return jsonify({"success": False, "message": "請提供日期或發票號碼"})
+            
         return jsonify({"success": True, "orders": orders})
     except Exception as e:
         print(f"API Error (get_orders): {e}")
         return jsonify({"success": False, "message": "資料庫查詢失敗"})
+
 
 # 2. 作廢發票 API
 @admin_orders_bp.route('/api/invoice/void', methods=['POST'])
@@ -103,15 +111,51 @@ def void_invoice():
     # 如果作廢成功，記得更新資料庫的發票狀態
     if result.get("success"):
         try:
+            # 這裡把狀態更新為 '已作廢'
             database.update_invoice_status(invoice_no, "已作廢")
         except Exception as e:
             print(f"DB Update Error (void_invoice): {e}")
             
     return jsonify(result)
 
-# 3. 渲染管理員後台網頁
+
+# 3. 💡 新增：開立(重開)發票 API
+@admin_orders_bp.route('/api/invoice/issue', methods=['POST'])
+@login_required          
+@role_required('admin')  
+def issue_invoice():
+    data = request.json
+    order_id = data.get('order_id')
+    
+    if not order_id:
+        return jsonify({"success": False, "message": "缺少訂單編號"})
+        
+    try:
+        # 步驟 A: 從資料庫撈出這筆訂單的詳細資訊 (包含金額、商品名稱等，綠界需要這些)
+        order_data = database.get_order_by_id(order_id)
+        if not order_data:
+             return jsonify({"success": False, "message": "找不到該筆訂單"})
+             
+        # 步驟 B: 呼叫您的 ecpay_invoice.py 裡的開立發票功能
+        # (如果您開立發票的函式名稱不同，請修改這裡)
+        result = create_ecpay_invoice(order_data)
+        
+        # 步驟 C: 如果綠界成功開出發票，取得新發票號碼並存回資料庫
+        if result.get("success"):
+            new_invoice_no = result.get("invoice_no")
+            # 呼叫 database.py 寫入新發票號碼，並將狀態改為 '正常'
+            database.update_order_invoice(order_id, new_invoice_no, "正常")
+            
+        return jsonify(result)
+        
+    except Exception as e:
+        print(f"Issue Invoice Error: {e}")
+        return jsonify({"success": False, "message": "開立發票發生系統錯誤"})
+
+
+# 4. 渲染管理員後台網頁
 @admin_orders_bp.route('/admin/orders')
-@login_required          # 💡 幫您在網頁也加上防護，避免沒登入就被看光
-@role_required('admin')  # 💡 只有管理員可以看這個頁面
+@login_required          
+@role_required('admin')  
 def admin_orders_page():
-    return render_template('admin_orders.html') # 回傳 HTML 檔案
+    return render_template('admin_orders.html')
