@@ -204,5 +204,126 @@ def init_db():
             conn.close()
 
 if __name__ == "__main__":
-    # 當直接執行此 .py 檔案時，啟動初始化程序
+    # 當直接執行此 .py 檔案時，啟啟初始化程序
     init_db()
+
+
+# ==========================================
+# 📋 發票與訂單管理系統專用 DB 函式 (新增區域)
+# ==========================================
+
+def get_order_by_invoice(invoice_no):
+    """用發票號碼搜尋單筆訂單"""
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("""
+            SELECT id, customer_name, total_price, 
+                   invoice_number AS invoice_no, 
+                   invoice_status 
+            FROM orders 
+            WHERE invoice_number = %s
+        """, (invoice_no,))
+        
+        columns = [desc[0] for desc in cur.description]
+        rows = cur.fetchall()
+        
+        orders = []
+        for row in rows:
+            orders.append(dict(zip(columns, row)))
+            
+        return orders
+    except Exception as e:
+        print(f"DB Error (get_order_by_invoice): {e}")
+        return []
+    finally:
+        cur.close()
+        conn.close()
+
+
+def update_invoice_status(invoice_no, status):
+    """更新發票的狀態 (例如改為：已作廢)"""
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("""
+            UPDATE orders 
+            SET invoice_status = %s 
+            WHERE invoice_number = %s
+        """, (status, invoice_no))
+        conn.commit()
+        return True
+    except Exception as e:
+        print(f"DB Error (update_invoice_status): {e}")
+        return False
+    finally:
+        cur.close()
+        conn.close()
+
+
+def get_order_by_id(order_id):
+    """用訂單 ID 取得訂單完整明細 (重開發票時綠界會需要)"""
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT * FROM orders WHERE id = %s", (order_id,))
+        row = cur.fetchone()
+        
+        if row:
+            columns = [desc[0] for desc in cur.description]
+            return dict(zip(columns, row))
+        return None
+    except Exception as e:
+        print(f"DB Error (get_order_by_id): {e}")
+        return None
+    finally:
+        cur.close()
+        conn.close()
+
+
+def update_order_invoice(order_id, new_invoice_no, status="正常"):
+    """開立(或重開)發票後，將新發票號碼寫回資料庫"""
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("""
+            UPDATE orders 
+            SET invoice_number = %s, invoice_status = %s 
+            WHERE id = %s
+        """, (new_invoice_no, status, order_id))
+        conn.commit()
+        return True
+    except Exception as e:
+        print(f"DB Error (update_order_invoice): {e}")
+        return False
+    finally:
+        cur.close()
+        conn.close()
+
+def get_orders_by_date(target_date):
+    """用日期撈出當天所有訂單"""
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("""
+            SELECT id, customer_name, total_price, 
+                   invoice_number AS invoice_no, 
+                   invoice_status 
+            FROM orders 
+            WHERE DATE(created_at) = %s
+        """, (target_date,))
+        
+        columns = [desc[0] for desc in cur.description]
+        rows = cur.fetchall()
+        
+        orders = []
+        for row in rows:
+            orders.append(dict(zip(columns, row)))
+            
+        return orders
+    except Exception as e:
+        print(f"DB Error (get_orders_by_date): {e}")
+        return []
+    finally:
+        cur.close()
+        conn.close()
