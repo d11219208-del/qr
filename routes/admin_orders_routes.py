@@ -2,8 +2,9 @@
 
 from flask import Blueprint, request, jsonify, render_template, session, redirect, url_for
 import bcrypt # 用於密碼驗證
+from datetime import date
 
-# 💡 修正：已經為您換成正確的 issue_ecpay_invoice
+# 💡 已經為您換成正確的 issue_ecpay_invoice
 from ecpay_invoice import invalid_ecpay_invoice, issue_ecpay_invoice 
 
 import database # 您的資料庫模組
@@ -43,7 +44,7 @@ def login():
                     session['username'] = username
                     session['role'] = role
                     # 成功登入後跳轉
-                    return redirect(url_for('admin.admin_panel'))
+                    return redirect(url_for('admin_orders.admin_orders_page'))
                 else:
                     return render_template('login.html', error="密碼錯誤")
             else:
@@ -62,14 +63,14 @@ def login():
 def logout():
     """處理登出"""
     session.clear() 
-    return redirect(url_for('admin.login'))
+    return redirect(url_for('admin_orders.login'))
 
 
 # ==========================================
 # 📋 訂單與發票 API (加上了權限防護)
 # ==========================================
 
-# 1. 取得指定日期「或」指定發票號碼的訂單 API
+# 1. 取得指定日期「或」指定發票號碼的訂單 API (保留供未來其他系統串接)
 @admin_orders_bp.route('/api/orders', methods=['GET'])
 @login_required          
 @role_required('admin')  
@@ -136,7 +137,7 @@ def issue_invoice():
         if not order_data:
              return jsonify({"success": False, "message": "找不到該筆訂單"})
              
-        # 步驟 B: 💡 修正：正確呼叫您的 issue_ecpay_invoice 函數
+        # 步驟 B: 💡 呼叫您的 issue_ecpay_invoice 函數
         result = issue_ecpay_invoice(order_data)
         
         # 步驟 C: 如果綠界成功開出發票，取得新發票號碼並存回資料庫
@@ -152,9 +153,92 @@ def issue_invoice():
         return jsonify({"success": False, "message": "開立發票發生系統錯誤"})
 
 
-# 4. 渲染管理員後台網頁
+# ==========================================
+# 📋 網頁: 訂單管理後台 (💡 完全由 Python 產出 HTML)
+# ==========================================
+
+# 4. 渲染管理員後台網頁並動態生成表格
 @admin_orders_bp.route('/admin/orders')
 @login_required          
 @role_required('admin')  
 def admin_orders_page():
-    return render_template('admin_orders.html')
+    # 取得網址上的參數
+    search_date = request.args.get('date')
+    search_invoice = request.args.get('invoice_no', '').strip()
+    
+    # 預設為今天
+    if not search_date and not search_invoice:
+        search_date = date.today().strftime('%Y-%m-%d')
+
+    # 從資料庫撈取資料
+    if search_invoice:
+        orders = database.get_order_by_invoice(search_invoice)
+    else:
+        orders = database.get_orders_by_date(search_date)
+
+    # 🟢 這裡開始：完全由 Python 組裝 HTML 表格字串
+    table_html = ""
+    if orders:
+        for order in orders:
+            oid = order.get('id', '')
+            c_name = order.get('customer_name') or '門市顧客'
+            t_price = order.get('total_price', 0)
+            inv_no = order.get('invoice_no')
+            inv_status = order.get('invoice_status')
+
+            has_invoice = bool(inv_no)
+            is_voided = (inv_status == '已作廢')
+
+            # 1. 產生狀態標籤
+            if is_voided:
+                status_badge = '<span class="badge bg-danger">已作廢</span>'
+            elif has_invoice:
+                status_badge = '<span class="badge bg-success">正常</span>'
+            else:
+                status_badge = '<span class="badge bg-secondary">未開立</span>'
+
+            # 2. 產生按鈕 HTML (Python 處理跳脫字元，使用雙大括號 {{ }} 避免跟 f-string 衝突)
+            buttons = f"""
+            <div style="display:flex; flex-direction:column; gap:5px;">
+                <button onclick='askPrintType({oid})' class='btn btn-outline-secondary btn-sm' style='width:100%;'>🖨️ 補印單據</button>
+                
+                <div style="display:flex; gap:5px;">
+                    <button onclick='if(confirm("⚠️ 確定只要作廢發票，並將此單更改為【作廢狀態】嗎？")) action("/kitchen/cancel/{oid}")' class='btn btn-sm' style='flex:1; background:#f44336; color:white; border:none; border-radius:4px; padding:6px; cursor:pointer;'>🗑️ 作廢訂單</button>
+                    
+                    <button onclick='if(confirm("⚠️ 確定要作廢發票並重新修改此單嗎？")) {{ fetch("/kitchen/cancel/{oid}").then(() => {{ window.open("/menu?edit_oid={oid}&lang=zh", "_blank"); window.location.reload(); }}); }}' class='btn btn-sm' style='flex:1; background:#ff9800; color:white; border:none; border-radius:4px; padding:6px; cursor:pointer;'>✏️ 作廢並修改</button>
+                </div>
+                <div style="display:flex; gap:5px;">
+            """
+            
+            # 加入發票相關操作按鈕
+            if has_invoice and not is_voided:
+                buttons += f"""<button class="btn btn-sm btn-outline-danger" style="flex:1;" onclick="voidInvoice('{inv_no}')">🧾 僅作廢發票</button>"""
+                
+            if not has_invoice or is_voided:
+                btn_text = '重開發票' if is_voided else '獨立開立發票'
+                buttons += f"""<button class="btn btn-sm btn-outline-success" style="flex:1;" onclick="issueInvoice({oid})">🧾 {btn_text}</button>"""
+                
+            buttons += "</div></div>"
+
+            # 3. 處理發票號碼顯示文字
+            inv_text = inv_no if has_invoice else '<span class="text-muted">-</span>'
+
+            # 4. 把每一行合併到字串中
+            table_html += f"""
+            <tr>
+                <td>#{oid}</td>
+                <td>{c_name}</td>
+                <td>${t_price}</td>
+                <td>{inv_text}</td>
+                <td>{status_badge}</td>
+                <td>{buttons}</td>
+            </tr>
+            """
+    else:
+        table_html = '<tr><td colspan="6" class="text-center text-muted">查無相符的訂單紀錄</td></tr>'
+
+    # 傳遞組裝好的 table_html 與搜尋條件給模板
+    return render_template('admin_orders.html', 
+                           table_html=table_html, 
+                           search_date=search_date, 
+                           search_invoice=search_invoice)
