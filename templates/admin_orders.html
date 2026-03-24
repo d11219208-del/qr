@@ -63,19 +63,19 @@
 <script>
     // 獨立作廢發票
     async function voidInvoice(invoiceNo) {
-        if (!confirm(`確定要作廢發票 ${invoiceNo} 嗎？作廢後無法復原！`)) return;
+        if (!confirm(`確定要單獨作廢發票 ${invoiceNo} 嗎？作廢後無法復原！`)) return;
 
         try {
             const response = await fetch('/api/invoice/void', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ invoice_no: invoiceNo, reason: '客戶要求作廢/退貨' })
+                body: JSON.stringify({ invoice_no: invoiceNo, reason: '後台獨立作廢' })
             });
             const result = await response.json();
 
             if (result.success) {
                 alert('✅ 發票作廢成功！');
-                window.location.reload(); // 成功後直接重整網頁
+                window.location.reload(); 
             } else {
                 alert(`❌ 作廢失敗：${result.message}`);
             }
@@ -98,7 +98,7 @@
 
             if (result.success) {
                 alert(`✅ 發票開立成功！發票號碼為：${result.invoice_no || '請重整查看'}`);
-                window.location.reload(); // 成功後直接重整網頁
+                window.location.reload(); 
             } else {
                 alert(`❌ 開立失敗：${result.message}`);
             }
@@ -107,19 +107,23 @@
         }
     }
 
-    // 處理作廢訂單 API
-    function action(url) {
-        fetch(url).then(res => {
-            if(res.ok) {
-                alert('✅ 操作成功！');
+    // 💡 核心更新：正確處理 JSON 錯誤回傳的 action 函數
+    async function action(url) {
+        try {
+            const res = await fetch(url);
+            const data = await res.json(); // 解析後端傳來的 JSON
+            
+            if (res.ok && data.success) {
+                alert('✅ ' + (data.message || '操作成功！'));
                 window.location.reload();
             } else {
-                alert('❌ 操作失敗！');
+                // 如果後端回傳 400 或 success: false，就會彈出這個錯誤
+                alert('❌ 操作失敗：\n' + (data.message || '未知錯誤'));
             }
-        }).catch(err => {
+        } catch(err) {
             console.error(err);
-            alert('❌ 操作發生錯誤！');
-        });
+            alert('❌ 操作發生錯誤，無法連線至伺服器！');
+        }
     }
 
     // 補印單據
